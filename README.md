@@ -218,6 +218,12 @@ ComfyUI was closed"*, which is the case this is built for.
 bash scripts/xlang-job.sh
 ```
 
+Or, across every implementation that exists:
+
+```bash
+bash scripts/conformance.sh          # add JOBCTL_CPP=... for a C++ one
+```
+
 **Proven** ([`docs/results/XLANG2.txt`](../docs/results/XLANG2.txt)) — a job is
 created in Go with a spec **neither tool understands**, worked on in Go, abandoned
 without release, found as an orphan by **Python**, adopted at epoch 2, resumed
@@ -226,6 +232,16 @@ Go. The stale Go owner is refused when it returns with its old epoch.
 
 30 tests across the two implementations, including the zombie-owner and
 expired-lease cases.
+
+**And one thing only the cross-language test could find**
+([`docs/results/CONFORM1.txt`](../docs/results/CONFORM1.txt)). Go encodes
+`time.Time` as RFC3339**Nano**, which trims trailing zeros, so Go wrote
+`…T06:23:11.22275Z` where Python wrote `…T06:23:11.222750Z` for the same instant.
+Both are valid RFC 3339, both parse, and every unit test in both languages
+passed — but the record changed bytes every time the two took turns, so a diff
+of a job's history meant nothing. The timestamp format is now pinned to exactly
+six fractional digits and a `Z`; six, not nine, because Python's datetime holds
+microseconds and the contract is set by the least precise participant.
 
 **Not proven yet.** No bytes move in that test, deliberately — resume over real
 bytes is tested in [`download/`](../download/README.md). What nothing has tested

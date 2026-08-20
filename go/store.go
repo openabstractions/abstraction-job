@@ -96,8 +96,8 @@ func (s *FileStore) Submit(r Record) (string, error) {
 	if r.State == "" {
 		r.State = StatePending
 	}
-	r.CreatedAt, r.UpdatedAt = now, now
-	r.Progress.UpdatedAt = now
+	r.CreatedAt, r.UpdatedAt = At(now), At(now)
+	r.Progress.UpdatedAt = At(now)
 
 	b, err := r.Encode()
 	if err != nil {
@@ -222,7 +222,7 @@ func (s *FileStore) Claim(id, owner string, ttl time.Duration) (*Record, error) 
 	fmt.Fprintf(tok, "%s\n", owner)
 	tok.Close()
 
-	r.Lease = Lease{Owner: owner, Epoch: next, ExpiresAt: now.UTC().Add(ttl)}
+	r.Lease = Lease{Owner: owner, Epoch: next, ExpiresAt: At(now.Add(ttl))}
 	if r.State == StatePending || r.State == StateRunning {
 		r.State = StateRunning
 	}
@@ -251,7 +251,7 @@ func (s *FileStore) Renew(id string, epoch int64, ttl time.Duration) (*Record, e
 	if !r.Lease.Held(s.now()) {
 		return nil, fmt.Errorf("%w: expired at %s, re-claim instead", ErrLeaseExpiry, r.Lease.ExpiresAt.Format(time.RFC3339))
 	}
-	r.Lease.ExpiresAt = s.now().UTC().Add(ttl)
+	r.Lease.ExpiresAt = At(s.now().Add(ttl))
 	if err := s.write(r); err != nil {
 		return nil, err
 	}
@@ -263,7 +263,7 @@ func (s *FileStore) Renew(id string, epoch int64, ttl time.Duration) (*Record, e
 // without it, just more slowly.
 func (s *FileStore) Release(id string, epoch int64) error {
 	_, err := s.Update(id, epoch, func(r *Record) error {
-		r.Lease.ExpiresAt = s.now().UTC()
+		r.Lease.ExpiresAt = At(s.now())
 		r.Lease.Owner = ""
 		if r.State == StateRunning {
 			r.State = StatePending
@@ -292,7 +292,7 @@ func (s *FileStore) Update(id string, epoch int64, mutate func(*Record) error) (
 	if err := mutate(r); err != nil {
 		return nil, err
 	}
-	r.UpdatedAt = s.now().UTC()
+	r.UpdatedAt = At(s.now())
 	if err := s.write(r); err != nil {
 		return nil, err
 	}

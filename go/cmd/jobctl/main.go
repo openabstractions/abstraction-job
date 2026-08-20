@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -52,6 +53,21 @@ func usage() {
 	fmt.Println("  submit --kind K --spec '<json>' [--total N] [--requires a,b]")
 }
 
+// compact puts raw JSON on one line. The record on disk is indented for humans,
+// so a checkpoint read back out carries newlines — and this output is a
+// conformance surface that a harness parses, where "same value, different
+// whitespace" counts as two implementations disagreeing.
+func compact(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "none"
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return string(raw)
+	}
+	return buf.String()
+}
+
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "jobctl:", err)
 	os.Exit(1)
@@ -98,21 +114,17 @@ func cmdClaim(s *job.FileStore, args []string) {
 	id, rest := splitID(args)
 	fs := flag.NewFlagSet("claim", flag.ExitOnError)
 	owner := fs.String("owner", "", "who is taking it")
-	ttl := fs.Duration("ttl", 30*time.Second, "how long the lease lasts")
+	ttl := fs.Float64("ttl", 30, "how long the lease lasts, in seconds")
 	fs.Parse(rest)
 	if id == "" {
 		fatal(fmt.Errorf("claim needs a job id"))
 	}
-	r, err := s.Claim(id, *owner, *ttl)
+	r, err := s.Claim(id, *owner, time.Duration(*ttl*float64(time.Second)))
 	if err != nil {
 		fatal(err)
 	}
 	// The epoch and the predecessor's checkpoint are what a new owner needs.
-	cp := "none"
-	if len(r.Checkpoint) > 0 {
-		cp = string(r.Checkpoint)
-	}
-	fmt.Printf("epoch=%d state=%s checkpoint=%s\n", r.Lease.Epoch, r.State, cp)
+	fmt.Printf("epoch=%d state=%s checkpoint=%s\n", r.Lease.Epoch, r.State, compact(r.Checkpoint))
 }
 
 func cmdProgress(s *job.FileStore, args []string) {
@@ -127,7 +139,7 @@ func cmdProgress(s *job.FileStore, args []string) {
 	}
 	r, err := s.Update(id, *epoch, func(r *job.Record) error {
 		r.Progress.Done = *done
-		r.Progress.UpdatedAt = time.Now().UTC()
+		r.Progress.UpdatedAt = job.At(time.Now())
 		if *checkpoint != "" {
 			r.Checkpoint = json.RawMessage(*checkpoint)
 		}
@@ -136,7 +148,7 @@ func cmdProgress(s *job.FileStore, args []string) {
 	if err != nil {
 		fatal(err)
 	}
-	fmt.Printf("done=%d checkpoint=%s\n", r.Progress.Done, string(r.Checkpoint))
+	fmt.Printf("done=%d checkpoint=%s\n", r.Progress.Done, compact(r.Checkpoint))
 }
 
 func cmdFinish(s *job.FileStore, args []string) {
@@ -180,6 +192,6 @@ func cmdOrphans(s *job.FileStore) {
 		fatal(err)
 	}
 	for _, r := range rs {
-		fmt.Printf("%s kind=%s state=%s checkpoint=%s\n", r.ID, r.Kind, r.State, string(r.Checkpoint))
+		fmt.Printf("%s kind=%s state=%s checkpoint=%s\n", r.ID, r.Kind, r.State, compact(r.Checkpoint))
 	}
 }

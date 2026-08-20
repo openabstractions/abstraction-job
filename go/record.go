@@ -56,6 +56,47 @@ import (
 //	   bump that is supposed to stop the bumps.
 const SchemaVersion = 3
 
+// Timestamp is a time that always serialises identically, in UTC, with exactly
+// six fractional digits and a trailing Z.
+//
+// It exists because Go's default encoding for time.Time is RFC3339Nano, which
+// TRIMS trailing zeros: Go wrote "…T06:23:11.22275Z" for the same instant that
+// Python wrote as "…T06:23:11.222750Z". Both are valid RFC 3339 and both parse
+// correctly, so nothing failed — the record simply changed bytes every time
+// the two implementations took turns, and a diff of a job's history became
+// meaningless. The cross-language conformance test caught it; no unit test in
+// either language could have, because each was self-consistent.
+//
+// Six digits rather than nine because Python's datetime holds microseconds and
+// cannot represent nanoseconds. The contract is set by the least precise
+// participant, not the most.
+type Timestamp struct{ time.Time }
+
+const timestampLayout = "2006-01-02T15:04:05.000000Z"
+
+func At(t time.Time) Timestamp { return Timestamp{t.UTC().Truncate(time.Microsecond)} }
+
+func (t Timestamp) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + t.Time.UTC().Format(timestampLayout) + `"`), nil
+}
+
+func (t *Timestamp) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+	// Accept anything RFC 3339 on the way in — another implementation may be
+	// less careful than this one, and refusing to read a job over a timezone
+	// suffix would be absurd. Only what we WRITE is pinned.
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return fmt.Errorf("%w: timestamp %q: %v", ErrInvalid, s, err)
+	}
+	t.Time = parsed.UTC()
+	return nil
+}
+
 // State is where a job is. The states that matter are the ones that exist
 // because the process doing the work and the process that wants the result are
 // not the same process — see StateTransferred.
@@ -114,7 +155,7 @@ func (s State) Valid() bool {
 type Progress struct {
 	Done      int64     `json:"done"`
 	Total     int64     `json:"total,omitempty"` // 0 means unknown
-	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedAt Timestamp `json:"updated_at"`
 }
 
 // Lease is the right to work on a job, held for a bounded time.
@@ -127,12 +168,12 @@ type Progress struct {
 type Lease struct {
 	Owner     string    `json:"owner"`
 	Epoch     int64     `json:"epoch"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt Timestamp `json:"expires_at"`
 }
 
 // Held reports whether the lease is still valid at now.
 func (l Lease) Held(now time.Time) bool {
-	return l.Owner != "" && now.Before(l.ExpiresAt)
+	return l.Owner != "" && now.Before(l.ExpiresAt.Time)
 }
 
 // Delegation records that the work has been handed to something outside this
@@ -203,8 +244,8 @@ type Record struct {
 	// without finding the log of a process that no longer exists.
 	Error string `json:"error,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt Timestamp `json:"created_at"`
+	UpdatedAt Timestamp `json:"updated_at"`
 }
 
 var (
