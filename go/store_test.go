@@ -356,3 +356,107 @@ func TestRecordFileIsPlainReadableJSON(t *testing.T) {
 		t.Fatalf("record is not indented JSON:\n%s", b)
 	}
 }
+
+// A finished job must not look like stranded work.
+//
+// StateTransferred is deliberately not terminal — the requester still has to
+// take delivery — so Claimable says yes once the lease lapses. A supervisor
+// sweeping for orphans therefore re-ran a job that was already complete and
+// verified. On a NAS that meant re-downloading 313 MB every 30 seconds, and it
+// would have gone on forever. Found by running it, not by reading it.
+func TestTransferredJobIsNotAnOrphan(t *testing.T) {
+	s, c := newTestStore(t)
+	id, err := s.Submit(sampleRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Claim(id, "worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(id, rec.Lease.Epoch, func(r *Record) error {
+		r.State = StateTransferred
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.add(time.Hour) // the lease lapses, as it would after a crash
+
+	orphans, err := s.Orphans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range orphans {
+		if o.ID == id {
+			t.Fatal("a transferred job was offered up as an orphan; a supervisor will download it all over again")
+		}
+	}
+
+	// But it is still claimable by anything that means to take delivery of it —
+	// only the rescue sweep should leave it alone.
+	if _, err := s.Claim(id, "consumer", time.Second); err != nil {
+		t.Fatalf("taking delivery must still be possible: %v", err)
+	}
+}
+
+// Releasing a DELEGATED job must not demote it to pending.
+//
+// Delegation deliberately releases the lease straight away — holding it would
+// stop anyone else polling or finalising. But Release also turned RUNNING into
+// PENDING, so a job that BITS or a NAS was actively downloading looked, to
+// every supervisor sweeping for stranded work, exactly like a job nobody had
+// started. The second tier would fetch the same bytes all over again while the
+// first was still going.
+func TestReleasingDelegatedJobKeepsItRunning(t *testing.T) {
+	s, _ := newTestStore(t)
+	id, err := s.Submit(sampleRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Claim(id, "delegator", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(id, rec.Lease.Epoch, func(r *Record) error {
+		r.Delegation = &Delegation{System: "nas", ExternalID: "remote-1"}
+		r.State = StateRunning
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Release(id, rec.Lease.Epoch); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateRunning {
+		t.Fatalf("state is %s; a job running inside another system is not pending", got.State)
+	}
+	if !got.Delegated() {
+		t.Fatal("the delegation handle was lost; nothing can find the work again")
+	}
+
+	// An undelegated job still goes back to pending, which is what Release is
+	// for in the ordinary case.
+	plain, err := s.Submit(sampleRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := s.Claim(plain, "worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Release(plain, pr.Lease.Epoch); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Load(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != StatePending {
+		t.Fatalf("an ordinary released job should be pending, got %s", after.State)
+	}
+}

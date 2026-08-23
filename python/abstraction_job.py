@@ -388,8 +388,19 @@ class FileStore:
         SIGKILLed, or a machine that loses power, never gets to hand anything
         over — so a design that relies on graceful handoff has no answer for the
         case that actually loses a 40 GB download.
+
+        A TRANSFERRED job is not an orphan, and the difference cost a NAS 313 MB.
+        Transferred is not terminal — deliberately, because the requester still
+        has to take delivery — so ``claimable`` says yes to it, and a supervisor
+        sweeping for stranded work saw a finished, digest-proven job with a
+        lapsed lease and downloaded the whole thing again. Then again 30 seconds
+        later, forever. What a transferred job waits for is an acknowledgement,
+        and no amount of re-downloading produces one.
         """
-        return [r for r in self.list() if self.claimable(r)]
+        return [
+            r for r in self.list()
+            if self.claimable(r) and r.state != TRANSFERRED
+        ]
 
     # ---- writing ----------------------------------------------------------
 
@@ -468,7 +479,13 @@ class FileStore:
         def mutate(r: Record) -> None:
             r.lease.expires_at = self._now()
             r.lease.owner = ""
-            if r.state == RUNNING:
+            # A delegated job stays RUNNING. Letting go of the lease means "I am
+            # not the one watching this any more", not "this stopped" — the work
+            # is going on inside BITS, or on a NAS, and demoting it to pending
+            # tells every supervisor sweeping for stranded work to start it over
+            # somewhere else. Delegating releases the lease immediately, so this
+            # is not an edge case; it is what delegation does.
+            if r.state == RUNNING and not r.delegated():
                 r.state = PENDING
 
         self.update(job_id, epoch, mutate)

@@ -177,6 +177,14 @@ func (s *FileStore) Claimable(r *Record) bool {
 // loses a 40 GB download. Handing off on exit is only an optimisation — it
 // releases the lease early so the next owner starts in seconds instead of
 // waiting out the expiry.
+//
+// A TRANSFERRED job is not an orphan, and the difference cost a NAS 313 MB.
+// Transferred is not terminal — deliberately, because the requester still has
+// to take delivery — so `Claimable` says yes to it, and a supervisor sweeping
+// for stranded work saw a finished, digest-proven job with a lapsed lease and
+// downloaded the whole thing again. Then again 30 seconds later, forever. What
+// a transferred job is waiting for is an acknowledgement, and no amount of
+// re-downloading produces one.
 func (s *FileStore) Orphans() ([]*Record, error) {
 	all, err := s.List()
 	if err != nil {
@@ -184,7 +192,7 @@ func (s *FileStore) Orphans() ([]*Record, error) {
 	}
 	out := make([]*Record, 0, len(all))
 	for _, r := range all {
-		if s.Claimable(r) {
+		if s.Claimable(r) && r.State != StateTransferred {
 			out = append(out, r)
 		}
 	}
@@ -265,7 +273,13 @@ func (s *FileStore) Release(id string, epoch int64) error {
 	_, err := s.Update(id, epoch, func(r *Record) error {
 		r.Lease.ExpiresAt = At(s.now())
 		r.Lease.Owner = ""
-		if r.State == StateRunning {
+		// A delegated job stays RUNNING. Letting go of the lease means "I am not
+		// the one watching this any more", not "this stopped" — the work is
+		// going on inside BITS, or on a NAS, and demoting it to pending tells
+		// every supervisor that sweeps for stranded work to start it over
+		// somewhere else. Delegating is supposed to release the lease
+		// immediately, so this is not an edge case; it is what delegation does.
+		if r.State == StateRunning && !r.Delegated() {
 			r.State = StatePending
 		}
 		return nil

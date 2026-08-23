@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from abstraction_job import (
     PENDING,
     RUNNING,
+    TRANSFERRED,
     Delegation,
     FileStore,
     Invalid,
@@ -218,6 +219,72 @@ class JobTest(unittest.TestCase):
             original = f.read()
         again = Record.from_json(original).to_json()
         self.assertEqual(original, again)
+
+    def test_transferred_job_is_not_an_orphan(self):
+        """A finished job must not look like stranded work.
+
+        TRANSFERRED is deliberately not terminal — the requester still has to
+        take delivery — so ``claimable`` says yes once the lease lapses. A
+        supervisor sweeping for orphans therefore re-ran a job that was already
+        complete and verified. On a NAS that meant re-downloading 313 MB every
+        30 seconds, and it would have gone on forever. Found by running it, not
+        by reading it.
+
+        Go had the identical bug in the identical place, which is the argument
+        for writing the second implementation at all: the contract is what both
+        agree on, and neither alone would have shown this was part of it.
+        """
+        jid = self.store.submit(self.sample())
+        rec = self.store.claim(jid, "worker", 30)
+        self.store.update(
+            jid, rec.lease.epoch, lambda r: setattr(r, "state", TRANSFERRED)
+        )
+        self.clock.add(3600)  # the lease lapses, as it would after a crash
+
+        self.assertNotIn(
+            jid,
+            [o.id for o in self.store.orphans()],
+            "a transferred job was offered up as an orphan; "
+            "a supervisor will download it all over again",
+        )
+        # But taking delivery of it must still be possible. Only the rescue
+        # sweep should leave it alone.
+        self.store.claim(jid, "consumer", 30)
+
+    def test_releasing_delegated_job_keeps_it_running(self):
+        """Releasing a DELEGATED job must not demote it to pending.
+
+        Delegation deliberately releases the lease straight away — holding it
+        would stop anyone else polling or finalising. But release also turned
+        RUNNING into PENDING, so a job that BITS or a NAS was actively
+        downloading looked, to every supervisor sweeping for stranded work,
+        exactly like a job nobody had started. The second tier would fetch the
+        same bytes all over again while the first was still going.
+        """
+        jid = self.store.submit(self.sample())
+        rec = self.store.claim(jid, "delegator", 30)
+
+        def delegate(r):
+            r.delegation = Delegation(system="nas", external_id="remote-1")
+            r.state = RUNNING
+
+        self.store.update(jid, rec.lease.epoch, delegate)
+        self.store.release(jid, rec.lease.epoch)
+
+        got = self.store.load(jid)
+        self.assertEqual(
+            got.state,
+            RUNNING,
+            "a job running inside another system is not pending",
+        )
+        self.assertTrue(got.delegated(), "the delegation handle was lost")
+
+        # An undelegated job still goes back to pending, which is what release
+        # is for in the ordinary case.
+        plain = self.store.submit(self.sample())
+        pr = self.store.claim(plain, "worker", 30)
+        self.store.release(plain, pr.lease.epoch)
+        self.assertEqual(self.store.load(plain).state, PENDING)
 
 
 if __name__ == "__main__":
