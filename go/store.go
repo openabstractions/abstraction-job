@@ -135,7 +135,7 @@ func (s *FileStore) Submit(r Record) (string, error) {
 // to the lifetime of the process that registered it, and that lifetime is
 // exactly the one that fails.
 func (s *FileStore) Load(id string) (*Record, error) {
-	b, err := os.ReadFile(s.recordPath(id))
+	b, err := readWithRetry(s.recordPath(id))
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
@@ -143,6 +143,43 @@ func (s *FileStore) Load(id string) (*Record, error) {
 		return nil, err
 	}
 	return Decode(b)
+}
+
+// readWithRetry absorbs a transient the file binding creates for itself.
+//
+// Records are replaced by writing a temporary file and renaming over the
+// original, so a reader sees the old record or the new one and never half of
+// one. That is true on both platforms. What is ALSO true, only on Windows, is
+// that a reader opening the file during the replace gets a sharing violation
+// rather than either version — MoveFileEx and CreateFile briefly cannot both
+// have it.
+//
+// So the guarantee this layer makes — any process may read at any time, which
+// is what makes work observable from outside — was not quite true on Windows.
+// It failed rarely enough to look like a flake and often enough to be real: a
+// UI polling a running download, `dl list` while a supervisor writes, or a test
+// reading a record every 100ms.
+//
+// This is the binding absorbing its own artefact, which is where it belongs.
+// Nothing above job.Store should ever learn that a rename has a window.
+func readWithRetry(path string) ([]byte, error) {
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		var b []byte
+		b, err = os.ReadFile(path)
+		if err == nil {
+			return b, nil
+		}
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+		// Anything else is treated as possibly transient. On platforms where it
+		// is not, this costs one extra syscall on a path that was going to fail
+		// anyway; the alternative is naming a Windows error number in the
+		// generic file store, which would be worse.
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil, err
 }
 
 // List returns every job, oldest first.
