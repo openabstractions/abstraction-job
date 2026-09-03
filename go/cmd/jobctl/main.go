@@ -40,6 +40,10 @@ func main() {
 		cmdFinish(s, os.Args[2:])
 	case "show":
 		cmdShow(s, os.Args[2:])
+	case "intent":
+		cmdIntent(s, os.Args[2:])
+	case "cancel":
+		cmdCancel(s, os.Args[2:])
 	case "orphans":
 		cmdOrphans(s)
 	default:
@@ -49,7 +53,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: jobctl <submit|claim|progress|finish|show|orphans> [args]   (JOB_STORE must be set)")
+	fmt.Println("usage: jobctl <submit|claim|progress|finish|show|cancel|intent|orphans> [args]   (JOB_STORE must be set)")
 	fmt.Println("  submit --kind K --spec '<json>' [--total N] [--requires a,b]")
 }
 
@@ -90,7 +94,7 @@ func splitID(args []string) (string, []string) {
 // as raw JSON and never looks inside — which is the same contract the job
 // package itself keeps, and the reason a download can grow new spec fields
 // without this tool, or the Python one, needing to know.
-func cmdSubmit(s *job.FileStore, args []string) {
+func cmdSubmit(s job.Store, args []string) {
 	fs := flag.NewFlagSet("submit", flag.ExitOnError)
 	kind := fs.String("kind", "", "what this job is; who can read the spec")
 	spec := fs.String("spec", "", "the job's spec, as raw JSON")
@@ -110,7 +114,7 @@ func cmdSubmit(s *job.FileStore, args []string) {
 	fmt.Println(id)
 }
 
-func cmdClaim(s *job.FileStore, args []string) {
+func cmdClaim(s job.Store, args []string) {
 	id, rest := splitID(args)
 	fs := flag.NewFlagSet("claim", flag.ExitOnError)
 	owner := fs.String("owner", "", "who is taking it")
@@ -127,7 +131,7 @@ func cmdClaim(s *job.FileStore, args []string) {
 	fmt.Printf("epoch=%d state=%s checkpoint=%s\n", r.Lease.Epoch, r.State, compact(r.Checkpoint))
 }
 
-func cmdProgress(s *job.FileStore, args []string) {
+func cmdProgress(s job.Store, args []string) {
 	id, rest := splitID(args)
 	fs := flag.NewFlagSet("progress", flag.ExitOnError)
 	epoch := fs.Int64("epoch", 0, "the epoch this owner holds")
@@ -151,7 +155,7 @@ func cmdProgress(s *job.FileStore, args []string) {
 	fmt.Printf("done=%d checkpoint=%s\n", r.Progress.Done, compact(r.Checkpoint))
 }
 
-func cmdFinish(s *job.FileStore, args []string) {
+func cmdFinish(s job.Store, args []string) {
 	id, rest := splitID(args)
 	fs := flag.NewFlagSet("finish", flag.ExitOnError)
 	epoch := fs.Int64("epoch", 0, "the epoch this owner holds")
@@ -174,7 +178,7 @@ func cmdFinish(s *job.FileStore, args []string) {
 	fmt.Printf("state=%s\n", r.State)
 }
 
-func cmdShow(s *job.FileStore, args []string) {
+func cmdShow(s job.Store, args []string) {
 	if len(args) < 1 {
 		fatal(fmt.Errorf("show needs a job id"))
 	}
@@ -186,7 +190,7 @@ func cmdShow(s *job.FileStore, args []string) {
 	fmt.Println(string(b))
 }
 
-func cmdOrphans(s *job.FileStore) {
+func cmdOrphans(s job.Store) {
 	rs, err := s.Orphans()
 	if err != nil {
 		fatal(err)
@@ -194,4 +198,54 @@ func cmdOrphans(s *job.FileStore) {
 	for _, r := range rs {
 		fmt.Printf("%s kind=%s state=%s checkpoint=%s\n", r.ID, r.Kind, r.State, compact(r.Checkpoint))
 	}
+}
+
+// cmdCancel abandons a job from outside, which is the operation a person
+// performs and a worker does not.
+//
+// It goes through job.Open rather than reaching for the store directly, so this
+// command exercises the same handle an application uses — including its refusal
+// when somebody currently holds the lease, which is a real limit of schema 3
+// rather than something to work around here.
+func cmdCancel(s job.Store, args []string) {
+	if len(args) < 1 {
+		fatal(fmt.Errorf("usage: jobctl cancel <id>"))
+	}
+	host, _ := os.Hostname()
+	owner := fmt.Sprintf("jobctl@%s:%d", host, os.Getpid())
+
+	h := job.Open(s, args[0], owner)
+	if err := h.Cancel(); err != nil {
+		fatal(err)
+	}
+	rec, err := h.Record()
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("%s %s\n", rec.ID, rec.State)
+}
+
+// cmdIntent says what should happen, without holding the lease.
+//
+// A command rather than a flag on claim, because the whole point is that the
+// caller is NOT the worker: no epoch is presented and none is needed.
+func cmdIntent(s job.Store, args []string) {
+	if len(args) < 2 {
+		fatal(fmt.Errorf("usage: jobctl intent <id> <run|pause|cancel> [--by who]"))
+	}
+	by := ""
+	for i := 2; i+1 < len(args); i++ {
+		if args[i] == "--by" {
+			by = args[i+1]
+		}
+	}
+	if by == "" {
+		host, _ := os.Hostname()
+		by = fmt.Sprintf("jobctl@%s:%d", host, os.Getpid())
+	}
+	rec, err := s.SetIntent(args[0], job.Want(args[1]), by)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("%s %s\n", rec.ID, rec.Wants())
 }

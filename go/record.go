@@ -7,11 +7,21 @@
 // application that asked for it. Once that is true, sleeping, crashing and
 // restarting stop being special cases — they are all just the owner going away.
 //
-// What crosses the boundary is this record, on disk, in JSON. Not a function
-// call, not a closure, not a future. The record is the contract: a Go program
-// writes it and a Python program continues it, so the record is the thing the
-// two languages must agree about, and the APIs on either side are free to look
-// like Go and like Python respectively.
+// What crosses the boundary is a reference, not a closure and not a future —
+// both of those die with the process that made them, and this record has to
+// survive exactly that.
+//
+// The cross-language contract is the SEMANTICS, not this struct's bytes: a claim
+// is exclusive, an epoch only increases, a successor resumes only from what a
+// predecessor proved, and a provider may not change what an operation means. A
+// Go program can hand work to a Python program because both implement those
+// rules, not because both parse the same JSON. How a record is represented, and
+// how it reaches the other side, belong to the binding underneath — see Store.
+//
+// An earlier version of this comment said the record "on disk, in JSON" WAS the
+// contract. That sentence was believed, and it cost: an encoding was promoted to
+// a contract, the filesystem became the IPC by default, and the name FileStore
+// reached nine public signatures as far up as model.Get.
 //
 // # What this package does NOT know
 //
@@ -54,7 +64,32 @@ import (
 //	   Progress. Those were download concepts sitting in the generic layer, so
 //	   download could not evolve without changing everyone's schema. This is the
 //	   bump that is supposed to stop the bumps.
-const SchemaVersion = 3
+//	4  added Intent. It had to be a bump rather than an optional extra: a reader
+//	   that does not know this field keeps working on a job somebody asked to
+//	   stop, which is precisely the partly-understood record the schema check
+//	   exists to refuse. Note what it is NOT — it is not in Spec, because Spec is
+//	   opaque to this layer and every reader must understand a stop request.
+const SchemaVersion = 4
+
+// SchemaReadable are the versions this implementation can safely continue.
+//
+// Version 3 is readable because an absent intent means RUN, which is exactly
+// what version 3 always meant — so nothing is being guessed at. Stores full of
+// version 3 records exist on real disks and on a NAS; refusing them would orphan
+// work in flight, which is the same reason ~/.modelget is still honoured.
+//
+// The reverse is not true and must not be made true: a version 3 reader has to
+// refuse version 4, because it would silently ignore a cancellation.
+var SchemaReadable = []int{3, 4}
+
+func schemaReadable(v int) bool {
+	for _, ok := range SchemaReadable {
+		if v == ok {
+			return true
+		}
+	}
+	return false
+}
 
 // Timestamp is a time that always serialises identically, in UTC, with exactly
 // six fractional digits and a trailing Z.
@@ -139,6 +174,69 @@ func (s State) Valid() bool {
 		return true
 	}
 	return false
+}
+
+// Want is what somebody wants to happen, as opposed to what is happening.
+type Want string
+
+const (
+	// WantRun is the default, and what an absent Intent means.
+	WantRun Want = "run"
+	// WantPause stops work and keeps everything. Not terminal: the job becomes
+	// unavailable to sweeps until the intent changes back.
+	WantPause Want = "pause"
+	// WantCancel abandons the work on purpose. Terminal once honoured.
+	WantCancel Want = "cancel"
+)
+
+func (w Want) Valid() bool {
+	switch w {
+	case WantRun, WantPause, WantCancel:
+		return true
+	}
+	return false
+}
+
+// Intent is the desired state, separate from the observed one.
+//
+// # Why this exists, which is not "so there can be a pause button"
+//
+// Every write to a record needs the lease, and whoever wants a change is almost
+// never holding it: a person clicks cancel in an application while a service on
+// another machine moves the bytes. Before this field that was inexpressible —
+// Cancel returned an error saying so — and the only alternative was to steal the
+// job, which is the single thing the lease exists to prevent.
+//
+// So desired and observed are separated, which is what every system that has met
+// this problem does: Kubernetes has spec against status with a deletionTimestamp
+// anyone may set, Temporal records cancellation-requested apart from the run
+// state, systemd distinguishes wanted from active, BITS exposes a state its own
+// service polls. Nothing here is specific to downloading.
+//
+// # The rules
+//
+//  1. Anyone may write it, lease or no lease. It is the ONE field exempt, and
+//     that exemption is the point.
+//  2. Only the lease holder may write State. Unchanged.
+//  3. An owner MUST check it at least as often as it checkpoints and move
+//     toward it. An owner that reads a record and ignores this is not an
+//     implementation of this abstraction.
+//  4. WantCancel must be honoured by everything. Stopping is universal.
+//  5. WantPause must be honoured by implementations that advertise it; one that
+//     cannot must FAIL the job with a reason rather than carry on, because a
+//     pause that quietly does nothing is worse than a refusal.
+//  6. A paused job is NOT an orphan — see Store.Orphans. A sweep that adopted it
+//     would resume it a moment after somebody stopped it, which is the same trap
+//     TRANSFERRED set when it cost a NAS 313 MB for looking abandoned while it
+//     was merely waiting.
+//  7. Once State is terminal, this is history.
+type Intent struct {
+	Want Want `json:"want"`
+	// By is who asked. Not decoration: a job sitting against somebody's wish is
+	// one of the few things that cannot be worked out from the outside, and
+	// "which process asked for this" is the first question anyone has.
+	By string    `json:"by,omitempty"`
+	At Timestamp `json:"at,omitempty"`
 }
 
 // Progress is deliberately thin: two numbers and a timestamp, in units the Kind
@@ -244,8 +342,30 @@ type Record struct {
 	// without finding the log of a process that no longer exists.
 	Error string `json:"error,omitempty"`
 
+	// Intent is what somebody WANTS to happen, as against State, which is what
+	// is happening. Absent means run. Anyone may write it; the owner honours it.
+	Intent *Intent `json:"intent,omitempty"`
+
 	CreatedAt Timestamp `json:"created_at"`
 	UpdatedAt Timestamp `json:"updated_at"`
+}
+
+// Wants reports the desired state, which is WantRun unless somebody said
+// otherwise. Callers use this rather than testing Intent for nil, so that
+// "nobody has asked for anything" and "somebody asked for it to run" are the
+// same answer everywhere — including for the version 3 records that have no
+// intent at all.
+func (r *Record) Wants() Want {
+	if r.Intent == nil || r.Intent.Want == "" {
+		return WantRun
+	}
+	return r.Intent.Want
+}
+
+// Paused reports whether somebody has asked this job to stop and it has not
+// finished. Sweeps use it: a paused job must not be adopted.
+func (r *Record) Paused() bool {
+	return r.Wants() == WantPause && !r.State.Terminal()
 }
 
 var (
@@ -264,8 +384,8 @@ func Decode(b []byte) (*Record, error) {
 		// exactly the risk this refuses to take.
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if r.Schema != SchemaVersion {
-		return nil, fmt.Errorf("%w: have %d, understand %d", ErrUnknownSchema, r.Schema, SchemaVersion)
+	if !schemaReadable(r.Schema) {
+		return nil, fmt.Errorf("%w: have %d, understand %v", ErrUnknownSchema, r.Schema, SchemaReadable)
 	}
 	if err := r.Validate(); err != nil {
 		return nil, err
@@ -277,6 +397,12 @@ func Decode(b []byte) (*Record, error) {
 // indented, with a trailing newline, so a human can read it and a diff is
 // legible.
 func (r *Record) Encode() ([]byte, error) {
+	// What this implementation writes, it writes as its own version. A record
+	// read at version 3 and written back at 3 while carrying an intent would be
+	// a lie in both directions: the field is there, and an older reader is being
+	// told it is safe to ignore fields it does not know. Upgrading on write is
+	// why the readable set is a range and the written version is a single number.
+	r.Schema = SchemaVersion
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
@@ -288,8 +414,14 @@ func (r *Record) Encode() ([]byte, error) {
 }
 
 func (r *Record) Validate() error {
-	if r.Schema != SchemaVersion {
+	if !schemaReadable(r.Schema) {
 		return fmt.Errorf("%w: schema %d", ErrInvalid, r.Schema)
+	}
+	if r.Intent != nil && !r.Intent.Want.Valid() {
+		// An unrecognised want is refused rather than treated as run. Guessing
+		// here would mean carrying on with a job somebody asked to stop, using a
+		// word this implementation is too old to know.
+		return fmt.Errorf("%w: intent %q", ErrInvalid, r.Intent.Want)
 	}
 	if strings.TrimSpace(r.ID) == "" {
 		return fmt.Errorf("%w: id is required", ErrInvalid)

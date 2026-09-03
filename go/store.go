@@ -12,10 +12,20 @@ import (
 	"time"
 )
 
-// FileStore keeps jobs as files in a directory. No daemon, no database, no
-// server: a directory is the one thing a Go process, a Python process, a Windows
-// service and a machine that has just rebooted can all agree on without any of
-// them being running at the same time.
+// FileStore is the file BINDING of Store: jobs kept as files in a directory.
+//
+// It is the bottom tier, not the substrate, and the difference is the whole
+// argument. It is the default because it needs no daemon, no database, no server
+// and no port — a directory is the one thing a Go process, a Python process, a
+// Windows service and a machine that has just rebooted can all agree on without
+// any of them running at the same time. That is the same reason slog still
+// writes to stderr when nothing is configured. It earns this binding its place
+// in the chain, not a place in the interface.
+//
+// Everything below this line — the layout, the epoch tokens, the JSON — is
+// private to this binding. Nothing above Store may depend on any of it, and a
+// service binding that speaks binary to a daemon must be substitutable here
+// without a caller noticing.
 //
 // Layout:
 //
@@ -192,11 +202,45 @@ func (s *FileStore) Orphans() ([]*Record, error) {
 	}
 	out := make([]*Record, 0, len(all))
 	for _, r := range all {
-		if s.Claimable(r) && r.State != StateTransferred {
+		// A PAUSED job is not an orphan either, and for the same reason a
+		// transferred one is not: it looks abandoned and is not. Somebody asked
+		// it to stop, so the lease was released deliberately — and a sweep that
+		// adopted it would start it again seconds after a person pressed pause,
+		// which is a worse failure than never having offered pause at all.
+		if s.Claimable(r) && r.State != StateTransferred && !r.Paused() {
 			out = append(out, r)
 		}
 	}
 	return out, nil
+}
+
+// SetIntent records what should happen, without a lease.
+//
+// The only write in this interface that presents no epoch, and deliberately: the
+// party who wants a job stopped is not the process doing it, and requiring a
+// lease would mean stealing the job in order to stop it — the one thing the
+// lease exists to prevent.
+//
+// Idempotent, and refused once the job is terminal, because nothing reopens
+// finished work. Asking for something the current owner cannot do is NOT an
+// error here: only the owner knows what it can do, so only the owner can say so.
+func (s *FileStore) SetIntent(id string, want Want, by string) (*Record, error) {
+	if !want.Valid() {
+		return nil, fmt.Errorf("%w: intent %q", ErrInvalid, want)
+	}
+	r, err := s.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	if r.State.Terminal() {
+		return nil, fmt.Errorf("%w: %s is %s", ErrTerminal, id, r.State)
+	}
+	r.Intent = &Intent{Want: want, By: by, At: At(s.now())}
+	r.UpdatedAt = At(s.now())
+	if err := s.write(r); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // Claim takes ownership of a job for ttl, and returns the record carrying the

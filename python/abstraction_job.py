@@ -35,7 +35,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+# Versions this implementation can safely CONTINUE, as against the one it
+# writes. Three is readable because an absent intent means "run", which is
+# exactly what version 3 always meant, so nothing is being guessed at — and
+# stores full of version 3 records exist on real disks and on a NAS. The reverse
+# must not be made true: a version 3 reader has to refuse version 4, because it
+# would silently ignore a cancellation.
+SCHEMA_READABLE = (3, 4)
+
+# What somebody wants to happen, as against what is happening.
+RUN = "run"
+PAUSE = "pause"
+CANCEL = "cancel"
+_WANTS = (RUN, PAUSE, CANCEL)
 # History, kept because each bump cost something and the next one should have to
 # justify itself against these:
 #   1  first cut.
@@ -169,6 +182,45 @@ class Delegation:
 
 
 @dataclass
+class Intent:
+    """The desired state, separate from the observed one.
+
+    Why this exists, which is not "so there can be a pause button": every write
+    to a record needs the lease, and whoever wants a change is almost never
+    holding it — a person clicks cancel in an application while a service on
+    another machine moves the bytes. Before this field that was inexpressible,
+    and the only alternative was to steal the job, which is the single thing the
+    lease exists to prevent.
+
+    Every system that has met this problem separates desired from observed:
+    Kubernetes has spec against status with a deletionTimestamp anyone may set,
+    Temporal records cancellation-requested apart from the run state, systemd
+    distinguishes wanted from active, BITS exposes a state its own service polls.
+
+    The rules, which are the contract rather than this implementation's habits:
+
+      1. Anyone may write it, lease or no lease. It is the ONE field exempt.
+      2. Only the lease holder may write `state`. Unchanged.
+      3. An owner MUST check it at least as often as it checkpoints and move
+         toward it. An owner that reads a record and ignores this is not an
+         implementation of this abstraction.
+      4. CANCEL must be honoured by everything; stopping is universal.
+      5. PAUSE must be honoured by implementations that advertise it. One that
+         cannot must FAIL the job with a reason rather than carry on, because a
+         pause that quietly does nothing is worse than a refusal.
+      6. A paused job is NOT an orphan — see `orphans`.
+      7. Once `state` is terminal this is history.
+    """
+
+    want: str = RUN
+    # Who asked. Not decoration: a job sitting against somebody's wish is one of
+    # the few things that cannot be worked out from outside, and "which process
+    # asked for this" is the first question anyone has.
+    by: str = ""
+    at: Optional[datetime] = None
+
+
+@dataclass
 class Record:
     """The whole job, and the cross-language contract.
 
@@ -188,14 +240,23 @@ class Record:
     delegation: Optional[Delegation] = None
     requires: List[str] = field(default_factory=list)
     error: str = ""
+    # What somebody WANTS to happen, as against state, which is what IS
+    # happening. Absent means run. Anyone may write it, lease or no lease;
+    # the owner honours it. See Intent.
+    intent: Optional["Intent"] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # ---- the contract -----------------------------------------------------
 
     def validate(self) -> None:
-        if self.schema != SCHEMA_VERSION:
-            raise UnknownSchema(f"schema {self.schema}, understand {SCHEMA_VERSION}")
+        if self.schema not in SCHEMA_READABLE:
+            raise UnknownSchema(f"schema {self.schema}, understand {SCHEMA_READABLE}")
+        if self.intent is not None and self.intent.want not in _WANTS:
+            # Refused rather than treated as run. Guessing here means carrying
+            # on with a job somebody asked to stop, using a word this
+            # implementation is too old to understand.
+            raise Invalid(f"intent {self.intent.want!r}")
         if not self.id.strip():
             raise Invalid("id is required")
         if not self.kind.strip():
@@ -213,6 +274,22 @@ class Record:
     def terminal(self) -> bool:
         return self.state in _TERMINAL
 
+    def wants(self) -> str:
+        """The desired state, which is RUN unless somebody said otherwise.
+
+        Callers use this rather than testing ``intent`` for None, so that
+        "nobody asked for anything" and "somebody asked for it to run" are
+        the same answer everywhere — including for version 3 records, which
+        have no intent at all.
+        """
+        if self.intent is None or not self.intent.want:
+            return RUN
+        return self.intent.want
+
+    def paused(self) -> bool:
+        """Somebody asked this to stop and it has not finished."""
+        return self.wants() == PAUSE and not self.terminal()
+
     def delegated(self) -> bool:
         """Something outside this process is doing the work.
 
@@ -228,6 +305,11 @@ class Record:
         # with DisallowUnknownFields, so an extra key here is not a cosmetic
         # difference — it makes the record unreadable to the other half of the
         # abstraction.
+        # What this implementation writes, it writes as its own version. A
+        # record read at 3 and written back at 3 while carrying an intent
+        # would tell an older reader it is safe to ignore fields it does not
+        # know, which is exactly the risk the schema check refuses.
+        self.schema = SCHEMA_VERSION
         d: Dict[str, Any] = {
             "schema": self.schema,
             "id": self.id,
@@ -258,6 +340,13 @@ class Record:
             d["requires"] = self.requires
         if self.error:
             d["error"] = self.error
+        if self.intent is not None:
+            it: Dict[str, Any] = {"want": self.intent.want}
+            if self.intent.by:
+                it["by"] = self.intent.by
+            if self.intent.at is not None:
+                it["at"] = _rfc3339(self.intent.at)
+            d["intent"] = it
         d["created_at"] = _rfc3339(self.created_at)
         d["updated_at"] = _rfc3339(self.updated_at)
         return (json.dumps(d, indent=2) + "\n").encode("utf-8")
@@ -268,11 +357,12 @@ class Record:
             d = json.loads(b)
         except ValueError as e:
             raise Invalid(str(e)) from None
-        if d.get("schema") != SCHEMA_VERSION:
-            raise UnknownSchema(f"schema {d.get('schema')}, understand {SCHEMA_VERSION}")
+        if d.get("schema") not in SCHEMA_READABLE:
+            raise UnknownSchema(f"schema {d.get('schema')}, understand {SCHEMA_READABLE}")
         p = d.get("progress") or {}
         l = d.get("lease") or {}
         dg = d.get("delegation")
+        it = d.get("intent")
         r = Record(
             id=d.get("id", ""),
             kind=d.get("kind", ""),
@@ -301,6 +391,15 @@ class Record:
             ),
             requires=d.get("requires") or [],
             error=d.get("error", ""),
+            intent=(
+                Intent(
+                    want=it.get("want", RUN),
+                    by=it.get("by", ""),
+                    at=_parse_time(it["at"]) if it.get("at") else None,
+                )
+                if it
+                else None
+            ),
             created_at=_parse_time(d.get("created_at", "")),
             updated_at=_parse_time(d.get("updated_at", "")),
         )
@@ -396,13 +495,43 @@ class FileStore:
         lapsed lease and downloaded the whole thing again. Then again 30 seconds
         later, forever. What a transferred job waits for is an acknowledgement,
         and no amount of re-downloading produces one.
+
+        A PAUSED job is not an orphan either, and for the same reason: it looks
+        abandoned and is not. Somebody asked it to stop, so the lease was
+        released deliberately — and a sweep that adopted it would start the work
+        again seconds after a person pressed pause, which is worse than never
+        having offered pause at all.
         """
         return [
             r for r in self.list()
-            if self.claimable(r) and r.state != TRANSFERRED
+            if self.claimable(r) and r.state != TRANSFERRED and not r.paused()
         ]
 
     # ---- writing ----------------------------------------------------------
+
+    def set_intent(self, job_id: str, want: str, by: str = "") -> Record:
+        """Say what should happen, WITHOUT holding the lease.
+
+        The only write here that presents no epoch, and deliberately so: the
+        party who wants a job stopped is not the process doing it, and requiring
+        a lease would mean stealing the job in order to stop it — the one thing
+        the lease exists to prevent.
+
+        Idempotent, and refused once the job is terminal, because nothing
+        reopens finished work. Asking for something the current owner cannot do
+        is NOT an error here: only the owner knows what it can do, so only the
+        owner can say so.
+        """
+        if want not in _WANTS:
+            raise Invalid(f"intent {want!r}")
+        r = self.load(job_id)
+        if r.terminal():
+            raise Terminal(f"{job_id} is {r.state}")
+        now = self._now()
+        r.intent = Intent(want=want, by=by, at=now)
+        r.updated_at = now
+        self._write(r)
+        return r
 
     def submit(self, r: Record) -> str:
         if not r.id:

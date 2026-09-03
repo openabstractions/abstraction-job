@@ -6,12 +6,13 @@ other exists; both only know the record.
 
 import argparse
 import os
+import platform
 import sys
 from datetime import datetime, timezone
 
 import json
 
-from abstraction_job import FileStore, JobError, Record
+from abstraction_job import CANCEL, PAUSE, RUN, FileStore, JobError, Record
 
 
 def store() -> FileStore:
@@ -48,6 +49,13 @@ def main() -> None:
 
     s_show = sub.add_parser("show")
     s_show.add_argument("id")
+
+    # Say what should happen, without holding the lease. No --epoch, and that
+    # absence is the feature: the caller is not the worker.
+    s_int = sub.add_parser("intent")
+    s_int.add_argument("id")
+    s_int.add_argument("want", choices=[RUN, PAUSE, CANCEL])
+    s_int.add_argument("--by", default="")
 
     sub.add_parser("orphans")
 
@@ -87,6 +95,11 @@ def main() -> None:
 
         elif a.cmd == "show":
             sys.stdout.write(st.load(a.id).to_json().decode())
+
+        elif a.cmd == "intent":
+            by = a.by or f"jobctl.py@{platform.node()}:{os.getpid()}"
+            r = st.set_intent(a.id, a.want, by)
+            print(f"{r.id} {r.wants()}")
 
         elif a.cmd == "orphans":
             for r in st.orphans():
