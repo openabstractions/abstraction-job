@@ -300,12 +300,8 @@ func (s *FileStore) Claim(id, owner string, ttl time.Duration) (*Record, error) 
 
 	// The atomic step. Whoever creates this file is the owner at this epoch, and
 	// nobody else can be, because the filesystem will not create it twice.
-	next := r.Lease.Epoch + 1
-	tok, err := os.OpenFile(s.epochPath(id, next), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	tok, next, err := s.takeEpoch(id, r.Lease.Epoch+1)
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("%w: epoch %d was taken by someone else", ErrLeaseHeld, next)
-		}
 		return nil, err
 	}
 	fmt.Fprintf(tok, "%s\n", owner)
@@ -318,7 +314,77 @@ func (s *FileStore) Claim(id, owner string, ttl time.Duration) (*Record, error) 
 	if err := s.write(r); err != nil {
 		return nil, err
 	}
+
+	// The previous epoch's token can go now. Nobody will ever ask for it again:
+	// a claimant computes its epoch from the RECORD, which now says `next`.
+	//
+	// Left alone these accumulate one file per claim, forever. A real store had
+	// 1069 files for 17 jobs, and a single job that was reconciled every five
+	// seconds contributed 217 of them.
+	if next > 1 {
+		_ = os.Remove(s.epochPath(id, next-1))
+	}
 	return r, nil
+}
+
+// claimHandover is how long a claim token may exist without its record having
+// caught up before the claimant that made it is presumed gone.
+//
+// The two writes are microseconds apart in the same function, so anything on
+// this scale is a crash rather than a slow disk — and generous even for a store
+// on a share.
+const claimHandover = 10 * time.Second
+
+// takeEpoch creates the claim token for the first epoch at or after `from` that
+// nobody holds, and returns which one it got.
+//
+// # Why this is not simply "create the next one"
+//
+// It was, and a job could be bricked by it. The token is created BEFORE the
+// record is written, so a process that dies in between leaves a token for an
+// epoch the record never reached. Every later claim then computes the same next
+// epoch, finds that token, and fails — permanently. The job cannot be claimed,
+// so it cannot be updated, cancelled, adopted or finished by anyone, ever.
+//
+// Seen on a live store: record at epoch 216, a token for 217, and a supervisor
+// reporting a healthy sweep every five seconds while that job silently failed
+// its claim. Setting an intent on it did nothing either, because honouring an
+// intent requires claiming first.
+//
+// All three implementations documented this as impossible — "a token left
+// behind by a process that was killed blocks nothing, the next claimant takes
+// the epoch after" — which is true only when the record DID advance. The
+// unhandled case is a token that is AHEAD of its record.
+//
+// # Why skipping is safe, and when it is not
+//
+// Skipping past a held epoch would break the exclusivity the token exists to
+// provide, so freshness decides. A claimant that is genuinely mid-flight wrote
+// its token moments ago and is about to write the record; this claim must lose
+// to it. A token that has sat there while the record stayed behind belongs to
+// nobody, and the epoch is unusable rather than held.
+//
+// The file's own timestamp is the evidence, and it is compared against real
+// time rather than the store's clock: an injected test clock says nothing about
+// when the filesystem wrote a file.
+func (s *FileStore) takeEpoch(id string, from int64) (*os.File, int64, error) {
+	const maxSkip = 64
+	for next := from; next < from+maxSkip; next++ {
+		tok, err := os.OpenFile(s.epochPath(id, next), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return tok, next, nil
+		}
+		if !os.IsExist(err) {
+			return nil, 0, err
+		}
+		st, serr := os.Stat(s.epochPath(id, next))
+		if serr != nil || time.Since(st.ModTime()) < claimHandover {
+			return nil, 0, fmt.Errorf("%w: epoch %d was taken by someone else", ErrLeaseHeld, next)
+		}
+		// Abandoned. Take the epoch after it, and leave the orphan for the
+		// cleanup that runs on a successful claim.
+	}
+	return nil, 0, fmt.Errorf("%w: %d epochs from %d are all spoken for", ErrLeaseHeld, maxSkip, from)
 }
 
 // Renew extends a lease the caller still holds.

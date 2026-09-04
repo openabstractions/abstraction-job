@@ -708,6 +708,17 @@ class Scratch(Protocol):
         ...
 
 
+# How long a claim token may exist without its record having caught up before
+# the claimant that made it is presumed gone. The two writes are microseconds
+# apart in the same function, so anything on this scale is a crash rather than a
+# slow disk -- and generous even for a store on a share.
+_CLAIM_HANDOVER_SECONDS = 10.0
+
+# A bound on how far a claim will step over abandoned tokens before giving up
+# and saying so, rather than looping.
+_MAX_EPOCH_SKIP = 64
+
+
 class FileStore:
     """Jobs as files in a directory.
 
@@ -870,11 +881,7 @@ class FileStore:
         if r.lease.held(now) and r.lease.owner != owner:
             raise LeaseHeld(f"{r.lease.owner} holds it until {_rfc3339(r.lease.expires_at)}")
 
-        nxt = r.lease.epoch + 1
-        try:
-            fd = os.open(self._epoch_path(job_id, nxt), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
+        fd, nxt = self._take_epoch(job_id, r.lease.epoch + 1)
         with os.fdopen(fd, "w") as f:
             f.write(owner + "\n")
 
@@ -886,7 +893,62 @@ class FileStore:
         if r.state in (PENDING, RUNNING):
             r.state = RUNNING
         self._write(r)
+
+        # The previous epoch's token can go now. Nobody will ever ask for it
+        # again: a claimant derives its epoch from the RECORD, which now says
+        # nxt. Left alone these accumulate one file per claim, forever -- a real
+        # store reached 1069 files for 17 jobs.
+        if nxt > 1:
+            try:
+                os.remove(self._epoch_path(job_id, nxt - 1))
+            except OSError:
+                pass
         return r
+
+    def _take_epoch(self, job_id: str, first: int):
+        """Create the claim token for the first epoch at or after `first` that
+        nobody holds, and return (fd, epoch).
+
+        # Why this is not simply "create the next one"
+
+        It was, and a job could be bricked by it. The token is created BEFORE the
+        record is written, so a process that dies in between leaves a token for
+        an epoch the record never reached. Every later claim then computes the
+        same next epoch, finds that token, and fails -- permanently. The job
+        cannot be claimed, so it cannot be updated, cancelled, adopted or
+        finished by anyone, ever.
+
+        Seen on a live store: record at epoch 216, a token for 217, and a
+        supervisor reporting a healthy sweep every five seconds while that job
+        silently failed its claim. Setting an intent on it did nothing either,
+        because honouring an intent requires claiming first.
+
+        # Why skipping is safe, and when it is not
+
+        Skipping past a HELD epoch would destroy the exclusivity the token exists
+        to provide, so freshness decides. A claimant that is genuinely mid-flight
+        wrote its token moments ago and is about to write the record; this claim
+        must lose to it. A token that has sat there while the record stayed
+        behind belongs to nobody.
+
+        Compared against real time, not the store's clock: an injected test clock
+        says nothing about when the filesystem wrote a file.
+        """
+        for nxt in range(first, first + _MAX_EPOCH_SKIP):
+            path = self._epoch_path(job_id, nxt)
+            try:
+                return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), nxt
+            except FileExistsError:
+                try:
+                    age = time.time() - os.stat(path).st_mtime
+                except OSError:
+                    raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
+                if age < _CLAIM_HANDOVER_SECONDS:
+                    raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
+                # Abandoned. Take the epoch after it.
+        raise LeaseHeld(
+            f"{_MAX_EPOCH_SKIP} epochs from {first} are all spoken for"
+        )
 
     def renew(self, job_id: str, epoch: int, ttl_seconds: float) -> Record:
         """Extend a lease the caller still holds.

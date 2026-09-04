@@ -261,9 +261,20 @@ func TestEpochTokensDoNotBlock(t *testing.T) {
 		}
 		c.add(2 * time.Second)
 	}
-	for i := 1; i <= 3; i++ {
-		if _, err := os.Stat(s.epochPath(id, int64(i))); err != nil {
-			t.Fatalf("epoch token %d missing: %v", i, err)
+	// The CURRENT epoch's token is what proves this owner holds it, so it stays.
+	if _, err := os.Stat(s.epochPath(id, 3)); err != nil {
+		t.Fatalf("the current epoch's token is missing: %v", err)
+	}
+
+	// The spent ones do not. This assertion used to be the opposite — it
+	// required every token ever created to still be there — which pinned an
+	// unbounded leak: one file per claim, forever. A real store reached 1069
+	// files for 17 jobs, 217 of them from a single job being reconciled every
+	// five seconds. Nobody can ask for a spent epoch again, because a claimant
+	// derives its epoch from the record.
+	for i := 1; i <= 2; i++ {
+		if _, err := os.Stat(s.epochPath(id, int64(i))); !os.IsNotExist(err) {
+			t.Fatalf("token for spent epoch %d is still there: %v", i, err)
 		}
 	}
 }
@@ -458,5 +469,73 @@ func TestReleasingDelegatedJobKeepsItRunning(t *testing.T) {
 	}
 	if after.State != StatePending {
 		t.Fatalf("an ordinary released job should be pending, got %s", after.State)
+	}
+}
+
+// A claim token that is AHEAD of its record must not brick the job.
+//
+// The token is created before the record is written, so a process that dies in
+// between leaves a token for an epoch the record never reached. Every later
+// claim then computed the same next epoch, found that token, and failed —
+// permanently. The job could not be claimed, so it could not be updated,
+// cancelled, adopted or finished by anyone, ever.
+//
+// Seen on a live store: record at epoch 216, token for 217, and a supervisor
+// reporting a healthy sweep every five seconds while that job silently failed
+// its claim. Setting an intent on it did nothing either, because honouring an
+// intent requires claiming first.
+func TestAnAbandonedClaimTokenDoesNotBrickTheJob(t *testing.T) {
+	s, _ := newTestStore(t)
+	id, _ := s.Submit(sampleRecord())
+
+	held, err := s.Claim(id, "first", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Release(id, held.Lease.Epoch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly what a process killed between the two writes leaves behind: the
+	// token for the next epoch, with the record still at this one.
+	orphan := s.epochPath(id, held.Lease.Epoch+1)
+	if err := os.WriteFile(orphan, []byte("a process that died\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Old enough that its author is presumed gone. A fresh one must still win —
+	// that case is below.
+	old := time.Now().Add(-2 * claimHandover)
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := s.Claim(id, "successor", time.Minute)
+	if err != nil {
+		t.Fatalf("a successor could not claim a job whose only obstacle was an "+
+			"abandoned token; the job is bricked: %v", err)
+	}
+	if next.Lease.Epoch <= held.Lease.Epoch {
+		t.Fatalf("epoch went backwards or stood still: %d after %d",
+			next.Lease.Epoch, held.Lease.Epoch)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatal("the abandoned token was skipped but never cleaned up")
+	}
+}
+
+// The other half: a token written moments ago belongs to a claimant that is
+// still mid-flight, and this claim must lose to it. Skipping past a held epoch
+// would destroy the exclusivity the token exists to provide.
+func TestAFreshClaimTokenStillWins(t *testing.T) {
+	s, _ := newTestStore(t)
+	id, _ := s.Submit(sampleRecord())
+
+	// Somebody has just taken the next epoch and has not written the record yet.
+	if err := os.WriteFile(s.epochPath(id, 1), []byte("mid-flight\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Claim(id, "interloper", time.Minute); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("a claim jumped over an epoch somebody was still taking: %v", err)
 	}
 }

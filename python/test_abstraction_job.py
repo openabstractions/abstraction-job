@@ -7,9 +7,11 @@ format with one reader.
 
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 
+import abstraction_job
 from abstraction_job import (
     PENDING,
     RUNNING,
@@ -170,8 +172,50 @@ class JobTest(unittest.TestCase):
             r = self.store.claim(jid, "worker", 1)
             self.assertEqual(r.lease.epoch, i)
             self.clock.add(2)
-        for i in range(1, 4):
-            self.assertTrue(os.path.exists(self.store._epoch_path(jid, i)))
+        # The CURRENT epoch's token is what proves this owner holds it.
+        self.assertTrue(os.path.exists(self.store._epoch_path(jid, 3)))
+        # The spent ones do not survive. This assertion used to be the opposite
+        # -- every token ever created had to still be there -- which pinned an
+        # unbounded leak: one file per claim, forever. A real store reached 1069
+        # files for 17 jobs.
+        for i in (1, 2):
+            self.assertFalse(
+                os.path.exists(self.store._epoch_path(jid, i)),
+                "the token for spent epoch %d is still there" % i,
+            )
+
+    def test_an_abandoned_claim_token_does_not_brick_the_job(self):
+        """A token AHEAD of its record must not make a job unclaimable forever.
+
+        The token is created before the record is written, so a process that dies
+        in between leaves a token for an epoch the record never reached. Every
+        later claim then computed the same next epoch, found that token, and
+        failed -- permanently. Seen on a live store: record at 216, token at 217,
+        and a supervisor reporting a healthy sweep every five seconds while the
+        job silently failed its claim.
+        """
+        jid = self.store.submit(self.sample())
+        held = self.store.claim(jid, "first", 60)
+        self.store.release(jid, held.lease.epoch)
+
+        orphan = self.store._epoch_path(jid, held.lease.epoch + 1)
+        with open(orphan, "w") as f:
+            f.write("a process that died\n")
+        old = time.time() - 2 * abstraction_job._CLAIM_HANDOVER_SECONDS
+        os.utime(orphan, (old, old))
+
+        nxt = self.store.claim(jid, "successor", 60)
+        self.assertGreater(nxt.lease.epoch, held.lease.epoch)
+        self.assertFalse(os.path.exists(orphan), "the abandoned token was never cleaned up")
+
+    def test_a_fresh_claim_token_still_wins(self):
+        """Skipping past an epoch somebody is still taking would destroy the
+        exclusivity the token exists to provide."""
+        jid = self.store.submit(self.sample())
+        with open(self.store._epoch_path(jid, 1), "w") as f:
+            f.write("mid-flight\n")
+        with self.assertRaises(LeaseHeld):
+            self.store.claim(jid, "interloper", 60)
 
     def test_progress_cannot_be_negative(self):
         jid = self.store.submit(self.sample())
