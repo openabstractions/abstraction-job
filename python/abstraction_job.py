@@ -33,7 +33,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 SCHEMA_VERSION = 4
 # Versions this implementation can safely CONTINUE, as against the one it
@@ -413,6 +413,122 @@ def new_id() -> str:
     return f"{int(time.time() * 1000)}-{binascii.hexlify(secrets.token_bytes(10)).decode()}"
 
 
+@runtime_checkable
+class Store(Protocol):
+    """Where jobs live. Every other abstraction in this project sits on it.
+
+    # What this protocol is, and what it deliberately is not
+
+    It is the SEMANTICS of the lease protocol and nothing else: a claim is
+    exclusive, an epoch only ever increases, every write must present the epoch
+    it holds, and a successor may continue only from what a predecessor proved.
+    That is what two implementations have to agree about, and not one clause of
+    it mentions a byte.
+
+    It is NOT a file format and NOT a transport. Records have to be represented
+    somehow and a call has to reach whoever executes it somehow, but both belong
+    to the BINDING underneath -- files in a directory today, a service over a
+    socket next, a machine across the network after that. Changing the
+    representation must be invisible from here.
+
+    Go and C++ both had this and Python did not. The whole public surface of
+    this module was ``FileStore``, so the only type Python offered named its own
+    binding -- and it showed one layer up, where the download runner reached
+    through ``store.root`` for a directory that a service binding does not have.
+
+    The test an abstraction has to pass is THE SAME APPLICATION, UNCHANGED,
+    RUNNING ON TWO BINDINGS.
+    """
+
+    def submit(self, r: "Record") -> str:
+        """Record new work and return its id. The id is the handle: a plain
+        string that outlives the process which created it."""
+        ...
+
+    def load(self, job_id: str) -> "Record":
+        """Read a record. Any process may, including one that holds no lease and
+        never will -- that is what makes work observable from outside, which a
+        callback cannot be, because a callback is bound to the lifetime of the
+        process that registered it and that is exactly the lifetime which
+        fails."""
+        ...
+
+    def list(self) -> List["Record"]:
+        """Every job, oldest first."""
+        ...
+
+    def claimable(self, r: "Record") -> bool:
+        """Whether this job can be taken over right now."""
+        ...
+
+    def orphans(self) -> List["Record"]:
+        """Work nobody is doing. The reclamation path, and primary rather than a
+        fallback: a process that is killed never hands anything over, so a
+        design relying on graceful handoff has no answer for the case that loses
+        a 40 GB download."""
+        ...
+
+    def claim(self, job_id: str, owner: str, ttl_seconds: float) -> "Record":
+        """Take ownership for ttl_seconds and return the record carrying the
+        caller's new epoch. Exclusive: two callers cannot hold the same epoch."""
+        ...
+
+    def renew(self, job_id: str, epoch: int, ttl_seconds: float) -> "Record":
+        """Extend a lease the caller still holds. Must refuse once the lease has
+        expired even when the epoch still matches, because a process suspended
+        for an hour wakes up believing it is still the owner."""
+        ...
+
+    def release(self, job_id: str, epoch: int) -> None:
+        """Give up a lease early. A courtesy: everything works without it, only
+        more slowly."""
+        ...
+
+    def update(self, job_id: str, epoch: int, mutate: Callable[["Record"], None]) -> "Record":
+        """Apply mutate, but only if the caller still holds the lease at the
+        epoch it presents. The single gate every change passes through."""
+        ...
+
+    def set_intent(self, job_id: str, want: str, by: str = "") -> "Record":
+        """Say what should happen, WITHOUT a lease.
+
+        The one write that presents no epoch. Whoever wants a job stopped is not
+        the process doing it -- a person clicks cancel while a service on another
+        machine moves the bytes -- and requiring a lease would mean stealing the
+        job in order to stop it, which is what the lease prevents.
+        """
+        ...
+
+
+@runtime_checkable
+class Scratch(Protocol):
+    """An OPTIONAL capability: a store whose binding happens to BE a local
+    filesystem can offer an area on it.
+
+    It exists to contain a leak, not to bless one. ``store.root`` was an
+    attribute anyone could reach for, and the download runner did, to resolve a
+    relative sink. A store bound to a service has no directory to give, so the
+    caller must ask::
+
+        if isinstance(store, Scratch):
+            ...
+
+    and have a real answer for no, rather than assuming a directory exists.
+    """
+
+    def root(self) -> str:
+        """The local area this binding keeps its own state in. Relative paths in
+        a record resolve against it, so a record written by a PC and read by a
+        NAS names one directory rather than one machine's view of it."""
+        ...
+
+    def work_path(self, job_id: str) -> str:
+        """Scratch space for a single job. What a kind puts there is its own
+        business; the only guarantee is that the location is derived from the id,
+        so a successor can find what a predecessor left."""
+        ...
+
+
 class FileStore:
     """Jobs as files in a directory.
 
@@ -433,24 +549,36 @@ class FileStore:
     """
 
     def __init__(self, root: str, now: Callable[[], datetime] = None):
-        self.root = root
+        self._root = root
         self._now = now or (lambda: datetime.now(timezone.utc))
         os.makedirs(os.path.join(root, "jobs"), exist_ok=True)
         os.makedirs(os.path.join(root, "work"), exist_ok=True)
 
     # ---- paths ------------------------------------------------------------
 
+    def root(self) -> str:
+        """The local area this binding keeps its own state in.
+
+        A method and not a field on purpose. As an attribute it was reachable
+        from anywhere without anyone having to admit they needed a directory,
+        and the download runner duly reached for it -- so the layer that is not
+        supposed to know what a file is could not run on a store that has no
+        files. Now it is the Scratch capability, and a caller that wants it must
+        ask whether this binding has one.
+        """
+        return self._root
+
     def _record_path(self, job_id: str) -> str:
-        return os.path.join(self.root, "jobs", job_id + ".json")
+        return os.path.join(self._root, "jobs", job_id + ".json")
 
     def _epoch_path(self, job_id: str, epoch: int) -> str:
-        return os.path.join(self.root, "jobs", f"{job_id}.epoch.{epoch}")
+        return os.path.join(self._root, "jobs", f"{job_id}.epoch.{epoch}")
 
     def work_path(self, job_id: str) -> str:
         """Scratch space a job may use while it runs. What goes there is the
         kind's business; the store only guarantees the path is derived from the
         id, so a successor can find what a predecessor left."""
-        return os.path.join(self.root, "work", job_id)
+        return os.path.join(self._root, "work", job_id)
 
     # ---- reading ----------------------------------------------------------
 
@@ -467,7 +595,7 @@ class FileStore:
 
     def list(self) -> List[Record]:
         out = []
-        d = os.path.join(self.root, "jobs")
+        d = os.path.join(self._root, "jobs")
         for name in sorted(os.listdir(d)):
             if not name.endswith(".json"):
                 continue
@@ -637,8 +765,145 @@ class FileStore:
         sees the old record or the new one, never half of one — and one of those
         readers may be deciding right now whether this job is an orphan."""
         data = r.to_json()
-        d = os.path.join(self.root, "jobs")
+        d = os.path.join(self._root, "jobs")
         tmp = os.path.join(d, f"{r.id}.tmp-{os.getpid()}-{secrets.token_hex(4)}")
         with open(tmp, "wb") as f:
             f.write(data)
         os.replace(tmp, self._record_path(r.id))
+
+
+class Memory:
+    """Jobs in a dict, for a process that wants the semantics and no disk.
+
+    The point of this binding is not convenience. A socket in front of a
+    FileStore is a transport swap and proves little; this shares no code with
+    FileStore at all. The lease, the epoch, the exclusivity, the refusal of a
+    stale write, and the rule that a paused or transferred job is not an orphan
+    are all written again here. If those semantics were really FileStore's
+    filesystem tricks all along -- exclusive create, atomic rename -- this is
+    where that shows, because a dict has neither.
+
+    Deliberately NOT a Scratch: there is no directory, and a caller that assumed
+    one gets told so instead of being handed a path that does not exist. That is
+    the whole reason the capability is separate.
+
+    Not durable and not shared between processes, which is exactly what makes it
+    honest about being one binding among several rather than the definition.
+    """
+
+    def __init__(self, now: Callable[[], datetime] = None):
+        self._jobs: Dict[str, bytes] = {}
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    # Stored encoded, and decoded on every read. Not a detail: handing out the
+    # same object twice would let a caller mutate a record the store still
+    # believes it owns, so an in-memory store would be the one binding where a
+    # write did not have to pass the epoch gate. Encoding also means this
+    # binding is held to the same record rules as any other -- a Record that
+    # would not survive a round trip does not survive here either.
+    def _get(self, job_id: str) -> Record:
+        raw = self._jobs.get(job_id)
+        if raw is None:
+            raise NotFound(job_id)
+        return Record.from_json(raw)
+
+    def _put(self, r: Record) -> None:
+        self._jobs[r.id] = r.to_json()
+
+    # ---- reading ----------------------------------------------------------
+
+    def load(self, job_id: str) -> Record:
+        return self._get(job_id)
+
+    def list(self) -> List[Record]:
+        return [Record.from_json(raw) for _, raw in sorted(self._jobs.items())]
+
+    def claimable(self, r: Record) -> bool:
+        return not r.terminal() and not r.lease.held(self._now())
+
+    def orphans(self) -> List[Record]:
+        return [
+            r for r in self.list()
+            if self.claimable(r) and r.state != TRANSFERRED and not r.paused()
+        ]
+
+    # ---- writing ----------------------------------------------------------
+
+    def submit(self, r: Record) -> str:
+        if not r.id:
+            r.id = new_id()
+        if r.id in self._jobs:
+            raise Invalid(f"{r.id} already exists")
+        now = self._now()
+        r.schema = SCHEMA_VERSION
+        if not r.state:
+            r.state = PENDING
+        r.created_at = now
+        r.updated_at = now
+        r.progress.updated_at = now
+        self._put(r)
+        return r.id
+
+    def claim(self, job_id: str, owner: str, ttl_seconds: float) -> Record:
+        if not owner.strip():
+            raise JobError("claim requires an owner")
+        r = self._get(job_id)
+        if r.terminal():
+            raise Terminal(f"{job_id} is {r.state}")
+        now = self._now()
+        if r.lease.held(now) and r.lease.owner != owner:
+            raise LeaseHeld(f"{r.lease.owner} holds it until {_rfc3339(r.lease.expires_at)}")
+        r.lease = Lease(
+            owner=owner,
+            epoch=r.lease.epoch + 1,
+            expires_at=datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc),
+        )
+        if r.state in (PENDING, RUNNING):
+            r.state = RUNNING
+        self._put(r)
+        return r
+
+    def renew(self, job_id: str, epoch: int, ttl_seconds: float) -> Record:
+        r = self._get(job_id)
+        if r.lease.epoch != epoch:
+            raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
+        if not r.lease.held(self._now()):
+            raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}, re-claim instead")
+        now = self._now()
+        r.lease.expires_at = datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc)
+        self._put(r)
+        return r
+
+    def release(self, job_id: str, epoch: int) -> None:
+        def mutate(r: Record) -> None:
+            r.lease.expires_at = self._now()
+            r.lease.owner = ""
+            # A delegated job stays RUNNING: letting go of the lease means "I am
+            # not the one watching this any more", not "this stopped".
+            if r.state == RUNNING and not r.delegated():
+                r.state = PENDING
+
+        self.update(job_id, epoch, mutate)
+
+    def update(self, job_id: str, epoch: int, mutate: Callable[[Record], None]) -> Record:
+        r = self._get(job_id)
+        if r.lease.epoch != epoch:
+            raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
+        if not r.lease.held(self._now()):
+            raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}")
+        mutate(r)
+        r.updated_at = self._now()
+        self._put(r)
+        return r
+
+    def set_intent(self, job_id: str, want: str, by: str = "") -> Record:
+        if want not in _WANTS:
+            raise Invalid(f"intent {want!r}")
+        r = self._get(job_id)
+        if r.terminal():
+            raise Terminal(f"{job_id} is {r.state}")
+        now = self._now()
+        r.intent = Intent(want=want, by=by, at=now)
+        r.updated_at = now
+        self._put(r)
+        return r
