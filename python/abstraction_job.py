@@ -35,14 +35,50 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-SCHEMA_VERSION = 5
-# Versions this implementation can safely CONTINUE, as against the one it
-# writes. Three is readable because an absent intent means "run", which is
-# exactly what version 3 always meant, so nothing is being guessed at — and
-# stores full of version 3 records exist on real disks and on a NAS. The reverse
-# must not be made true: a version 3 reader has to refuse version 4, because it
-# would silently ignore a cancellation.
-SCHEMA_READABLE = (3, 4, 5)
+# The data models this implementation understands, and writes.
+#
+# A name is namespaced and versioned: "abstraction.job/base@1". The version is
+# part of the name rather than a separate field, so an incompatible change to one
+# model is a NEW name that old readers correctly fail to recognise, while every
+# other model in the record stays readable.
+#
+# This replaced an integer version. A version conflates WHAT CHANGED with WHAT
+# YOU MUST UNDERSTAND, so the only safe response to any unknown version was to
+# refuse the whole record -- even when the addition was decoration a reader could
+# have ignored. See CRITICAL below for the half that makes this more than a
+# rename.
+MODEL_BASE = "abstraction.job/base@1"
+MODEL_INTENT = "abstraction.job/intent@1"
+MODEL_DELEGATION = "abstraction.job/delegation@1"
+MODEL_STEP = "abstraction.job/step@1"
+
+# What this implementation can read. A record naming anything else in `critical`
+# is refused.
+KNOWN_MODELS = frozenset({MODEL_BASE, MODEL_INTENT, MODEL_DELEGATION, MODEL_STEP})
+
+# The integer this format used to carry, mapped onto the models each version
+# implied. No longer written; still read, because stores full of version 3 and 4
+# records exist on real disks and on a NAS. The mapping is exact rather than a
+# guess: those versions are frozen and it is known what each could contain.
+LEGACY_SCHEMAS = {
+    3: (MODEL_BASE,),
+    4: (MODEL_BASE, MODEL_INTENT),
+    5: (MODEL_BASE, MODEL_INTENT, MODEL_STEP),
+}
+
+
+def understands(critical) -> tuple:
+    """The first critical model this implementation cannot read, and whether it
+    can proceed.
+
+    Only `critical` is consulted. `content` is informational: a name there that
+    nobody here knows is data to carry, not a reason to stop.
+    """
+    for name in critical or ():
+        if name not in KNOWN_MODELS:
+            return name, False
+    return "", True
+
 
 # What somebody wants to happen, as against what is happening.
 RUN = "run"
@@ -269,7 +305,17 @@ class Record:
     id: str
     kind: str = ""
     state: str = PENDING
-    schema: int = SCHEMA_VERSION
+    # What this record carries, and the subset a reader MUST understand or
+    # refuse it entirely. See MODEL_BASE and the `critical` rule: not knowing
+    # the step model is harmless, not knowing the intent model means working on
+    # a job somebody asked to stop.
+    content: List[str] = field(default_factory=list)
+    critical: List[str] = field(default_factory=list)
+    # Data this layer does not understand, keyed by a name that says who does.
+    # A reader that cannot read one MUST preserve it on write: dropping it
+    # destroys another participant's data, invisibly, because nobody here can
+    # see what was lost.
+    extensions: Dict[str, Any] = field(default_factory=dict)
     spec: Dict[str, Any] = field(default_factory=dict)
     checkpoint: Optional[Dict[str, Any]] = None
     progress: Progress = field(default_factory=Progress)
@@ -287,8 +333,14 @@ class Record:
     # ---- the contract -----------------------------------------------------
 
     def validate(self) -> None:
-        if self.schema not in SCHEMA_READABLE:
-            raise UnknownSchema(f"schema {self.schema}, understand {SCHEMA_READABLE}")
+        if not self.content:
+            raise Invalid("a record must say what it contains")
+        missing, ok = understands(self.critical)
+        if not ok:
+            raise UnknownSchema(f"requires {missing!r}")
+        for name, value in (self.extensions or {}).items():
+            if not str(name).strip():
+                raise Invalid("an extension needs a name saying who understands it")
         if self.intent is not None and self.intent.want not in _WANTS:
             # Refused rather than treated as run. Guessing here means carrying
             # on with a job somebody asked to stop, using a word this
@@ -358,14 +410,18 @@ class Record:
         # record read at 3 and written back at 3 while carrying an intent
         # would tell an older reader it is safe to ignore fields it does not
         # know, which is exactly the risk the schema check refuses.
-        self.schema = SCHEMA_VERSION
+        self.describe()
         d: Dict[str, Any] = {
-            "schema": self.schema,
+            "content": list(self.content),
+        }
+        if self.critical:
+            d["critical"] = list(self.critical)
+        d.update({
             "id": self.id,
             "kind": self.kind,
             "state": self.state,
             "spec": self.spec,
-        }
+        })
         if self.checkpoint is not None:
             d["checkpoint"] = self.checkpoint
         d["progress"] = {"done": self.progress.done}
@@ -405,9 +461,45 @@ class Record:
             if self.intent.at is not None:
                 it["at"] = _rfc3339(self.intent.at)
             d["intent"] = it
+        if self.extensions:
+            # Sorted, because a dict has no order the other implementations
+            # share and this output is compared byte for byte against them.
+            d["extensions"] = {k: self.extensions[k] for k in sorted(self.extensions)}
         d["created_at"] = _rfc3339(self.created_at)
         d["updated_at"] = _rfc3339(self.updated_at)
         return (json.dumps(d, indent=2) + "\n").encode("utf-8")
+
+    def describe(self) -> None:
+        """Fill in content and critical from what this record actually carries.
+
+        Derived rather than remembered, so the declaration cannot drift from the
+        data: a record that gained an intent since it was last written says so on
+        the next write without anybody updating a list.
+
+        Caller-declared criticals are preserved -- an extension's writer may have
+        said "refuse this record if you cannot read my payload", and this layer
+        is not entitled to downgrade that.
+        """
+        content = [MODEL_BASE]
+        critical = [MODEL_BASE]
+        if self.intent is not None:
+            content.append(MODEL_INTENT)
+            critical.append(MODEL_INTENT)
+        if self.delegation is not None:
+            content.append(MODEL_DELEGATION)
+            critical.append(MODEL_DELEGATION)
+        # Advisory, and deliberately not critical: a reader that ignores a step
+        # is correct about everything that matters.
+        if self.progress.step is not None:
+            content.append(MODEL_STEP)
+        content.extend(sorted(self.extensions or {}))
+
+        for name in self.critical or ():
+            if name not in critical and name in content:
+                critical.append(name)
+
+        self.content = content
+        self.critical = critical
 
     @staticmethod
     def from_json(b: bytes) -> "Record":
@@ -415,8 +507,24 @@ class Record:
             d = json.loads(b)
         except ValueError as e:
             raise Invalid(str(e)) from None
-        if d.get("schema") not in SCHEMA_READABLE:
-            raise UnknownSchema(f"schema {d.get('schema')}, understand {SCHEMA_READABLE}")
+        content = list(d.get("content") or ())
+        critical = list(d.get("critical") or ())
+        if not content and "schema" in d:
+            # A legacy record. The mapping is exact, not a guess: those versions
+            # are frozen and it is known what each one could contain.
+            models = LEGACY_SCHEMAS.get(d.get("schema"))
+            if models is None:
+                raise UnknownSchema(f"legacy schema {d.get('schema')}")
+            content = list(models)
+            critical = [m for m in models if m != MODEL_STEP]
+            if d.get("delegation") is not None:
+                content.append(MODEL_DELEGATION)
+                critical.append(MODEL_DELEGATION)
+        missing, ok = understands(critical)
+        if not ok:
+            raise UnknownSchema(
+                f"this record requires {missing!r}, which this implementation cannot read"
+            )
         p = d.get("progress") or {}
         l = d.get("lease") or {}
         dg = d.get("delegation")
@@ -425,7 +533,9 @@ class Record:
             id=d.get("id", ""),
             kind=d.get("kind", ""),
             state=d.get("state", ""),
-            schema=d["schema"],
+            content=content,
+            critical=critical,
+            extensions=dict(d.get("extensions") or {}),
             spec=d.get("spec"),
             checkpoint=d.get("checkpoint"),
             progress=Progress(
@@ -734,7 +844,7 @@ class FileStore:
         if not r.id:
             r.id = new_id()
         now = self._now()
-        r.schema = SCHEMA_VERSION
+        r.describe()
         if not r.state:
             r.state = PENDING
         r.created_at = now
@@ -904,7 +1014,7 @@ class Memory:
         if r.id in self._jobs:
             raise Invalid(f"{r.id} already exists")
         now = self._now()
-        r.schema = SCHEMA_VERSION
+        r.describe()
         if not r.state:
             r.state = PENDING
         r.created_at = now

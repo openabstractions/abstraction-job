@@ -23,6 +23,16 @@ def store() -> FileStore:
 
 
 def main() -> None:
+    # Windows text mode would turn every LF into CRLF, and a record printed here
+    # is a conformance surface compared against Go and C++ byte for byte. Without
+    # this the three implementations agree about every field and the comparison
+    # still fails -- on line endings, which is the least interesting way to
+    # disagree and the hardest to see in a diff.
+    try:
+        sys.stdout.reconfigure(newline="\n")
+    except AttributeError:  # pragma: no cover - Python < 3.7
+        pass
+
     p = argparse.ArgumentParser(prog="jobctl.py")
     sub = p.add_subparsers(dest="cmd", required=True)
 
