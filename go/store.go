@@ -102,7 +102,7 @@ func (s *FileStore) Submit(r Record) (string, error) {
 		r.ID = NewID()
 	}
 	now := s.now().UTC()
-	r.Schema = SchemaVersion
+	r.describe()
 	if r.State == "" {
 		r.State = StatePending
 	}

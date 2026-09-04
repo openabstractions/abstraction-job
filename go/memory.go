@@ -82,7 +82,7 @@ func (m *Memory) Submit(r Record) (string, error) {
 		return "", fmt.Errorf("%w: %s already exists", ErrInvalid, r.ID)
 	}
 	now := m.now().UTC()
-	r.Schema = SchemaVersion
+	r.describe()
 	if r.State == "" {
 		r.State = StatePending
 	}

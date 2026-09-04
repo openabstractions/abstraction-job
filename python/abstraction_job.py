@@ -35,14 +35,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 # Versions this implementation can safely CONTINUE, as against the one it
 # writes. Three is readable because an absent intent means "run", which is
 # exactly what version 3 always meant, so nothing is being guessed at — and
 # stores full of version 3 records exist on real disks and on a NAS. The reverse
 # must not be made true: a version 3 reader has to refuse version 4, because it
 # would silently ignore a cancellation.
-SCHEMA_READABLE = (3, 4)
+SCHEMA_READABLE = (3, 4, 5)
 
 # What somebody wants to happen, as against what is happening.
 RUN = "run"
@@ -130,17 +130,54 @@ def _parse_time(s: str) -> datetime:
 
 
 @dataclass
+class Step:
+    """Which phase of a multi-phase job is happening now.
+
+    In the record and not the kind's checkpoint, because a checkpoint is opaque:
+    only a reader that knows the kind could render it. Progress is the one thing
+    a GENERIC reader has to be able to display — a supervisor's status output, a
+    download manager listing work of every kind — without knowing what the work
+    is.
+
+    What made it necessary: a download delegated to a NAS is two transfers, and
+    only the first was visible. The far side fetched 40 GB and reported done;
+    then this machine copied those 40 GB back across a share and re-hashed them,
+    with the record still showing the first transfer's numbers throughout. A
+    person watching saw a finished download doing nothing, for minutes, twice.
+
+    ADVISORY ONLY, which is the same rule progress already has. Nothing may
+    decide anything on a step — not what to do next, not whether work is
+    finished, not whether to retry. The moment something branches on
+    ``ordinal == 2``, a workflow engine has been smuggled into a record whose
+    whole value is that it describes work without prescribing it.
+
+    ``name`` is opaque to this layer, exactly like kind and spec.
+    """
+
+    name: str = ""
+    ordinal: int = 0  # counts from one
+    of: int = 0  # 0 when the writer cannot say how many
+    # This phase's own units, which need not be the job's: hashing counts the
+    # same bytes a second time, and the overall numbers must not double for it.
+    done: int = 0
+    total: int = 0
+
+
+@dataclass
 class Progress:
     """Deliberately thin: two numbers and a timestamp, in units the kind defines.
 
     Best-effort and explicitly NOT monotonic — a job resuming from a checkpoint
     after a crash can legitimately report a smaller `done` than before. Nothing
-    may make a decision on it. Anything richer belongs in the kind's checkpoint.
+    may make a decision on it. Anything richer belongs in the kind's checkpoint,
+    with the one exception of `step` — see Step for why that exception exists.
     """
 
     done: int = 0
     total: int = 0  # 0 means unknown
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Absent means what every record before schema 5 meant: one unnamed phase.
+    step: Optional["Step"] = None
 
 
 @dataclass
@@ -267,6 +304,18 @@ class Record:
             raise Invalid("spec must be present and be a JSON object")
         if self.progress.done < 0 or self.progress.total < 0:
             raise Invalid("progress cannot be negative")
+        st = self.progress.step
+        if st is not None:
+            # A step with no name tells a person nothing, which is the only
+            # thing a step is for.
+            if not st.name.strip():
+                raise Invalid("a step needs a name")
+            if st.ordinal < 1:
+                raise Invalid(f"step ordinal counts from one, got {st.ordinal}")
+            if st.of > 0 and st.ordinal > st.of:
+                raise Invalid(f"step {st.ordinal} of {st.of}")
+            if st.done < 0 or st.total < 0:
+                raise Invalid("step progress cannot be negative")
         if self.delegation is not None:
             if not self.delegation.system.strip() or not self.delegation.external_id.strip():
                 raise Invalid("delegation needs both a system and an external id")
@@ -323,6 +372,15 @@ class Record:
         if self.progress.total:
             d["progress"]["total"] = self.progress.total
         d["progress"]["updated_at"] = _rfc3339(self.progress.updated_at)
+        if self.progress.step is not None:
+            st = {"name": self.progress.step.name, "ordinal": self.progress.step.ordinal}
+            if self.progress.step.of:
+                st["of"] = self.progress.step.of
+            if self.progress.step.done:
+                st["done"] = self.progress.step.done
+            if self.progress.step.total:
+                st["total"] = self.progress.step.total
+            d["progress"]["step"] = st
         d["lease"] = {
             "owner": self.lease.owner,
             "epoch": self.lease.epoch,
@@ -371,6 +429,17 @@ class Record:
             spec=d.get("spec"),
             checkpoint=d.get("checkpoint"),
             progress=Progress(
+                step=(
+                    Step(
+                        name=(p.get("step") or {}).get("name", ""),
+                        ordinal=(p.get("step") or {}).get("ordinal", 0),
+                        of=(p.get("step") or {}).get("of", 0),
+                        done=(p.get("step") or {}).get("done", 0),
+                        total=(p.get("step") or {}).get("total", 0),
+                    )
+                    if isinstance(p.get("step"), dict)
+                    else None
+                ),
                 done=p.get("done", 0),
                 total=p.get("total", 0),
                 updated_at=_parse_time(p.get("updated_at", "")),

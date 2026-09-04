@@ -1,6 +1,7 @@
 package job
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -182,8 +183,14 @@ func TestVersionThreeRecordsAreStillReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"schema": 4`) {
-		t.Fatal("a record written by this implementation must claim this implementation's schema")
+	// Read as legacy, written back in the current form: the integer is gone and
+	// the record says what it actually contains. Version 3 carried no intent, so
+	// the content set is base alone.
+	if strings.Contains(string(b), `"schema"`) {
+		t.Fatal("the legacy version integer must not be written back out")
+	}
+	if want := fmt.Sprintf(`"%s"`, ModelBase); !strings.Contains(string(b), want) {
+		t.Fatalf("a record written by this implementation must declare %s", want)
 	}
 }
 
