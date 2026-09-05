@@ -59,6 +59,23 @@ target_include_directories(abstraction_job PUBLIC
 target_link_libraries(abstraction_job PUBLIC nlohmann_json::nlohmann_json)
 add_library(abstraction::job ALIAS abstraction_job)
 
+# The discovery client, and it is deliberately NOT part of abstraction_job.
+#
+# docs/discovery-ipc.md puts discovery in the download layer and says nothing in
+# `job` may depend on it. The C++ toolchain is here, so the code is here — but
+# as its own target that abstraction_job does not link and that does not link
+# abstraction_job, so the forbidden dependency cannot form by accident and
+# moving these files to the download repository is a git mv and two lines.
+add_library(abstraction_discovery STATIC
+    cpp/src/discovery_client.cpp
+)
+target_include_directories(abstraction_discovery PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(abstraction_discovery PUBLIC nlohmann_json::nlohmann_json)
+add_library(abstraction::discovery ALIAS abstraction_discovery)
+
 # jobctl exists so three implementations can be compared byte for byte, which is
 # the only thing that has ever caught a cross-language disagreement here. It is
 # not part of what an adopter links, which is why it is behind an option that
@@ -73,4 +90,11 @@ if(ABSTRACTION_JOB_BUILD_TESTS)
     add_executable(test_job_record cpp/test/test_job_record.cpp)
     target_link_libraries(test_job_record PRIVATE abstraction_job)
     add_test(NAME JobRecord COMMAND test_job_record)
+
+    # This one stands up a real listener — a named pipe on Windows, a unix
+    # socket elsewhere — so it needs threads.
+    find_package(Threads REQUIRED)
+    add_executable(test_discovery_client cpp/test/test_discovery_client.cpp)
+    target_link_libraries(test_discovery_client PRIVATE abstraction_discovery Threads::Threads)
+    add_test(NAME DiscoveryClient COMMAND test_discovery_client)
 endif()
