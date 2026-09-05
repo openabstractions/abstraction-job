@@ -1,6 +1,12 @@
 // Discovery over local IPC, in C++ — the client half only.
 //
-// `docs/discovery-ipc.md` and `docs/service-topology.md` are the contract. This
+// The contract lives in another repository, because it is shared by every
+// implementation of it:
+//
+//   https://github.com/openabstractions/abstractions/blob/main/docs/discovery-ipc.md
+//   https://github.com/openabstractions/abstractions/blob/main/docs/service-topology.md
+//
+// This
 // is written against those two documents and against nothing else: it does not
 // read the Python client in abstraction-download, and that one does not read
 // this. Where the two agree, the contract said enough. Where they had to agree
