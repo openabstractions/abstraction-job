@@ -367,6 +367,35 @@ const claimHandover = 10 * time.Second
 // The file's own timestamp is the evidence, and it is compared against real
 // time rather than the store's clock: an injected test clock says nothing about
 // when the filesystem wrote a file.
+// ageOn reports how old a file is according to the clock that stamped it.
+//
+// The obvious time.Since(modtime) compares two clocks: the one on whatever
+// holds the store, and this machine's. On a share those are different
+// machines. A store host running behind by more than claimHandover makes every
+// freshly written token look abandoned, so two claimants skip past each other
+// and both start moving bytes -- the exact thing the epoch exists to prevent.
+// The Update epoch check refuses one of them eventually, but only after the
+// work is duplicated, and nothing reports it.
+//
+// So the age is measured against a mark the store itself just made. When that
+// cannot be done the answer is "too recent to touch", because refusing a claim
+// costs a retry and taking one wrongly costs correctness.
+func (s *FileStore) ageOn(mod time.Time) time.Duration {
+	probe, err := os.CreateTemp(filepath.Join(s.root, "jobs"), ".now-*")
+	if err != nil {
+		return 0
+	}
+	name := probe.Name()
+	probe.Close()
+	defer os.Remove(name)
+
+	st, err := os.Stat(name)
+	if err != nil {
+		return 0
+	}
+	return st.ModTime().Sub(mod)
+}
+
 func (s *FileStore) takeEpoch(id string, from int64) (*os.File, int64, error) {
 	const maxSkip = 64
 	for next := from; next < from+maxSkip; next++ {
@@ -378,7 +407,7 @@ func (s *FileStore) takeEpoch(id string, from int64) (*os.File, int64, error) {
 			return nil, 0, err
 		}
 		st, serr := os.Stat(s.epochPath(id, next))
-		if serr != nil || time.Since(st.ModTime()) < claimHandover {
+		if serr != nil || s.ageOn(st.ModTime()) < claimHandover {
 			return nil, 0, fmt.Errorf("%w: epoch %d was taken by someone else", ErrLeaseHeld, next)
 		}
 		// Abandoned. Take the epoch after it, and leave the orphan for the

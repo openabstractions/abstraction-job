@@ -539,3 +539,75 @@ func TestAFreshClaimTokenStillWins(t *testing.T) {
 		t.Fatalf("a claim jumped over an epoch somebody was still taking: %v", err)
 	}
 }
+
+// A token's age decides whether a claimant may step over it, and it used to be
+// measured with time.Since -- this machine's clock against a modification time
+// stamped by whatever holds the store. On a share those are two machines. A
+// store host running behind by more than claimHandover makes every fresh token
+// look abandoned, so two claimants skip past each other and both start work.
+//
+// This pins the boundary. It cannot reproduce real skew, which needs a store on
+// a second machine with a wrong clock; what it guards is that the calculation
+// stays anchored to a mark the store itself made.
+func TestATokenIsJudgedOldByTheClockThatStampedIt(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Submit(Record{Kind: "test", State: StatePending, Spec: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// What the store thinks the time is, which is the only clock that matters.
+	probe, err := os.CreateTemp(filepath.Join(dir, "jobs"), ".probe-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Close()
+	pst, err := os.Stat(probe.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeNow := pst.ModTime()
+	os.Remove(probe.Name())
+
+	for _, tc := range []struct {
+		name      string
+		age       time.Duration
+		abandoned bool
+	}{
+		{"just written", 1 * time.Second, false},
+		{"still within the handover", claimHandover - 2*time.Second, false},
+		{"well past the handover", claimHandover + 30*time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := s.epochPath(id, 1)
+			if err := os.WriteFile(tok, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Remove(tok)
+			stamp := storeNow.Add(-tc.age)
+			if err := os.Chtimes(tok, stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+
+			f, epoch, err := s.takeEpoch(id, 1)
+			if f != nil {
+				// Windows will not remove a directory while a handle is open,
+				// so leaking one here fails the parent test and not this one.
+				f.Close()
+			}
+			switch {
+			case tc.abandoned && err != nil:
+				t.Fatalf("a token %v old should have been steppable, got %v", tc.age, err)
+			case tc.abandoned && epoch == 1:
+				t.Fatal("stepped onto the abandoned epoch rather than past it")
+			case !tc.abandoned && err == nil:
+				t.Fatalf("a token %v old was treated as abandoned; a live owner "+
+					"would now have company", tc.age)
+			}
+		})
+	}
+}
