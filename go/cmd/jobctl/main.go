@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	job "github.com/ReinisLusis/abstraction/job/go"
+	job "github.com/openabstractions/abstraction-job/go"
 )
 
 func main() {
