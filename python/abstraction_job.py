@@ -30,6 +30,7 @@ import binascii
 import json
 import os
 import secrets
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -905,6 +906,35 @@ class FileStore:
                 pass
         return r
 
+    def _age_on_store(self, mtime: float) -> float:
+        """How old a file is according to the clock that stamped it.
+
+        The obvious ``time.time() - mtime`` compares two clocks: this machine's,
+        and whatever holds the store. On a share those are different machines. A
+        store host running behind by more than the handover makes every freshly
+        written token look abandoned, so two claimants skip past each other and
+        both start work -- which is what the epoch exists to prevent.
+
+        So the age is measured against a mark the store itself just made. When
+        that cannot be done the answer is "too recent to touch": refusing a claim
+        costs a retry, taking one wrongly costs correctness.
+        """
+        jobs = os.path.join(self._root, "jobs")
+        try:
+            fd, probe = tempfile.mkstemp(prefix=".now-", dir=jobs)
+            os.close(fd)
+        except OSError:
+            return 0.0
+        try:
+            return os.stat(probe).st_mtime - mtime
+        except OSError:
+            return 0.0
+        finally:
+            try:
+                os.unlink(probe)
+            except OSError:
+                pass
+
     def _take_epoch(self, job_id: str, first: int):
         """Create the claim token for the first epoch at or after `first` that
         nobody holds, and return (fd, epoch).
@@ -940,7 +970,7 @@ class FileStore:
                 return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), nxt
             except FileExistsError:
                 try:
-                    age = time.time() - os.stat(path).st_mtime
+                    age = self._age_on_store(os.stat(path).st_mtime)
                 except OSError:
                     raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
                 if age < _CLAIM_HANDOVER_SECONDS:

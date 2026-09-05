@@ -311,6 +311,34 @@ Record FileStore::claim(const std::string& id, const std::string& owner,
 //
 // Compared against real time rather than the store's clock: an injected test
 // clock says nothing about when the filesystem wrote a file.
+namespace {
+
+// How old a file is according to the clock that stamped it.
+//
+// Comparing the local clock against a modification time set by whatever holds
+// the store compares two machines' clocks whenever the store is a share. A host
+// running behind by more than the handover makes every freshly written token
+// look abandoned, so two claimants step past each other and both start work.
+//
+// Measured instead against a mark the store itself just made. When that cannot
+// be taken the answer is "too recent to touch": refusing a claim costs a retry,
+// taking one wrongly costs correctness.
+template <typename FileTime>
+std::chrono::seconds age_on_store_in(const fs::path& dir, FileTime stamped) {
+    std::error_code ec;
+    const fs::path probe = dir / ".now-probe";
+    {
+        std::ofstream f(probe, std::ios::binary);
+        if (!f) return std::chrono::seconds(0);
+    }
+    const auto marked = fs::last_write_time(probe, ec);
+    fs::remove(probe, ec);
+    if (ec) return std::chrono::seconds(0);
+    return std::chrono::duration_cast<std::chrono::seconds>(marked - stamped);
+}
+
+}  // namespace
+
 std::int64_t FileStore::take_epoch(const std::string& id, std::int64_t first,
                                    const std::string& owner) {
     constexpr int kMaxSkip = 64;
@@ -324,7 +352,7 @@ std::int64_t FileStore::take_epoch(const std::string& id, std::int64_t first,
         if (ec) {
             throw LeaseHeld("epoch " + std::to_string(next) + " was taken by someone else");
         }
-        const auto age = decltype(written)::clock::now() - written;
+        const auto age = age_on_store_in(path_of("jobs"), written);
         if (age < std::chrono::seconds(kClaimHandoverSeconds)) {
             throw LeaseHeld("epoch " + std::to_string(next) + " was taken by someone else");
         }
