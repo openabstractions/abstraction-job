@@ -1,11 +1,23 @@
 // The job abstraction, stated once, in a language that is nobody's language.
 //
-// STATUS: normative, and NOT generating code yet. The Go, Python and C++
-// implementations are hand-written and must conform to this file; when the
-// hassle is worth it, they get generated from it instead. Adopting the notation
-// before the toolchain is deliberate — the value here is having one place the
-// three languages agree, and having that place be one which CANNOT express a
-// file path or a JSON key.
+// STATUS: a design sketch. NOT normative, and nothing is generated from it. The
+// Go, Python and C++ implementations are hand-written, none of them reads this
+// file, and where the two disagree the implementations are what ships. It is a
+// place to state the shape of the abstraction in a notation that cannot express
+// a file path or a JSON key — not a specification to check code against.
+//
+// WHERE IT DIFFERS FROM THE IMPLEMENTATIONS, as of this commit:
+//
+//   - `Store.update` here takes a Patch. All three implementations take a
+//     mutate callback instead, and no Patch type exists in any of them.
+//   - `Store.capabilities()` is implemented nowhere.
+//   - CAP_PAUSE and CAP_SCRATCH are declared here and used nowhere. Go answers
+//     the scratch question with a `job.Scratch` interface assertion instead.
+//   - Field ids and the enum representation are notional. States and wants are
+//     written to the record as lower-case strings ("pending", "run"), not
+//     integers.
+//   - The data structures below have been brought into line with what the three
+//     implementations read and write. The service section has not.
 //
 // WHY THRIFT. Not because we intend to run its runtime, but because its
 // architecture is the rule this project arrived at independently: an interface,
@@ -26,16 +38,25 @@ namespace go   abstraction.job
 namespace py   abstraction.job
 namespace cpp  abstraction.job
 
-// Bumped only when a change would stop an older reader from safely continuing a
-// job written by a newer writer.
+// The data models a record can carry. A record names the ones it contains in
+// `content`, and the subset a reader must understand in `critical`.
 //
-//   4  added Intent. A reader that does not know the field would keep working on
-//      a job somebody asked to stop, which is exactly the "partly understood
-//      record" this schema check exists to refuse. A version 4 reader accepts a
-//      version 3 record — absent intent means run, which is what version 3
-//      always meant — so existing stores are not orphaned. A version 3 reader
-//      must refuse version 4, and that is correct rather than unfortunate.
-const i32 SCHEMA_VERSION = 4
+// A name is namespaced and versioned, so an incompatible change to one model is
+// a new name that old readers fail to recognise while every other model in the
+// record stays readable. This replaced an integer version field, which could
+// only say that something changed, never which part a reader was missing.
+const string MODEL_BASE       = "abstraction.job/base@1"
+const string MODEL_INTENT     = "abstraction.job/intent@1"
+const string MODEL_DELEGATION = "abstraction.job/delegation@1"
+const string MODEL_STEP       = "abstraction.job/step@1"
+
+// Records written before `content` existed carried an integer `schema` instead.
+// All three implementations still READ 3, 4 and 5, mapping each to the exact set
+// of models that version could contain; none of them writes the integer any
+// more, and a record carrying an unrecognised one is refused.
+//   3 -> base
+//   4 -> base, intent
+//   5 -> base, intent, step
 
 // What somebody wants to happen, as opposed to what is happening.
 //
@@ -125,6 +146,23 @@ enum State {
   CANCELLED = 6,
 }
 
+// A phase of a multi-phase job, for display only.
+//
+// It lives in the record rather than in the kind's checkpoint because progress
+// is the one thing a GENERIC reader has to be able to show without knowing what
+// the work is. ADVISORY: nothing may decide anything on a step — not what to do
+// next, not whether work is finished, not whether to retry. `name` is opaque
+// here, like kind and spec.
+struct Step {
+  1: string name,
+  2: i32 ordinal,                 // counts from one
+  3: optional i32 of,             // absent when the writer cannot say how many
+  // This phase's own units, which need not be the job's: hashing counts the
+  // same bytes a second time, and the job's totals must not double for it.
+  4: optional i64 done,
+  5: optional i64 total,
+}
+
 // Best effort, in units the kind defines, and explicitly NOT monotonic: a job
 // resuming from a checkpoint may legitimately report a smaller done than it did
 // before. Nothing may make a decision on it.
@@ -132,6 +170,9 @@ struct Progress {
   1: i64 done,
   2: optional i64 total,          // absent means unknown
   3: Timestamp updated_at,
+  // Which phase is happening now, for work that has more than one. Absent means
+  // one unnamed phase, which is what every record before the step model meant.
+  4: optional Step step,
 }
 
 // The right to work on a job, held for a bounded time.
@@ -162,24 +203,37 @@ struct Delegation {
 // change on three languages. kind says who is allowed to read them; a reader
 // that does not know a kind leaves that job alone rather than guessing.
 struct Record {
-  1: i32 schema,
-  2: string id,
-  3: string kind,
-  4: State state,
-  5: binary spec,                      // immutable, written once at submission
-  6: optional binary checkpoint,       // what a SUCCESSOR needs to continue
-  7: Progress progress,
-  8: Lease lease,
-  9: optional Delegation delegation,
-  10: optional list<string> requires,  // capabilities an impl needs to qualify
-  11: optional string error,
-  12: Timestamp created_at,
-  13: Timestamp updated_at,
+  // The models this record carries, and the subset a reader must understand or
+  // refuse the record entirely. See MODEL_BASE above. Not knowing the step model
+  // is harmless; not knowing the intent model means carrying on with a job
+  // somebody asked to stop.
+  1: list<string> content,
+  2: optional list<string> critical,
+  3: string id,
+  4: string kind,
+  5: State state,
+  6: binary spec,                      // immutable, written once at submission
+  7: optional binary checkpoint,       // what a SUCCESSOR needs to continue
+  8: Progress progress,
+  9: Lease lease,
+  10: optional Delegation delegation,
+  11: optional list<string> requires,  // capabilities an impl needs to qualify
+  12: optional string error,
   // Absent means RUN. Written by anyone, honoured by the owner. See Intent.
-  14: optional Intent intent,
+  13: optional Intent intent,
+  // Data this layer does not understand, keyed by a name that says who does. A
+  // reader that cannot read one MUST preserve it on write; dropping it destroys
+  // another participant's data invisibly. Nothing generic may branch on a value,
+  // and nothing a stranger MUST obey may live here — that is what Intent is for.
+  14: optional map<string, binary> extensions,
+  15: Timestamp created_at,
+  16: Timestamp updated_at,
 }
 
 // The changes a lease holder may make.
+//
+// NOT IMPLEMENTED. All three bindings take a mutate callback, as noted at the
+// top of this file; this is the shape a service binding would need instead.
 //
 // This struct exists because writing the IDL caught something. In Go, update
 // takes a closure: Update(id, epoch, func(*Record) error). A closure cannot
@@ -209,7 +263,7 @@ const string CAP_PAUSE   = "pause"    // BITS Suspend/Resume; the Lemonade engin
 const string CAP_SCRATCH = "scratch"  // this binding is a local filesystem
 
 service Store {
-  // What this binding can do beyond the base.
+  // NOT IMPLEMENTED in Go, Python or C++. See the divergence list at the top.
   set<string> capabilities(),
 
   // Records new work and returns its id. The id IS the handle: a plain string

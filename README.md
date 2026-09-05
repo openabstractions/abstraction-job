@@ -1,284 +1,199 @@
-# job — a handle to work happening somewhere else
+# abstraction-job
 
-You start a 40 GB model download. You close the laptop. You come back and it
-starts again from zero.
+A job is a record of background work, kept outside the process that started it,
+so a different process — in another language, or after a reboot — can take the
+work over and continue it.
 
-That happens because the download lives *inside* the application. When the app
-sleeps, crashes, or is closed, the work dies with it — there was never anything
-else holding it. Every local-AI tool ships its own downloader with this same
-shape, and every one of them loses your bytes the same way.
+## The problem
 
-`job` is the layer underneath that fixes it. A job is not a function you call and
-wait for. It is a **record on disk that describes work**, plus rules for who is
-allowed to do it right now. The application holds a reference; the work itself
-belongs to the machine.
+An application that runs a long transfer inside its own process keeps the state
+of that transfer in memory: how far it got, and how much of that has been
+verified. When the process exits the state goes with it and the next run starts
+from nothing. This package puts the state in a record and defines who may write
+to it, so a second process can find unfinished work and resume from the last
+point the first one proved — see [the handoff](#cross-language-handoff) below.
 
-Once that is true, sleeping, crashing and restarting stop being special cases.
-They are all just *the owner going away*, and a new owner picks up where the last
-one left off.
+## Install
 
----
+`git clone https://github.com/openabstractions/abstraction-job.git` gets
+everything; to depend on one language's part of it:
 
-## What it knows, and what it deliberately does not
+**Go.** `go get github.com/openabstractions/abstraction-job/go`. The module path
+ends in `/go` because the Go code lives in a subdirectory; without that suffix
+`go get` fails. The package name is `job`.
 
-It does not know what the work **is**. `spec` and `checkpoint` are opaque, and
-`kind` says who can read them. A download's artifact, sources and destination
-live in a *download's* spec, not here.
+**Python.** Not on PyPI. `python/abstraction_job.py` is one file with no
+dependencies: copy it next to your code, or put `python/` on `PYTHONPATH`.
 
-That separation is why this record can settle. An earlier version carried
-artifact, sources and sink directly, so every improvement to downloading —
-mirrors, chunk manifests, webseeds — forced a schema change on a record that Go,
-Python and eventually C++ all have to agree about. Google's long-running
-operations reached the same conclusion with an opaque `metadata` typed by the
-method that created it.
-
-```
-    application                       the record on disk
-    ┌───────────────┐                 ┌──────────────────────────┐
-    │  submit(spec) │ ───────────────▶│ id · kind · state        │
-    │      ↓        │                 │ spec · checkpoint        │
-    │   job id      │◀────────────────│ progress · lease         │
-    └───────────────┘                 └──────────────────────────┘
-            │                                     ▲
-      app is killed                               │
-            ✕                        anyone may claim it and continue
-                                                  │
-                                     ┌────────────┴─────────────┐
-                                     │  another process         │
-                                     │  another language        │
-                                     │  after a reboot          │
-                                     └──────────────────────────┘
+**C++.** With CMake, pinning a commit:
+```cmake
+include(FetchContent)
+FetchContent_Declare(abstraction_job
+    GIT_REPOSITORY https://github.com/openabstractions/abstraction-job.git
+    GIT_TAG <a commit sha> GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(abstraction_job)
+target_link_libraries(your_target PRIVATE abstraction::job)
 ```
 
-The job id is a plain string. Write it to a config file, print it, pass it to
-another program. It stays meaningful after the process that created it is gone.
+## A minimal example
 
----
-
-## Try it
-
-Both implementations use one directory. Nothing runs in the background; there is
-no daemon and no database.
-
-**Go**
+Each program submits a job, claims it, writes progress and a checkpoint, and
+prints id, state, epoch and progress. A **kind** names what the work is and says
+who may read the **spec** (the description of the work) and the **checkpoint**
+(what a successor needs to continue); both are opaque here.
 
 ```go
-store, _ := job.NewFileStore("/var/lib/jobs")
+package main
 
-rec := job.Record{Kind: "download"}
-rec.SetSpec(mySpec)                  // opaque here; the download layer reads it
-id, _ := store.Submit(rec)
+import (
+	"fmt"
+	"log"
+	"time"
 
-r, _ := store.Claim(id, "my-worker", 30*time.Second)
-store.Update(id, r.Lease.Epoch, func(r *job.Record) error {
-    r.Progress.Done = 1 << 20
-    return r.SetCheckpoint(myCheckpoint)   // what a successor would need
-})
+	job "github.com/openabstractions/abstraction-job/go"
+)
+
+func main() {
+	store, err := job.NewFileStore("./jobs")
+	if err != nil { log.Fatal(err) }
+	rec := job.Record{Kind: "download", Spec: []byte(`{"url":"https://example.invalid/m.bin"}`)}
+	id, err := store.Submit(rec)
+	if err != nil { log.Fatal(err) }
+	held, err := store.Claim(id, "worker-a", 30*time.Second)
+	if err != nil { log.Fatal(err) }
+	done, err := store.Update(id, held.Lease.Epoch, func(r *job.Record) error {
+		r.Progress.Done = 460
+		return r.SetCheckpoint(map[string]int64{"verified_prefix": 400})
+	})
+	if err != nil { log.Fatal(err) }
+	fmt.Println(done.ID, done.State, done.Lease.Epoch, done.Progress.Done)
+}
 ```
-
-Most callers never touch this directly — they use a layer that knows a kind, like
-[`download.Submit`](../download/README.md).
-
-**Python**
-
 ```python
-store = FileStore("/var/lib/jobs")
+from abstraction_job import FileStore, Record
 
-r = store.load(job_id)
-print(r.kind, r.state, r.progress.done, r.checkpoint)
+store = FileStore("./jobs")
+job_id = store.submit(Record(id="", kind="download",
+                             spec={"url": "https://example.invalid/m.bin"}))
+held = store.claim(job_id, "worker-a", ttl_seconds=30)
 
-for orphan in store.orphans():           # nobody is working on these
-    mine = store.claim(orphan.id, "python-worker", ttl_seconds=30)
-    resume_from = mine.checkpoint        # what its predecessor proved
+def mutate(r):
+    r.progress.done = 460
+    r.checkpoint = {"verified_prefix": 400}
+
+done = store.update(job_id, held.lease.epoch, mutate)
+print(done.id, done.state, done.lease.epoch, done.progress.done)
+```
+```cpp
+#include <abstraction/job/record.h>
+#include <abstraction/job/store.h>
+#include <chrono>
+#include <iostream>
+
+namespace job = abstraction::job;
+int main() {
+    job::FileStore store("./jobs");
+    job::Record rec;
+    rec.kind = "download";
+    rec.spec = job::Json{{"url", "https://example.invalid/m.bin"}};
+    const std::string id = store.submit(std::move(rec));
+    job::Record held = store.claim(id, "worker-a", std::chrono::seconds(30));
+    const job::Record done = store.update(id, held.lease.epoch, [](job::Record& r) {
+        r.progress.done = 460;
+        r.checkpoint = job::Json{{"verified_prefix", 400}};
+    });
+    std::cout << done.id << " " << done.state << " " << done.lease.epoch << " "
+              << done.progress.done << "\n";
+}
 ```
 
-**Shell** — `jobctl` exists in both languages so scripts can drive either:
+## Cross-language handoff
+
+`jobctl` drives the same store from all three languages. This claims a job in Go,
+abandons it without releasing the lease, adopts it in Python, and refuses the
+stale Go owner when it comes back. From the repository root:
 
 ```bash
-JOB_STORE=/var/lib/jobs jobctl submit --kind download --spec '{"artifact":{}}'
-JOB_STORE=/var/lib/jobs jobctl orphans
+export JOB_STORE="$PWD/demo-store"
+ID=$(cd go && go run ./cmd/jobctl submit --kind download --spec '{"url":"x"}' --total 1000)
+(cd go && go run ./cmd/jobctl claim "$ID" --owner go-worker --ttl 2)
+(cd go && go run ./cmd/jobctl progress "$ID" --epoch 1 --done 460 --checkpoint '{"verified_prefix":400}')
+sleep 3                                                 # the two-second lease lapses
+(cd python && python jobctl.py orphans)                 # the abandoned job is listed
+(cd python && python jobctl.py claim "$ID" --owner py-worker --ttl 30)   # epoch=2
+(cd python && python jobctl.py finish "$ID" --epoch 2 --state complete)
+(cd go && go run ./cmd/jobctl progress "$ID" --epoch 1 --done 999)       # refused
 ```
 
-Both pass the spec through untouched. Neither knows what a download is, which is
-the same contract the packages themselves keep.
+The Python claim carries the checkpoint Go wrote, and the last command exits
+non-zero with `stale epoch, this owner no longer holds the lease`.
 
----
+## API overview
 
-## Three rules, and why each exists
+A **binding** is one implementation of the `Store` interface: three in Go (a
+directory, a socket client, a map), two in Python, one in C++. All implement the
+these. Python uses `snake_case` names, C++ the same with `std::chrono` durations.
 
-### 1. The spec is opaque, and `kind` says who can read it
+| operation | meaning |
+|---|---|
+| `Submit(Record) (id, error)` | records new work; returns the id |
+| `Load(id)`, `List()` | one record, or every job oldest first. No lease needed, at any time |
+| `Orphans()`, `Claimable(*Record) bool` | work to adopt: jobs nobody holds a lease on that are neither finished nor paused. `Claimable` answers only about observed state, so it still returns true for a paused job that `Orphans` leaves out |
+| `Claim(id, owner, ttl)` | takes ownership; returns the record at a new epoch |
+| `Renew(id, epoch, ttl)`, `Release(id, epoch)` | extends a lease, or gives it up early. Renew refuses once the lease has expired even if the epoch still matches; release is optional, and without it a lease simply lapses on its own |
+| `Update(id, epoch, mutate)` | the only way to change a record. Refused unless the caller still holds the lease at the epoch it presents |
+| `SetIntent(id, want, by)` | the one write that presents no epoch, so a job can be paused or cancelled by someone who is not its owner |
 
-```json
-"kind": "download",
-"spec": { "artifact": {}, "sources": [], "sink": {} }
-```
+Go adds `Open(store, id, owner)` for a per-job handle with `Cancel`/`Pause`/
+`Resume`, `Watch(store, kind)` polling every 750 ms, `Serve` and `Dial` for the
+socket binding, `NewMemory()`, and `Scratch` (`Root`, `WorkPath`) on `FileStore`.
 
-This package stores and returns the spec without understanding it. A reader that
-meets a `kind` it does not know leaves that job alone rather than guessing.
+### Record fields
 
-That is what lets one layer evolve without disturbing the others — and it is the
-answer to the fair objection that an abstraction which changes shape every time a
-new tool shows up is not an abstraction, it is a union of tools.
-
-### 2. A successor inherits what its predecessor proved
-
-```json
-"progress":   { "done": 460 },
-"checkpoint": { "verified_prefix": 400 }
-```
-
-`progress` is best-effort, explicitly non-monotonic, and nothing may decide
-anything on it — a job resuming after a crash can legitimately report a smaller
-number than before. The survey went looking for a standard here and found five
-systems refusing to define one.
-
-The **checkpoint** is the load-bearing part: whatever a successor needs in order
-to continue. Above, the predecessor wrote 460 units but proved only 400, so the
-next owner resumes from 400 and the unproven remainder is discarded.
-
-This is Temporal's activity-heartbeat design, copied deliberately: a retried
-worker is handed the dead worker's last checkpoint rather than starting over.
-
-### 3. Ownership is a lease with an epoch
-
-```json
-"lease": { "owner": "go-worker", "epoch": 2, "expires_at": "…" }
-```
-
-The epoch rises by one on every claim, and **every write must present the epoch
-it holds**. A process suspended past its own expiry wakes up still believing it
-owns the job; its writes carry a stale epoch and are refused.
-
-Without that, two owners work the same job and both believe the result is
-correct. That is the damage this design exists to prevent.
-
-Claims are taken by creating `<id>.epoch.<n>` with exclusive-create, which is
-atomic on NTFS and POSIX. Because every generation gets its own filename, a token
-left behind by a killed process blocks nothing — the next claimant simply takes
-the next epoch. A single lockfile would have to be broken by timeout, and
-breaking locks by timeout is how two owners end up working one job.
-
----
-
-## Reclaiming is the mechanism; handing off is only an optimisation
-
-A process killed with `SIGKILL`, or a machine that loses power, never gets to
-hand anything over. So the primary path is **adoption**: on start, look for jobs
-whose lease has expired and claim them.
-
-```python
-for orphan in store.orphans():
-    store.claim(orphan.id, "me", ttl_seconds=30)
-```
-
-`release()` exists so a polite exit frees the job in seconds instead of after the
-expiry — but nothing depends on it, which is exactly the point. A design that
-*requires* graceful handoff has no answer for the case that actually loses your
-40 GB.
-
----
-
-## The record is the contract
-
-The Go and Python implementations are not ports of each other and are not
-generated from a shared schema. They agree about one thing: **the JSON file on
-disk, and the rules for taking it over.** Each language's API looks like that
-language.
+The keys a record carries. All three implementations write the same keys, in the
+same order, with the same timestamp format.
 
 | field | meaning |
 |---|---|
-| `schema` | refused if unknown, never guessed at |
-| `id` | opaque, sortable by creation time, safe to pass around |
-| `kind` | what this job is, and who can read `spec` and `checkpoint` |
-| `state` | `pending` · `running` · `transferred` · `complete` · `failed` · `cancelled` |
-| `spec` | the immutable description of the work. **Opaque here** |
-| `checkpoint` | what a successor needs to resume. **Opaque here** |
-| `progress` | `done`, `total` — best-effort, decide nothing on it |
-| `lease` | `owner`, `epoch`, `expires_at` |
-| `delegation` | set when an external system owns the work |
-| `requires` | capabilities an implementation must have to take this job |
+| `content`, `critical` | the data models this record carries, as namespaced names such as `abstraction.job/base@1`, and the subset a reader must understand or refuse the record entirely. These replaced an integer `schema` field; records carrying `schema` 3, 4 or 5 are still read, and the integer is no longer written |
+| `id`, `kind` | an opaque string sortable by creation time, and what the job is |
+| `state`, `intent` | what is happening — `pending`, `running`, `transferred`, `complete`, `failed`, `cancelled` — and what somebody wants to happen: `want` (`run`, `pause`, `cancel`), `by`, `at`, absent meaning run. `transferred` means finished but not yet collected, which is how a record says an external service finished while the application was closed |
+| `spec`, `checkpoint` | the work's description, and what a successor needs to resume. Opaque here |
+| `progress` | `done`, `total`, `updated_at`, optional `step`. Best-effort and not monotonic: nothing may decide anything on it |
+| `lease` | `owner`, `epoch`, `expires_at`. A lease is the time-bounded right to write; the epoch rises by one on every claim, and a write presenting a stale epoch is refused, so an owner suspended past its expiry cannot overwrite its successor |
+| `delegation` | `system`, `external_id`, `delivered`, when an external system owns the work. `progress` is then a cache of what that system reported |
+| `requires`, `error`, `extensions` | capabilities an implementation needs to take this job; the last failure, kept so it outlives the process that hit it; and data this layer does not understand, keyed by a name that says who does, which a reader that cannot read it must preserve on write |
+| `created_at`, `updated_at` | UTC, ISO-8601, exactly six fractional digits, trailing `Z` |
 
-**`delegation` is the architecture, not an accommodation for one tool.** When an
-app's worker hands off to a system service, or that service hands off to a NAS,
-the handle that finds the work again is `{system, external_id}` — for Windows
-BITS, a job GUID that survives a reboot. When it is set, `progress` is a *cache*
-of what the external system last reported; the external system is the truth.
+## Status
 
-**`transferred` is not bureaucracy.** It means the work is finished and proven,
-but the result has not been taken delivery of. BITS has the same two-phase shape
-for the same reason, and will not hand over a file until you call `Complete()`.
-Collapse the two states and you cannot express *"the service finished this while
-ComfyUI was closed"*, which is the case this is built for.
+Experimental. No tagged release and no compatibility promise: the record format,
+the `Store` interface and the `jobctl` commands may all change. Tested at this
+commit, recountable with the commands below: 41 Go test functions (among them the
+exclusive claim, stale-epoch refusal, lease expiry, and one body of assertions
+run against all three Go bindings), 21 Python tests, and two C++ test binaries
+printing 83 assertions between them.
 
----
+Not covered: no test moves real bytes, so resume across a kill during a large
+transfer is unverified here. `delegation` round-trips through the record but has
+no adapter here, and the socket binding has no authentication and is meant for a
+loopback socket. `job.thrift` is a design sketch: nothing is generated from it,
+and its header lists where it differs. The CMake build also produces
+`abstraction::discovery`, a supervisor client; `abstraction::job` does not link it.
 
-## What is proven, and what is not
+## Requirements
+
+**Go** 1.26 or newer, as declared in `go/go.mod`; standard library only.
+**Python** 3.8 or newer, tested on 3.12; standard library only. **C++17**, CMake
+3.16 or newer, and [nlohmann/json](https://github.com/nlohmann/json) 3.9 or newer,
+fetched by CMake if absent. All three built and tested on Windows 11, MSVC for C++.
 
 ```bash
-bash scripts/xlang-job.sh
+(cd go && go build ./... && go test ./...)
+(cd python && python -m unittest discover -p "test_*.py")
+cmake -S . -B build && cmake --build build && ctest --test-dir build
 ```
 
-Or, across every implementation that exists:
+## Licence
 
-```bash
-bash scripts/conformance.sh          # add JOBCTL_CPP=... for a C++ one
-```
-
-**Proven** ([`docs/results/XLANG2.txt`](../docs/results/XLANG2.txt)) — a job is
-created in Go with a spec **neither tool understands**, worked on in Go, abandoned
-without release, found as an orphan by **Python**, adopted at epoch 2, resumed
-from the checkpoint its predecessor proved, finished in Python, and read back in
-Go. The stale Go owner is refused when it returns with its old epoch.
-
-30 tests across the two implementations, including the zombie-owner and
-expired-lease cases.
-
-**And one thing only the cross-language test could find**
-([`docs/results/CONFORM1.txt`](../docs/results/CONFORM1.txt)). Go encodes
-`time.Time` as RFC3339**Nano**, which trims trailing zeros, so Go wrote
-`…T06:23:11.22275Z` where Python wrote `…T06:23:11.222750Z` for the same instant.
-Both are valid RFC 3339, both parse, and every unit test in both languages
-passed — but the record changed bytes every time the two took turns, so a diff
-of a job's history meant nothing. The timestamp format is now pinned to exactly
-six fractional digits and a `Z`; six, not nine, because Python's datetime holds
-microseconds and the contract is set by the least precise participant.
-
-**Not proven yet.** No bytes move in that test, deliberately — resume over real
-bytes is tested in [`download/`](../download/README.md). What nothing has tested
-is a kill during a real multi-gigabyte transfer, which needs the service tier.
-
----
-
-## Prior art this was taken from
-
-Nothing here is invented where something already worked:
-
-- **Windows BITS** — persistent jobs with a GUID any process can open, ownership
-  transfer, resume across reboot. The yardstick, and on Windows probably the
-  implementation to wrap rather than replace.
-- **Google `longrunning.Operation`** — the standard shape for polling a handle
-  you did not create, and the opaque-`metadata` idea this record's `spec` copies.
-- **iOS background `URLSession`, Android `WorkManager`** — hand work to an OS
-  service, get killed, re-attach by identifier. Shipped in 2013; what is missing
-  is a portable, cross-language version.
-- **Temporal activity heartbeats** — one channel carrying liveness, progress and
-  the resume checkpoint.
-- **rsync `--append-verify`** — never append to a prefix you have not proven.
-
-Full surveys, with sources: [`research/async/`](../research/async/) and
-[`research/transfer/`](../research/transfer/).
-
----
-
-## Layout
-
-```
-job/
-  go/         Go implementation      go test ./...
-    cmd/jobctl/   command-line driver
-  python/     Python implementation  python -m unittest
-    jobctl.py     the same driver
-```
-
-Standard library only, both sides. An abstraction that needs a dependency to read
-a JSON file has misjudged its own weight.
+Apache-2.0. See [LICENSE](LICENSE).

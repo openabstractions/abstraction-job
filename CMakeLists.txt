@@ -57,6 +57,10 @@ target_include_directories(abstraction_job PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(abstraction_job PUBLIC nlohmann_json::nlohmann_json)
+# PUBLIC rather than relying on the directory-level CMAKE_CXX_STANDARD above:
+# the headers use std::optional, so a consumer left at CMake's default of C++14
+# fails on the first #include. The requirement has to travel with the target.
+target_compile_features(abstraction_job PUBLIC cxx_std_17)
 add_library(abstraction::job ALIAS abstraction_job)
 
 # The discovery client, and it is deliberately NOT part of abstraction_job.
@@ -74,6 +78,9 @@ target_include_directories(abstraction_discovery PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(abstraction_discovery PUBLIC nlohmann_json::nlohmann_json)
+# Same reason as abstraction_job above: these headers use std::optional, and a
+# consumer left at CMake's default C++14 fails on the first #include.
+target_compile_features(abstraction_discovery PUBLIC cxx_std_17)
 add_library(abstraction::discovery ALIAS abstraction_discovery)
 
 # jobctl exists so three implementations can be compared byte for byte, which is

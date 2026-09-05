@@ -78,7 +78,7 @@ std::string compact(const Record& r) {
 }
 
 [[noreturn]] void usage() {
-    std::cout << "X"
+    std::cout << "usage: jobctl <submit|claim|progress|finish|show|intent|orphans> [args]"
                  "   (JOB_STORE must be set)\n";
     std::cout << "  submit --kind K --spec '<json>' [--total N] [--requires a,b]\n";
     std::exit(2);
