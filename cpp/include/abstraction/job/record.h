@@ -58,7 +58,21 @@ constexpr const char* kDelegation = "abstraction.job/delegation@1";
 // Which phase of multi-phase work is happening now. NEVER critical: advisory,
 // for telling a person what is going on.
 constexpr const char* kStep = "abstraction.job/step@1";
+// A checkpoint carrying proven byte ranges rather than only a prefix. NEVER
+// critical: a reader that ignores it resumes from the prefix and re-fetches the
+// rest, which costs a second fetch, while marking it critical would stop every
+// existing reader dead for no safety gain. Defined in ranges.h.
+constexpr const char* kRanges = "abstraction.download/ranges@1";
 }  // namespace model
+
+// Models this layer declares but cannot derive, because what they describe
+// lives inside a field that is opaque here. See derive_models.
+bool is_carried_model(const std::string& name);
+
+// Models that must not appear in `critical` whoever asked for it: both are
+// advisory by their own definition, so marking one critical tells a stranger to
+// refuse work over a decoration.
+bool is_never_critical_model(const std::string& name);
 
 // Whether this implementation can read a model named in a record's `critical`.
 bool is_known_model(const std::string& name);

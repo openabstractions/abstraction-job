@@ -50,6 +50,23 @@ const string MODEL_INTENT     = "abstraction.job/intent@1"
 const string MODEL_DELEGATION = "abstraction.job/delegation@1"
 const string MODEL_STEP       = "abstraction.job/step@1"
 
+// The checkpoint carries a set of proven byte ranges as well as a prefix:
+//
+//     {"verified_prefix": 4194304, "verified": [[0, 4194304], [8388608, 12582912]]}
+//
+// Half-open, non-overlapping, sorted, and merged on write — touching ranges
+// merged too, so one state has one spelling. `verified_prefix` is derived from
+// the set: the end of the range starting at zero, or 0 when there is none.
+//
+// NEVER critical. A reader that has never heard of `verified` resumes from
+// `verified_prefix` and re-fetches the rest, which is what it does today; that
+// is what makes the model an addition rather than a break, and marking it
+// critical would stop every existing reader for no safety gain.
+//
+// Named for the download kind because that is who reads a checkpoint, and
+// declared here because the declaration lives in the record's `content`.
+const string MODEL_RANGES     = "abstraction.download/ranges@1"
+
 // Records written before `content` existed carried an integer `schema` instead.
 // All three implementations still READ 3, 4 and 5, mapping each to the exact set
 // of models that version could contain; none of them writes the integer any

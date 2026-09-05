@@ -49,6 +49,7 @@ endif()
 
 add_library(abstraction_job STATIC
     cpp/src/record.cpp
+    cpp/src/ranges.cpp
     cpp/src/store.cpp
     cpp/src/discovery.cpp
 )
@@ -97,6 +98,16 @@ if(ABSTRACTION_JOB_BUILD_TESTS)
     add_executable(test_job_record cpp/test/test_job_record.cpp)
     target_link_libraries(test_job_record PRIVATE abstraction_job)
     add_test(NAME JobRecord COMMAND test_job_record)
+
+    # The range fixture is one file compared byte for byte by all three
+    # implementations. Its directory is compiled in rather than looked for: a
+    # test binary's working directory is wherever it was run from, and a
+    # relative path finds the fixture only by luck.
+    add_executable(test_ranges cpp/test/test_ranges.cpp)
+    target_link_libraries(test_ranges PRIVATE abstraction_job)
+    target_compile_definitions(test_ranges
+        PRIVATE ABSTRACTION_JOB_TESTDATA="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+    add_test(NAME Ranges COMMAND test_ranges)
 
     # This one stands up a real listener — a named pipe on Windows, a unix
     # socket elsewhere — so it needs threads.

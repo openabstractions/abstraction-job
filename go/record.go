@@ -111,6 +111,11 @@ var known = map[string]bool{
 	ModelIntent:     true,
 	ModelDelegation: true,
 	ModelStep:       true,
+	// A checkpoint of proven ranges. Defined in ranges.go, and readable here
+	// even though it describes the contents of a field this layer treats as
+	// opaque: a record that wrongly marks it critical is still one this
+	// implementation can act on.
+	ModelRanges: true,
 }
 
 // legacySchemas maps the integer this format used to carry onto the models that
@@ -766,6 +771,21 @@ func (r *Record) describe() {
 		content = append(content, ModelStep)
 	}
 
+	// A model this layer declares but cannot derive, because what it describes
+	// lives inside the checkpoint and a checkpoint is opaque here. Rediscovering
+	// it would mean reading one, so the declaration is carried instead — the
+	// same treatment an unknown extension gets. Sorted, and placed here rather
+	// than among the extension names, so all three implementations put it in the
+	// same slot. See carried in ranges.go.
+	var carriedHere []string
+	for _, name := range r.Content {
+		if carried[name] && !contains(carriedHere, name) {
+			carriedHere = append(carriedHere, name)
+		}
+	}
+	sort.Strings(carriedHere)
+	content = append(content, carriedHere...)
+
 	// Extensions are content too, named by the key that says who understands
 	// them. Sorted, because a map has no order and this output is compared byte
 	// for byte against two other implementations.
@@ -778,7 +798,15 @@ func (r *Record) describe() {
 
 	// Whatever the caller marked critical that this layer did not derive — an
 	// extension, or a model a newer writer knows about — stays marked.
+	//
+	// Except the models whose own definition says a reader ignoring them is
+	// still correct. Marking one of those critical tells a stranger to refuse
+	// the job over a decoration, and this layer will not relay that however it
+	// arrived. See neverCritical in ranges.go.
 	for _, name := range r.Critical {
+		if neverCritical[name] {
+			continue
+		}
 		if !contains(critical, name) && contains(content, name) {
 			critical = append(critical, name)
 		}

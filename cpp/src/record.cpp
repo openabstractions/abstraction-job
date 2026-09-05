@@ -531,7 +531,13 @@ Record Record::decode(const std::string& text) {
 
 bool is_known_model(const std::string& name) {
     return name == model::kBase || name == model::kIntent || name == model::kDelegation ||
-           name == model::kStep;
+           name == model::kStep || name == model::kRanges;
+}
+
+bool is_carried_model(const std::string& name) { return name == model::kRanges; }
+
+bool is_never_critical_model(const std::string& name) {
+    return name == model::kStep || name == model::kRanges;
 }
 
 std::string first_unknown_critical(const std::vector<std::string>& critical) {
@@ -581,6 +587,24 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
         out_content.push_back(model::kStep);
     }
 
+    // A model this layer declares but cannot derive, because what it describes
+    // lives inside the checkpoint and a checkpoint is opaque here.
+    // Rediscovering it would mean reading one, so the declaration is carried
+    // instead — the same treatment an unknown extension gets. Sorted, and
+    // placed here rather than among the extension names, so all three
+    // implementations put it in the same slot.
+    std::vector<std::string> carried;
+    for (const std::string& name : r.content) {
+        if (is_carried_model(name) &&
+            std::find(carried.begin(), carried.end(), name) == carried.end()) {
+            carried.push_back(name);
+        }
+    }
+    std::sort(carried.begin(), carried.end());
+    for (const std::string& name : carried) {
+        out_content.push_back(name);
+    }
+
     std::vector<std::string> names;
     for (auto it = r.extensions.begin(); it != r.extensions.end(); ++it) {
         names.push_back(it.key());
@@ -592,7 +616,15 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
 
     // Whatever the caller marked critical that this layer did not derive -- an
     // extension, or a model a newer writer knows about -- stays marked.
+    //
+    // Except the models whose own definition says a reader ignoring them is
+    // still correct. Marking one of those critical tells a stranger to refuse
+    // the job over a decoration, and this layer will not relay that however it
+    // arrived.
     for (const std::string& name : r.critical) {
+        if (is_never_critical_model(name)) {
+            continue;
+        }
         const bool already =
             std::find(out_critical.begin(), out_critical.end(), name) != out_critical.end();
         const bool present =
@@ -603,7 +635,21 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
     }
 }
 
-void Record::describe() { derive_models(*this, content, critical); }
+// Derived into locals and only then stored, because `content` and `critical`
+// are both an INPUT to derive_models and where its answer goes. Handing the
+// members straight in aliased the two: the first line of derive_models cleared
+// them, so the loops that read what the caller had declared were reading a list
+// that had already been emptied, and appending to a vector while iterating it
+// besides. Nothing visible went wrong while every declaration was derivable
+// from another field; it shows the moment one has to be carried instead.
+// encode() has always used locals, so the two paths disagreed.
+void Record::describe() {
+    std::vector<std::string> derived_content;
+    std::vector<std::string> derived_critical;
+    derive_models(*this, derived_content, derived_critical);
+    content = std::move(derived_content);
+    critical = std::move(derived_critical);
+}
 
 }  // namespace job
 }  // namespace abstraction

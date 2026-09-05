@@ -52,10 +52,31 @@ MODEL_BASE = "abstraction.job/base@1"
 MODEL_INTENT = "abstraction.job/intent@1"
 MODEL_DELEGATION = "abstraction.job/delegation@1"
 MODEL_STEP = "abstraction.job/step@1"
+# A checkpoint carrying proven byte ranges rather than only a prefix. NEVER
+# critical -- see the range section below for why that is the half of the design
+# that makes it an addition rather than a break.
+MODEL_RANGES = "abstraction.download/ranges@1"
 
 # What this implementation can read. A record naming anything else in `critical`
 # is refused.
-KNOWN_MODELS = frozenset({MODEL_BASE, MODEL_INTENT, MODEL_DELEGATION, MODEL_STEP})
+KNOWN_MODELS = frozenset(
+    {MODEL_BASE, MODEL_INTENT, MODEL_DELEGATION, MODEL_STEP, MODEL_RANGES}
+)
+
+# Models this layer declares but cannot derive, because what they describe lives
+# inside a field that is opaque here.
+#
+# Everything else in `content` is rediscovered on every write, so a declaration
+# cannot drift from the data. A model describing the CHECKPOINT's contents
+# cannot be: working it out would mean reading the checkpoint, and this module
+# does not know what a checkpoint is. So the declaration is carried instead --
+# the same treatment an unknown extension gets, for the same reason.
+CARRIED_MODELS = frozenset({MODEL_RANGES})
+
+# Models that must not appear in `critical` whoever asked for it. Both are
+# advisory by their own definition, so marking one critical tells a stranger to
+# refuse work over a decoration. This layer will not relay that.
+NEVER_CRITICAL = frozenset({MODEL_STEP, MODEL_RANGES})
 
 # The integer this format used to carry, mapped onto the models each version
 # implied. No longer written; still read, because stores full of version 3 and 4
@@ -143,6 +164,237 @@ class LeaseExpired(JobError):
 
 class Terminal(JobError):
     pass
+
+
+# ---------------------------------------------------------------------------
+# A checkpoint of ranges.
+#
+# WHAT ONE INTEGER COULD NOT SAY. A checkpoint used to hold a single verified
+# prefix: "the first N bytes are proven", and nothing else. Every transfer that
+# could be described was therefore one stream appending to the end of a file.
+# That is not how bytes are fetched -- sixteen concurrent ranged parts landing at
+# scattered offsets in a sparse file is ordinary -- and "parts 0, 2 and 5 done,
+# 1, 3 and 4 partway" had no representation at all. An adopter with a parallel
+# fetcher could only take this library by deleting its parallelism.
+#
+# A range set says it. The prefix is the degenerate case: one range at zero.
+#
+#     "checkpoint": {
+#       "verified_prefix": 4194304,
+#       "verified": [[0, 4194304], [8388608, 12582912]]
+#     }
+#
+# WHY THE PREFIX STAYS. Not redundancy and not politeness. A reader that has
+# never heard of `verified` resumes from `verified_prefix` and re-fetches the
+# rest, which is exactly what it does today. That is the whole reason this is an
+# addition rather than a break, and it is why MODEL_RANGES is never critical: an
+# old reader ignoring the ranges loses some bytes to a second fetch, and marking
+# it critical would stop every existing reader dead for no safety gain. The
+# prefix is DERIVED from the set on write, so nothing has to remember to keep
+# the two agreeing.
+#
+# WHAT A RANGE MEANS. Proven, not merely written: the bytes are on disk AND
+# checked, against a piece digest where the kind's spec carries one and against
+# the transport's own framing where it does not. Bytes in flight when a process
+# is killed are exactly the ones a successor must not trust; that rule is
+# unchanged, and now applies per range instead of to one tail.
+#
+# WHERE THIS SITS. A checkpoint is opaque to this module. These helpers do not
+# change that -- they are a canonical FORM offered to whoever writes one, not a
+# meaning read out of every record relayed. `to_json` leaves a checkpoint
+# exactly as it found it; only a caller that asks for ranges gets them
+# rewritten.
+
+VERIFIED_PREFIX_KEY = "verified_prefix"
+VERIFIED_KEY = "verified"
+
+
+class Range(tuple):
+    """A half-open byte interval: `start` is included, `end` is not.
+
+    A tuple, so a caller may hand in plain ``(0, 400)`` pairs and get pairs
+    back, and so equality means what it looks like it means.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, start, end):
+        return super().__new__(cls, (int(start), int(end)))
+
+    @property
+    def start(self) -> int:
+        return self[0]
+
+    @property
+    def end(self) -> int:
+        return self[1]
+
+    @property
+    def size(self) -> int:
+        return self[1] - self[0]
+
+    def __repr__(self) -> str:
+        return f"[{self[0]},{self[1]})"
+
+
+def canonical_ranges(ranges) -> List[Range]:
+    """Sort, merge and validate a set of ranges: the merge-on-write the format
+    promises.
+
+    Callers hand in whatever they have -- out of order, overlapping, duplicated,
+    adjacent -- and get the one spelling of that state every implementation
+    agrees on.
+
+    ADJACENT ranges merge as well as overlapping ones, and that is not
+    tidiness. ``[[0,4],[4,8]]`` and ``[[0,8]]`` are the same proven bytes; if
+    both were legal, two implementations could write one state as different
+    bytes and a conformance test comparing files would call them a
+    disagreement. Merging touching ranges is what makes the form canonical
+    rather than merely sorted.
+    """
+    kept = []
+    for r in ranges or ():
+        try:
+            start, end = r
+        except (TypeError, ValueError):
+            raise Invalid(f"a verified range is a pair [start, end), got {r!r}") from None
+        if not isinstance(start, int) or not isinstance(end, int) or isinstance(start, bool) or isinstance(end, bool):
+            raise Invalid(f"a byte offset is a whole number, got {r!r}")
+        if start < 0 or end < 0:
+            raise Invalid(f"a byte offset cannot be negative: [{start},{end})")
+        if end < start:
+            raise Invalid(f"a range ends before it starts: [{start},{end})")
+        # An empty range is not an error -- a fetcher that recorded a
+        # zero-length part is not lying, it has just proven nothing -- but it
+        # carries no information, and two sets differing only by one are the
+        # same set.
+        if end == start:
+            continue
+        kept.append(Range(start, end))
+    kept.sort()
+
+    out: List[Range] = []
+    for r in kept:
+        if out and r.start <= out[-1].end:
+            if r.end > out[-1].end:
+                out[-1] = Range(out[-1].start, r.end)
+            continue
+        out.append(r)
+    return out
+
+
+def verified_prefix(ranges) -> int:
+    """The end of the range starting at zero, or 0 when there is none.
+
+    In a canonical set at most one range can start at zero and it is the first,
+    so this is the whole rule.
+    """
+    rs = canonical_ranges(ranges)
+    return rs[0].end if rs and rs[0].start == 0 else 0
+
+
+def ranges_total(ranges) -> int:
+    """How many proven bytes the set holds."""
+    return sum(r[1] - r[0] for r in canonical_ranges(ranges))
+
+
+def ranges_cover(ranges, start: int, end: int) -> bool:
+    """Whether every byte of [start, end) is proven. An empty interval is
+    covered by anything, including the empty set."""
+    if end <= start:
+        return True
+    return any(r[0] <= start and end <= r[1] for r in canonical_ranges(ranges))
+
+
+def ranges_missing(ranges, start: int, end: int) -> List[Range]:
+    """The gaps in [start, end) that are not proven yet -- what a fetcher still
+    has to ask for, which is the question a resume asks."""
+    out: List[Range] = []
+    at = start
+    for r in canonical_ranges(ranges):
+        if r.end <= at:
+            continue
+        if r.start >= end:
+            break
+        if r.start > at:
+            out.append(Range(at, r.start))
+        at = max(at, r.end)
+        if at >= end:
+            break
+    if at < end:
+        out.append(Range(at, end))
+    return out
+
+
+def ranges_from_checkpoint(checkpoint) -> List[Range]:
+    """The proven ranges a checkpoint carries.
+
+    Three inputs, one answer:
+
+      * ``verified`` present: those ranges, canonicalised.
+      * only ``verified_prefix``: ``[(0, prefix)]``, because a prefix IS a
+        range. This is what lets a record written before ranges existed be read
+        as one, and what makes "the prefix is the degenerate case" true in code
+        rather than only in prose.
+      * neither, or no checkpoint at all: the empty set.
+
+    When both are present the prefix is UNIONED IN rather than checked against
+    the ranges. A prefix-only writer that took the job over and advanced the
+    prefix without touching ``verified`` left a record where the two disagree,
+    and the union is the only reading that loses nothing: both fields are claims
+    that bytes are proven, and neither is a claim that other bytes are not.
+    """
+    if not checkpoint:
+        return []
+    if not isinstance(checkpoint, dict):
+        raise Invalid("a checkpoint carrying ranges must be a JSON object")
+    found = []
+    raw = checkpoint.get(VERIFIED_KEY)
+    if raw is not None:
+        if not isinstance(raw, (list, tuple)):
+            raise Invalid(f"{VERIFIED_KEY!r} is a list of [start, end) pairs")
+        for pair in raw:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise Invalid(f"a verified range is a pair [start, end), got {pair!r}")
+            found.append((pair[0], pair[1]))
+    prefix = checkpoint.get(VERIFIED_PREFIX_KEY)
+    if prefix is not None:
+        if not isinstance(prefix, int) or isinstance(prefix, bool):
+            raise Invalid(f"{VERIFIED_PREFIX_KEY!r} is a whole number of bytes")
+        if prefix > 0:
+            found.append((0, prefix))
+    return canonical_ranges(found)
+
+
+def checkpoint_with_ranges(checkpoint, ranges) -> Dict[str, Any]:
+    """A checkpoint carrying `ranges` canonically, keeping every key it does not
+    own.
+
+    The form is pinned, because three implementations have to produce the same
+    bytes for the same state::
+
+        {"verified_prefix": P, "verified": [[s, e], ...], <everything else, by key>}
+
+    The two range keys come first and in that order -- a reader skimming a
+    record should see the number that matters first -- and the caller's other
+    keys follow sorted by name. Sorted rather than left as found because Go
+    reaches a checkpoint through a map, which has no order to preserve, so "as
+    found" is not something all three languages can agree to do.
+    """
+    if checkpoint is not None and not isinstance(checkpoint, dict):
+        raise Invalid("a checkpoint carrying ranges must be a JSON object")
+    canon = canonical_ranges(ranges)
+    out: Dict[str, Any] = {
+        VERIFIED_PREFIX_KEY: verified_prefix(canon),
+        VERIFIED_KEY: [[r.start, r.end] for r in canon],
+    }
+    for name in sorted(checkpoint or {}):
+        if name in (VERIFIED_PREFIX_KEY, VERIFIED_KEY):
+            continue
+        out[name] = checkpoint[name]
+    return out
+
+
 
 
 def _rfc3339(t: datetime) -> str:
@@ -392,6 +644,52 @@ class Record:
         """Somebody asked this to stop and it has not finished."""
         return self.wants() == PAUSE and not self.terminal()
 
+    # ---- ranges -----------------------------------------------------------
+    #
+    # A checkpoint is opaque to this module, and these four methods do not make
+    # it less so: they are a canonical form offered to a caller that has decided
+    # its checkpoint holds proven ranges, not a meaning read out of every record
+    # relayed. See the range section above.
+
+    def checkpoint_ranges(self) -> List[Range]:
+        """The proven ranges this record's checkpoint carries.
+
+        A record that has never checkpointed, and one whose checkpoint predates
+        ranges entirely, both answer without an error: the first with the empty
+        set, the second with the prefix as one range.
+        """
+        return ranges_from_checkpoint(self.checkpoint)
+
+    def set_checkpoint_ranges(self, ranges) -> None:
+        """Record what is proven, merged into canonical form, and declare the
+        ranges model.
+
+        Both halves matter. Without the canonical form two writers spell one
+        state two ways; without the declaration a reader cannot tell whether an
+        absent ``verified`` means "nothing proven beyond the prefix" or "this
+        writer had never heard of ranges".
+        """
+        self.checkpoint = checkpoint_with_ranges(self.checkpoint, ranges)
+        if MODEL_RANGES not in self.content:
+            self.content = list(self.content) + [MODEL_RANGES]
+
+    def add_checkpoint_range(self, start: int, end: int) -> None:
+        """Fold one newly proven range into the checkpoint. What a parallel
+        fetcher calls as each part lands."""
+        self.set_checkpoint_ranges(list(self.checkpoint_ranges()) + [(start, end)])
+
+    def clear_checkpoint_ranges(self) -> None:
+        """Remove the ranges and the declaration, leaving every other key alone.
+
+        The declaration is carried rather than derived, so it has to be
+        withdrawn explicitly; a record that kept declaring a model whose data it
+        no longer holds sends a reader looking for something that is not there.
+        """
+        if isinstance(self.checkpoint, dict):
+            rest = {k: v for k, v in self.checkpoint.items() if k != VERIFIED_KEY}
+            self.checkpoint = {k: rest[k] for k in sorted(rest)} or None
+        self.content = [n for n in self.content if n != MODEL_RANGES]
+
     def delegated(self) -> bool:
         """Something outside this process is doing the work.
 
@@ -402,16 +700,23 @@ class Record:
         return self.delegation is not None
 
     def to_json(self) -> bytes:
+        # Describe first, then check, which is the order Go's Encode and C++'s
+        # encode() use. This module used to validate first, so a record whose
+        # declaration had not been filled in yet was refused for saying nothing
+        # about itself -- while the other two implementations derived the
+        # declaration and wrote it. Each half was self-consistent, so no unit
+        # test in one language could see it.
+        #
+        # What this implementation writes, it writes as its own version. A
+        # record read at 3 and written back at 3 while carrying an intent would
+        # tell an older reader it is safe to ignore fields it does not know,
+        # which is exactly the risk the schema check refuses.
+        self.describe()
         self.validate()
         # Key order and omissions match the Go struct tags exactly. Go decodes
         # with DisallowUnknownFields, so an extra key here is not a cosmetic
         # difference — it makes the record unreadable to the other half of the
         # abstraction.
-        # What this implementation writes, it writes as its own version. A
-        # record read at 3 and written back at 3 while carrying an intent
-        # would tell an older reader it is safe to ignore fields it does not
-        # know, which is exactly the risk the schema check refuses.
-        self.describe()
         d: Dict[str, Any] = {
             "content": list(self.content),
         }
@@ -493,9 +798,22 @@ class Record:
         # is correct about everything that matters.
         if self.progress.step is not None:
             content.append(MODEL_STEP)
+        # A model this layer declares but cannot derive, because what it
+        # describes lives inside the checkpoint and a checkpoint is opaque here.
+        # Rediscovering it would mean reading one, so the declaration is carried
+        # instead -- the same treatment an unknown extension gets. Sorted, and
+        # placed here rather than among the extension names, so all three
+        # implementations put it in the same slot. See CARRIED_MODELS.
+        content.extend(sorted({n for n in self.content or () if n in CARRIED_MODELS}))
         content.extend(sorted(self.extensions or {}))
 
         for name in self.critical or ():
+            # Except the models whose own definition says a reader ignoring them
+            # is still correct. Marking one critical tells a stranger to refuse
+            # the job over a decoration, and this layer will not relay that
+            # however it arrived.
+            if name in NEVER_CRITICAL:
+                continue
             if name not in critical and name in content:
                 critical.append(name)
 
