@@ -114,12 +114,12 @@ func (r Range) String() string {
 // sorted.
 type Ranges []Range
 
-// Canonical sorts, merges and validates a set of ranges.
+// CanonicalRanges sorts, merges and validates a set of ranges.
 //
 // This is the merge-on-write the format promises. Callers hand in whatever they
 // have — out of order, overlapping, duplicated, adjacent — and get the one
 // spelling of that state which every implementation agrees on.
-func Canonical(in []Range) (Ranges, error) {
+func CanonicalRanges(in []Range) (Ranges, error) {
 	kept := make([]Range, 0, len(in))
 	for _, r := range in {
 		if r.Start < 0 || r.End < 0 {
@@ -168,12 +168,12 @@ func (rs Ranges) VerifiedPrefix() int64 {
 
 // Add returns the set with one more proven range folded in, canonically.
 func (rs Ranges) Add(start, end int64) (Ranges, error) {
-	return Canonical(append(append(make([]Range, 0, len(rs)+1), rs...), Range{start, end}))
+	return CanonicalRanges(append(append(make([]Range, 0, len(rs)+1), rs...), Range{start, end}))
 }
 
 // Union returns the two sets merged, canonically.
 func (rs Ranges) Union(other Ranges) (Ranges, error) {
-	return Canonical(append(append(make([]Range, 0, len(rs)+len(other)), rs...), other...))
+	return CanonicalRanges(append(append(make([]Range, 0, len(rs)+len(other)), rs...), other...))
 }
 
 // Covers reports whether every byte of [start, end) is proven. An empty
@@ -246,7 +246,7 @@ const (
 	keyVerified       = "verified"
 )
 
-// RangesFromCheckpointJSON reads a range set out of a checkpoint.
+// RangesFromCheckpoint reads a range set out of a checkpoint.
 //
 // Three inputs, one answer:
 //
@@ -262,7 +262,7 @@ const (
 // prefix without touching `verified` left a record where the two disagree, and
 // the union is the only reading that loses nothing: both fields are claims that
 // bytes are proven, and neither is a claim that other bytes are not.
-func RangesFromCheckpointJSON(raw []byte) (Ranges, error) {
+func RangesFromCheckpoint(raw []byte) (Ranges, error) {
 	if len(raw) == 0 || string(bytes.TrimSpace(raw)) == "null" {
 		return Ranges{}, nil
 	}
@@ -286,10 +286,10 @@ func RangesFromCheckpointJSON(raw []byte) (Ranges, error) {
 	if cp.VerifiedPrefix != nil && *cp.VerifiedPrefix > 0 {
 		in = append(in, Range{0, *cp.VerifiedPrefix})
 	}
-	return Canonical(in)
+	return CanonicalRanges(in)
 }
 
-// CheckpointJSONWithRanges writes ranges into a checkpoint, canonically,
+// CheckpointWithRanges writes ranges into a checkpoint, canonically,
 // keeping every key it does not own.
 //
 // The form is pinned, because three implementations have to produce the same
@@ -302,8 +302,8 @@ func RangesFromCheckpointJSON(raw []byte) (Ranges, error) {
 // sorted by name. Sorted rather than left as found because Go reaches a
 // checkpoint through a map, which has no order to preserve, so "as found" is
 // not a thing all three languages can agree to do.
-func CheckpointJSONWithRanges(raw []byte, rs Ranges) ([]byte, error) {
-	canon, err := Canonical(rs)
+func CheckpointWithRanges(raw []byte, rs Ranges) ([]byte, error) {
+	canon, err := CanonicalRanges(rs)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +359,7 @@ func CheckpointJSONWithRanges(raw []byte, rs Ranges) ([]byte, error) {
 // ranges entirely, both answer without an error: the first with the empty set,
 // the second with the prefix as one range.
 func (r *Record) CheckpointRanges() (Ranges, error) {
-	return RangesFromCheckpointJSON(r.Checkpoint)
+	return RangesFromCheckpoint(r.Checkpoint)
 }
 
 // SetCheckpointRanges records what is proven, merged into canonical form, and
@@ -370,7 +370,7 @@ func (r *Record) CheckpointRanges() (Ranges, error) {
 // `verified` means "nothing proven beyond the prefix" or "this writer had never
 // heard of ranges".
 func (r *Record) SetCheckpointRanges(rs []Range) error {
-	raw, err := CheckpointJSONWithRanges(r.Checkpoint, Ranges(rs))
+	raw, err := CheckpointWithRanges(r.Checkpoint, Ranges(rs))
 	if err != nil {
 		return err
 	}

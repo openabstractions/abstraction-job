@@ -159,12 +159,11 @@ half-open, sorted, non-overlapping and merged on write, touching ranges included
 proven bytes has one encoding in all three languages. `verified_prefix` is derived — the end of the
 range starting at zero, or 0 if none starts there — so a reader that ignores `verified` resumes from
 the prefix and re-fetches the rest, and `abstraction.download/ranges@1` is named in `content`, never
-in `critical`. Go has `SetCheckpointRanges`, `AddCheckpointRange`, `CheckpointRanges`,
-`ClearCheckpointRanges`, `Canonical`, and `VerifiedPrefix`, `Covers`, `Missing`, `Total` on
-`Ranges`; Python and C++ have the same set in `snake_case`. All three are tested against
-`testdata/ranges-record.json` byte for byte, and [the design
-note](https://github.com/openabstractions/abstractions/blob/main/docs/checkpoint-ranges.md) explains
-why.
+in `critical`. Go has `SetCheckpointRanges`, `AddCheckpointRange`, `CheckpointRanges` and
+`ClearCheckpointRanges` on `Record`, plus `CanonicalRanges` and `Ranges`' `VerifiedPrefix`,
+`Covers`, `Missing`, `Total`; Python and C++ have the same set in `snake_case`. All three are tested
+against `testdata/ranges-record.json` byte for byte, and [the design
+note](https://github.com/openabstractions/abstractions/blob/main/docs/checkpoint-ranges.md) explains why.
 
 ## Status
 

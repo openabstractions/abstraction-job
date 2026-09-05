@@ -182,7 +182,7 @@ func TestCanonicalFormMergesAndSorts(t *testing.T) {
 		{"nothing at all", nil, []Range{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Canonical(tc.in)
+			got, err := CanonicalRanges(tc.in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestCanonicalFormMergesAndSorts(t *testing.T) {
 			// Canonicalising a canonical set changes nothing. If it did, one
 			// state would have a spelling that depends on how many times it had
 			// been written.
-			again, err := Canonical(got)
+			again, err := CanonicalRanges(got)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +213,7 @@ func TestCanonicalRefusesNonsense(t *testing.T) {
 		{"ends before it starts", []Range{{8, 4}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := Canonical(tc.in); err == nil {
+			if _, err := CanonicalRanges(tc.in); err == nil {
 				t.Fatal("accepted a range that describes no bytes")
 			}
 		})
@@ -237,7 +237,7 @@ func TestVerifiedPrefixIsTheRangeStartingAtZero(t *testing.T) {
 		{"a gap closed by a merge", []Range{{0, 400}, {400, 800}}, 800},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rs, err := Canonical(tc.in)
+			rs, err := CanonicalRanges(tc.in)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,7 +245,7 @@ func TestVerifiedPrefixIsTheRangeStartingAtZero(t *testing.T) {
 				t.Fatalf("prefix %d, want %d", got, tc.want)
 			}
 			// And what is written says the same thing as what is computed.
-			raw, err := CheckpointJSONWithRanges(nil, rs)
+			raw, err := CheckpointWithRanges(nil, rs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -266,7 +266,7 @@ func TestVerifiedPrefixIsTheRangeStartingAtZero(t *testing.T) {
 // starting at zero. Without this the degenerate case would be a special case,
 // and every caller would have to handle both.
 func TestAPrefixOnlyCheckpointReadsAsOneRange(t *testing.T) {
-	rs, err := RangesFromCheckpointJSON([]byte(`{"verified_prefix":400}`))
+	rs, err := RangesFromCheckpoint([]byte(`{"verified_prefix":400}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestAPrefixOnlyCheckpointReadsAsOneRange(t *testing.T) {
 	}
 
 	for _, empty := range []string{`{}`, `{"verified_prefix":0}`, `null`, ``} {
-		rs, err := RangesFromCheckpointJSON([]byte(empty))
+		rs, err := RangesFromCheckpoint([]byte(empty))
 		if err != nil {
 			t.Fatalf("%q: %v", empty, err)
 		}
@@ -290,7 +290,7 @@ func TestAPrefixOnlyCheckpointReadsAsOneRange(t *testing.T) {
 // claims that bytes are PROVEN and neither is a claim that other bytes are not,
 // so the union is the only reading that loses nothing.
 func TestAStalerVerifiedSetDoesNotLoseTheProvenPrefix(t *testing.T) {
-	rs, err := RangesFromCheckpointJSON([]byte(
+	rs, err := RangesFromCheckpoint([]byte(
 		`{"verified_prefix":8388608,"verified":[[0,4194304],[16777216,20971520]]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestACheckpointWithRangesIsRefusedIfItIsNotRanges(t *testing.T) {
 		`{"verified":[[-1,4]]}`,
 		`{"verified":"nope"}`,
 	} {
-		if _, err := RangesFromCheckpointJSON([]byte(bad)); err == nil {
+		if _, err := RangesFromCheckpoint([]byte(bad)); err == nil {
 			t.Fatalf("%s was accepted as a set of proven ranges", bad)
 		}
 	}
@@ -401,7 +401,7 @@ func TestCoversAndMissing(t *testing.T) {
 // must leave the rest exactly where they were — sorted, so all three
 // implementations put them in the same order.
 func TestOtherCheckpointKeysSurviveAndAreOrdered(t *testing.T) {
-	raw, err := CheckpointJSONWithRanges(
+	raw, err := CheckpointWithRanges(
 		[]byte(`{"zebra":1,"apple":{"nested":[1,2]},"verified_prefix":99}`),
 		Ranges{{0, 400}})
 	if err != nil {
