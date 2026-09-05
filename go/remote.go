@@ -126,7 +126,7 @@ func (r *Remote) records(req request) ([]*Record, error) {
 // the record, so asking a service would put a round trip in front of an answer
 // it can compute. The IDL says the same thing by leaving it off the service.
 func (r *Remote) Claimable(rec *Record) bool {
-	return !rec.State.Terminal() && !rec.Lease.Held(time.Now()) && !rec.Paused()
+	return !rec.State.Terminal() && !rec.Lease.Held(time.Now())
 }
 
 func (r *Remote) Claim(id, owner string, ttl time.Duration) (*Record, error) {

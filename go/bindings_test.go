@@ -226,3 +226,109 @@ func TestOnlyTheFileBindingOffersALocalArea(t *testing.T) {
 		}
 	}
 }
+
+// Claimable is a pure predicate, so every binding must answer it identically
+// for the same record. It did not: two bindings folded "somebody asked this to
+// stop" into it and the others did not, so an application got a different
+// answer about the same job depending on what was underneath — which is the
+// one property this package exists to provide.
+//
+// Pausing is an INTENT and Claimable reports observed state. Intent is the one
+// field writable without a lease, so folding it in makes the predicate change
+// meaning under a writer that holds nothing. The sweep is where paused belongs,
+// and Orphans says so in every binding.
+func TestEveryBindingAnswersClaimableTheSameWay(t *testing.T) {
+	type probe struct {
+		name    string
+		prepare func(*Record)
+	}
+	probes := []probe{
+		{"pending", func(r *Record) {}},
+		{"paused", func(r *Record) {
+			r.Intent = &Intent{Want: WantPause, By: "a test"}
+		}},
+		{"cancel requested", func(r *Record) {
+			r.Intent = &Intent{Want: WantCancel, By: "a test"}
+		}},
+		{"terminal", func(r *Record) { r.State = StateComplete }},
+	}
+
+	for _, p := range probes {
+		t.Run(p.name, func(t *testing.T) {
+			var first *bool
+			var firstName string
+			for _, b := range bindings(t) {
+				r := &Record{ID: "probe", Kind: "test", State: StatePending}
+				p.prepare(r)
+				got := b.store.Claimable(r)
+				if first == nil {
+					first, firstName = &got, b.name
+					continue
+				}
+				if got != *first {
+					t.Fatalf("%s says Claimable=%v and %s says %v for the same record",
+						firstName, *first, b.name, got)
+				}
+			}
+		})
+	}
+}
+
+// And the safety property the predicate must not be relied upon for: whatever
+// Claimable says, no binding may offer a paused job up as an orphan.
+func TestNoBindingSweepsUpAPausedJob(t *testing.T) {
+	for _, b := range bindings(t) {
+		t.Run(b.name, func(t *testing.T) {
+			id, err := b.store.Submit(Record{Kind: "test", State: StatePending, Spec: []byte(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := b.store.SetIntent(id, WantPause, "a test"); err != nil {
+				t.Fatal(err)
+			}
+			orphans, err := b.store.Orphans()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range orphans {
+				if o.ID == id {
+					t.Fatal("a paused job was offered as an orphan; a sweep would " +
+						"restart it seconds after somebody pressed pause")
+				}
+			}
+		})
+	}
+}
+
+// Found by accident: a record with no spec was refused by the file and memory
+// bindings and accepted by the service one, so the same submission either
+// succeeded or failed depending on what was underneath. A binding that accepts
+// what the others reject lets a record into a shared store that the next
+// reader cannot load.
+func TestEveryBindingRefusesTheSameInvalidRecord(t *testing.T) {
+	for _, bad := range []struct {
+		name string
+		rec  Record
+	}{
+		{"no spec", Record{Kind: "test", State: StatePending}},
+		{"no kind", Record{State: StatePending, Spec: []byte(`{}`)}},
+		{"spec is not json", Record{Kind: "test", State: StatePending, Spec: []byte(`not json`)}},
+	} {
+		t.Run(bad.name, func(t *testing.T) {
+			var firstErr bool
+			var firstName string
+			for _, b := range bindings(t) {
+				_, err := b.store.Submit(bad.rec)
+				got := err != nil
+				if firstName == "" {
+					firstErr, firstName = got, b.name
+					continue
+				}
+				if got != firstErr {
+					t.Fatalf("%s refused=%v but %s refused=%v for the same record",
+						firstName, firstErr, b.name, got)
+				}
+			}
+		})
+	}
+}

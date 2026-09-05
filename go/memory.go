@@ -123,7 +123,7 @@ func (m *Memory) List() ([]*Record, error) {
 }
 
 func (m *Memory) Claimable(r *Record) bool {
-	return !r.State.Terminal() && !r.Lease.Held(m.now()) && !r.Paused()
+	return !r.State.Terminal() && !r.Lease.Held(m.now())
 }
 
 func (m *Memory) Orphans() ([]*Record, error) {
@@ -133,7 +133,11 @@ func (m *Memory) Orphans() ([]*Record, error) {
 	}
 	out := make([]*Record, 0, len(all))
 	for _, r := range all {
-		if m.Claimable(r) && r.State != StateTransferred {
+		// Paused is filtered here rather than in Claimable, because pausing
+		// is an intent and Claimable answers about observed state. Folding
+		// one into the other makes the predicate change meaning the moment
+		// somebody writes intent, which needs no lease.
+		if m.Claimable(r) && r.State != StateTransferred && !r.Paused() {
 			out = append(out, r)
 		}
 	}

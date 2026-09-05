@@ -76,6 +76,7 @@ import (
 //	   everything that matters. It is the first bump where the OLD reader would
 //	   have been safe, and it is worth saying so, because that is the argument
 //	   for tolerating unknown fields rather than the argument for a version 6.
+//
 // The data models this implementation understands, and writes.
 //
 // A name is namespaced and versioned: "abstraction.job/base@1". The version is
@@ -137,8 +138,6 @@ func Understands(critical []string) (string, bool) {
 	}
 	return "", true
 }
-
-
 
 // Timestamp is a time that always serialises identically, in UTC, with exactly
 // six fractional digits and a trailing Z.
@@ -650,7 +649,11 @@ func (r *Record) Validate() error {
 	if !r.State.Valid() {
 		return fmt.Errorf("%w: state %q", ErrInvalid, r.State)
 	}
-	if len(r.Spec) == 0 || !json.Valid(r.Spec) {
+	// A nil spec marshals to the four bytes "null", which is valid JSON, so a
+	// record that one binding refuses arrives over a transport looking legal.
+	// Absent and null are the same absence and both are refused here, which is
+	// the only place every binding passes through.
+	if len(r.Spec) == 0 || !json.Valid(r.Spec) || string(bytes.TrimSpace(r.Spec)) == "null" {
 		return fmt.Errorf("%w: spec must be present and valid JSON", ErrInvalid)
 	}
 	if len(r.Checkpoint) > 0 && !json.Valid(r.Checkpoint) {
