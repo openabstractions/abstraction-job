@@ -271,6 +271,26 @@ private:
     int fd_;
 };
 
+// A write to a socket the peer has closed raises SIGPIPE, and the default
+// disposition kills the process. A discovery call that terminates its caller
+// because a supervisor exited mid-handshake is the loudest possible version of
+// the failure rule 1 says must be silent. Linux spells the fix MSG_NOSIGNAL on
+// the send; macOS has no such flag and spells it SO_NOSIGPIPE on the socket.
+#ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
+
+void suppress_sigpipe(int fd) {
+#if defined(SO_NOSIGPIPE)
+    const int on = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+#else
+    (void)fd;
+#endif
+}
+
 bool wait_ready(int fd, short events, Deadline deadline) {
     const int left = remaining_ms(deadline);
     if (left <= 0) return false;
@@ -297,6 +317,7 @@ bool exchange(const std::string& path, Deadline deadline, std::string* line) {
 
     Fd sock(::socket(AF_UNIX, SOCK_STREAM, 0));
     if (sock.get() < 0) return false;
+    suppress_sigpipe(sock.get());
     const int flags = ::fcntl(sock.get(), F_GETFL, 0);
     if (flags < 0 || ::fcntl(sock.get(), F_SETFL, flags | O_NONBLOCK) < 0) return false;
 
@@ -317,7 +338,7 @@ bool exchange(const std::string& path, Deadline deadline, std::string* line) {
     std::size_t sent = 0;
     while (sent < kRequestLen) {
         if (!wait_ready(sock.get(), POLLOUT, deadline)) return false;
-        const ssize_t n = ::send(sock.get(), kRequest + sent, kRequestLen - sent, MSG_NOSIGNAL);
+        const ssize_t n = ::send(sock.get(), kRequest + sent, kRequestLen - sent, kSendFlags);
         if (n > 0) {
             sent += static_cast<std::size_t>(n);
             continue;
