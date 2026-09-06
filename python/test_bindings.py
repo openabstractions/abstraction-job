@@ -10,7 +10,7 @@ Nothing below knows which binding it is talking to. If any of it had to change
 to accommodate one of them, the abstraction was not one.
 
 The memory binding is what answers the fair objection. A service in front of a
-FileStore is a transport swap, not a second implementation. ``Memory`` shares no
+FileStore is a transport swap, not a second implementation. ``MemoryStore`` shares no
 code with ``FileStore``: the lease, the epoch, the exclusivity, the stale-write
 refusal and the rule that a paused job is not an orphan are written again
 against a dict, which has neither exclusive create nor atomic rename. If those
@@ -29,7 +29,7 @@ from abstraction_job import (
     FileStore,
     LeaseExpired,
     LeaseHeld,
-    Memory,
+    MemoryStore,
     NotFound,
     Record,
     Scratch,
@@ -67,7 +67,7 @@ class BindingsTest(unittest.TestCase):
 
         # Shares no code with the one above.
         memory_clock = Clock()
-        out.append(("memory", Memory(now=memory_clock), memory_clock))
+        out.append(("memory", MemoryStore(now=memory_clock), memory_clock))
 
         return out
 
@@ -148,7 +148,12 @@ class BindingsTest(unittest.TestCase):
         self.assertEqual(nxt.lease.epoch, 3)
         self.assertEqual(nxt.checkpoint["verified_prefix"], 400)
 
-        # Terminal is terminal.
+        # Terminal is terminal. The write that MAKES it terminal is an ordinary
+        # update onto a record that is not yet terminal, and it must land; every
+        # write after it is refused, including the caller's own release. update
+        # was the one operation no implementation refused, so a lease holder
+        # could write progress onto a finished record and release could walk it
+        # back to pending, where the next sweep offered it as an orphan.
         def finish(rec):
             rec.state = COMPLETE
 
@@ -157,6 +162,14 @@ class BindingsTest(unittest.TestCase):
             s.claim(job_id, "too-late", 60)
         with self.assertRaises(Terminal):
             s.set_intent(job_id, CANCEL, "too-late")
+        with self.assertRaises(Terminal):
+            s.update(job_id, nxt.lease.epoch, lambda r: setattr(r.progress, "done", 999))
+        with self.assertRaises(Terminal):
+            s.release(job_id, nxt.lease.epoch)
+        done = s.load(job_id)
+        self.assertEqual(done.state, COMPLETE)
+        self.assertEqual(done.progress.done, 400, "a finished record was written over")
+        self.assertEqual(s.orphans(), [], "a finished job was offered as an orphan")
 
         # Not found is not found.
         with self.assertRaises(NotFound):

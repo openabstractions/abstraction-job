@@ -132,10 +132,10 @@ func TestAReaderThatIgnoresRangesStillResumesFromThePrefix(t *testing.T) {
 		t.Fatalf("an old reader resumes from %d, want 4194304", old.VerifiedPrefix)
 	}
 	// And it is never told it must understand ranges before it may proceed.
-	if contains(r.Critical, ModelRanges) {
-		t.Fatal("the ranges model was marked critical; every existing reader would refuse the job")
+	if contains(r.Critical, FeatureRanges) {
+		t.Fatal("the ranges feature was marked critical; every existing reader would refuse the job")
 	}
-	if !contains(r.Content, ModelRanges) {
+	if !contains(r.Content, FeatureRanges) {
 		t.Fatalf("a record carrying ranges must declare them: %v", r.Content)
 	}
 }
@@ -143,7 +143,7 @@ func TestAReaderThatIgnoresRangesStillResumesFromThePrefix(t *testing.T) {
 // Advisory means advisory, whoever wrote the record.
 func TestRangesAreNeverCriticalEvenIfAWriterSaysSo(t *testing.T) {
 	r := fixtureRecord(t)
-	r.Critical = append(r.Critical, ModelRanges)
+	r.Critical = append(r.Critical, FeatureRanges)
 	b, err := r.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestRangesAreNeverCriticalEvenIfAWriterSaysSo(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if contains(back.Critical, ModelRanges) {
+	if contains(back.Critical, FeatureRanges) {
 		t.Fatal("a decoration was relayed as a reason for a stranger to refuse the job")
 	}
 }
@@ -414,7 +414,7 @@ func TestOtherCheckpointKeysSurviveAndAreOrdered(t *testing.T) {
 }
 
 // The declaration is carried rather than derived, so it has to be withdrawable:
-// a record that kept declaring a model whose data it no longer holds sends a
+// a record that kept declaring a feature whose data it no longer holds sends a
 // reader looking for something that is not there.
 func TestClearingRangesWithdrawsTheDeclaration(t *testing.T) {
 	r := fixtureRecord(t)
@@ -425,7 +425,7 @@ func TestClearingRangesWithdrawsTheDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), ModelRanges) {
+	if strings.Contains(string(b), FeatureRanges) {
 		t.Fatalf("the declaration outlived the data:\n%s", b)
 	}
 	if strings.Contains(string(b), `"verified"`) {
@@ -465,7 +465,7 @@ func TestTheDeclarationSurvivesAReadModifyWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(got.Content, ModelRanges) {
+	if !contains(got.Content, FeatureRanges) {
 		t.Fatalf("a reader that never looked at the checkpoint dropped its declaration: %v", got.Content)
 	}
 	rs, err := got.CheckpointRanges()

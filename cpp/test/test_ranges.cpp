@@ -122,16 +122,16 @@ static void test_an_old_reader_still_resumes() {
     check("ranges: an old reader resumes from the prefix",
           r.checkpoint->at("verified_prefix").get<std::int64_t>() == 4194304);
     check("ranges: never critical, or every existing reader would refuse the job",
-          std::find(r.critical.begin(), r.critical.end(), model::kRanges) == r.critical.end());
+          std::find(r.critical.begin(), r.critical.end(), feature::kRanges) == r.critical.end());
     check("ranges: a record carrying ranges declares them",
-          std::find(r.content.begin(), r.content.end(), model::kRanges) != r.content.end());
+          std::find(r.content.begin(), r.content.end(), feature::kRanges) != r.content.end());
 
     // Advisory means advisory, whoever wrote the record.
     Record marked = fixture_record();
-    marked.critical.push_back(model::kRanges);
+    marked.critical.push_back(feature::kRanges);
     const Record after = Record::decode(marked.encode());
     check("ranges: a writer cannot promote a decoration to critical",
-          std::find(after.critical.begin(), after.critical.end(), model::kRanges) ==
+          std::find(after.critical.begin(), after.critical.end(), feature::kRanges) ==
               after.critical.end());
 }
 
@@ -274,13 +274,13 @@ static void test_other_keys() {
               R"({"verified_prefix":400,"verified":[[0,400]],"apple":{"nested":[1,2]},"zebra":1})");
 
     // The declaration is carried rather than derived, so it has to be
-    // withdrawable: a record that kept declaring a model whose data it no longer
+    // withdrawable: a record that kept declaring a feature whose data it no longer
     // holds sends a reader looking for something that is not there.
     Record r = fixture_record();
     clear_checkpoint_ranges(r);
     const std::string text = r.encode();
     check("keys: clearing withdraws the declaration",
-          text.find(model::kRanges) == std::string::npos);
+          text.find(feature::kRanges) == std::string::npos);
     check("keys: clearing removes the ranges", text.find("\"verified\"") == std::string::npos);
     // The prefix survives, because it is not ours to remove: an old reader
     // still resumes from it.
@@ -312,7 +312,7 @@ static void test_declaration_survives_a_read_modify_write() {
 
     const Record got = store.load(id);
     check("carried: a reader that never opened the checkpoint kept its declaration",
-          std::find(got.content.begin(), got.content.end(), model::kRanges) != got.content.end());
+          std::find(got.content.begin(), got.content.end(), feature::kRanges) != got.content.end());
     check("carried: the ranges survived", checkpoint_ranges(got).size() == 3);
 
     std::error_code ec;

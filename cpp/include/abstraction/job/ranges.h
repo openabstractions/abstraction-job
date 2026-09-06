@@ -20,7 +20,7 @@
 // WHY THE PREFIX STAYS. Not redundancy and not politeness. A reader that has
 // never heard of `verified` resumes from `verified_prefix` and re-fetches the
 // rest, which is exactly what it does today. That is the whole reason this is an
-// addition rather than a break, and it is why model::kRanges is never critical:
+// addition rather than a break, and it is why feature::kRanges is never critical:
 // an old reader ignoring the ranges loses some bytes to a second fetch, and
 // marking it critical would stop every existing reader dead for no safety gain.
 // The prefix is DERIVED from the set on write, so nothing has to remember to
@@ -141,7 +141,7 @@ Json checkpoint_with_ranges(const std::optional<Json>& checkpoint, const Ranges&
 Ranges checkpoint_ranges(const Record& r);
 
 // Record what is proven, merged into canonical form, and declare the ranges
-// model.
+// feature.
 //
 // Both halves matter. Without the canonical form two writers spell one state
 // two ways; without the declaration a reader cannot tell whether an absent
@@ -156,7 +156,7 @@ void add_checkpoint_range(Record& r, std::int64_t start, std::int64_t end);
 // Remove the ranges and the declaration, leaving every other key alone.
 //
 // The declaration is carried rather than derived, so it has to be withdrawn
-// explicitly; a record that kept declaring a model whose data it no longer
+// explicitly; a record that kept declaring a feature whose data it no longer
 // holds sends a reader looking for something that is not there.
 void clear_checkpoint_ranges(Record& r);
 

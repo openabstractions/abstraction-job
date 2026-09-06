@@ -26,7 +26,7 @@
 #include <string>
 #include <thread>
 
-#include <nlohmann/json.hpp>
+#include <abstraction/json/value.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -42,7 +42,7 @@
 
 namespace fs = std::filesystem;
 using namespace abstraction::discovery;
-using Json = nlohmann::json;
+using Json = abstraction::json::Value;
 
 static int g_failures = 0;
 
@@ -60,7 +60,7 @@ static void check_answer(const char* name, Answer got, Answer want) {
 
 static std::string random_name() {
     static std::mt19937_64 rng(std::random_device{}());
-    char buf[40];
+    char buf[48];
     std::snprintf(buf, sizeof(buf), "abstraction-%016llx%016llx",
                   static_cast<unsigned long long>(rng()),
                   static_cast<unsigned long long>(rng()));
@@ -255,8 +255,9 @@ public:
         if (in) {
             std::ostringstream body;
             body << in.rdbuf();
-            const Json existing = Json::parse(body.str(), nullptr, false);
-            if (!existing.is_discarded() && existing.is_object() && existing.contains("services")) {
+            bool parsed = false;
+            const Json existing = Json::parse(body.str(), &parsed);
+            if (parsed && existing.is_object() && existing.contains("services")) {
                 services = existing["services"];
             }
         }

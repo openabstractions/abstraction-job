@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Remote is a Store reached over a connection instead of a directory.
+// RemoteStore is a Store reached over a connection instead of a directory.
 //
 // It is the second binding, and it exists so the test that decides this project
 // can be run at all: the same application, unchanged, on two of them.
@@ -28,23 +28,23 @@ import (
 // deployment. Making it binary and persistent changes this file and serve.go,
 // and must change nothing above them — that is the property, and it is now
 // checkable instead of asserted.
-type Remote struct {
+type RemoteStore struct {
 	network string
 	address string
 	timeout time.Duration
 }
 
-// Dial returns a store that lives somewhere else.
+// NewRemoteStore returns a store that lives somewhere else.
 //
 // Nothing is opened yet. A store that connected eagerly would fail at
 // construction on a machine whose supervisor is merely not running, and "not
 // running" is a normal state that discovery is supposed to handle by choosing a
 // different tier.
-func Dial(network, address string) *Remote {
-	return &Remote{network: network, address: address, timeout: 10 * time.Second}
+func NewRemoteStore(network, address string) *RemoteStore {
+	return &RemoteStore{network: network, address: address, timeout: 10 * time.Second}
 }
 
-func (r *Remote) do(req request) (response, error) {
+func (r *RemoteStore) do(req request) (response, error) {
 	conn, err := net.DialTimeout(r.network, r.address, r.timeout)
 	if err != nil {
 		return response{}, fmt.Errorf("job: no store at %s: %w", r.address, err)
@@ -73,7 +73,7 @@ func (r *Remote) do(req request) (response, error) {
 	return resp, nil
 }
 
-func (r *Remote) record(resp response, err error) (*Record, error) {
+func (r *RemoteStore) record(resp response, err error) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (r *Remote) record(resp response, err error) (*Record, error) {
 	return &rec, nil
 }
 
-func (r *Remote) Submit(rec Record) (string, error) {
+func (r *RemoteStore) Submit(rec Record) (string, error) {
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return "", err
@@ -96,15 +96,15 @@ func (r *Remote) Submit(rec Record) (string, error) {
 	return resp.ID, nil
 }
 
-func (r *Remote) Load(id string) (*Record, error) {
+func (r *RemoteStore) Load(id string) (*Record, error) {
 	return r.record(r.do(request{Op: "load", ID: id}))
 }
 
-func (r *Remote) List() ([]*Record, error) { return r.records(request{Op: "list"}) }
+func (r *RemoteStore) List() ([]*Record, error) { return r.records(request{Op: "list"}) }
 
-func (r *Remote) Orphans() ([]*Record, error) { return r.records(request{Op: "orphans"}) }
+func (r *RemoteStore) Orphans() ([]*Record, error) { return r.records(request{Op: "orphans"}) }
 
-func (r *Remote) records(req request) ([]*Record, error) {
+func (r *RemoteStore) records(req request) ([]*Record, error) {
 	resp, err := r.do(req)
 	if err != nil {
 		return nil, err
@@ -125,25 +125,29 @@ func (r *Remote) records(req request) ([]*Record, error) {
 // It is a pure predicate over a record and a clock — the caller already holds
 // the record, so asking a service would put a round trip in front of an answer
 // it can compute. The IDL says the same thing by leaving it off the service.
-func (r *Remote) Claimable(rec *Record) bool {
+func (r *RemoteStore) Claimable(rec *Record) bool {
 	return !rec.State.Terminal() && !rec.Lease.Held(time.Now())
 }
 
-func (r *Remote) Claim(id, owner string, ttl time.Duration) (*Record, error) {
+func (r *RemoteStore) Claim(id, owner string, ttl time.Duration) (*Record, error) {
 	return r.record(r.do(request{Op: "claim", ID: id, Owner: owner, TTLMS: ttl.Milliseconds()}))
 }
 
-func (r *Remote) Renew(id string, epoch int64, ttl time.Duration) (*Record, error) {
+func (r *RemoteStore) Renew(id string, epoch int64, ttl time.Duration) (*Record, error) {
 	return r.record(r.do(request{Op: "renew", ID: id, Epoch: epoch, TTLMS: ttl.Milliseconds()}))
 }
 
-func (r *Remote) Release(id string, epoch int64) error {
+func (r *RemoteStore) Release(id string, epoch int64) error {
 	_, err := r.do(request{Op: "release", ID: id, Epoch: epoch})
 	return err
 }
 
-func (r *Remote) SetIntent(id string, want Want, by string) (*Record, error) {
+func (r *RemoteStore) SetIntent(id string, want Want, by string) (*Record, error) {
 	return r.record(r.do(request{Op: "set_intent", ID: id, Want: string(want), By: by}))
+}
+
+func (r *RemoteStore) Recall(id string, epoch int64, reason, by string, grace time.Duration) (*Record, error) {
+	return r.record(r.do(request{Op: "recall", ID: id, Epoch: epoch, Reason: reason, By: by, TTLMS: grace.Milliseconds()}))
 }
 
 // Update reads, applies the caller's mutation locally, and sends the result
@@ -159,7 +163,7 @@ func (r *Remote) SetIntent(id string, want Want, by string) (*Record, error) {
 // decision depends on state that changed in between is rejected instead of
 // silently applied, which is the failure mode worth having, and it is the same
 // one the in-process binding has for the same reason.
-func (r *Remote) Update(id string, epoch int64, mutate func(*Record) error) (*Record, error) {
+func (r *RemoteStore) Update(id string, epoch int64, mutate func(*Record) error) (*Record, error) {
 	current, err := r.Load(id)
 	if err != nil {
 		return nil, err
@@ -174,5 +178,5 @@ func (r *Remote) Update(id string, epoch int64, mutate func(*Record) error) (*Re
 	return r.record(r.do(request{Op: "write", ID: id, Epoch: epoch, Record: b}))
 }
 
-// Remote is a Store and, pointedly, not a Scratch.
-var _ Store = (*Remote)(nil)
+// RemoteStore is a Store and, pointedly, not a Scratch.
+var _ Store = (*RemoteStore)(nil)

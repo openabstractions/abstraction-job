@@ -78,7 +78,7 @@ std::string compact(const Record& r) {
 }
 
 [[noreturn]] void usage() {
-    std::cout << "usage: jobctl <submit|claim|progress|finish|show|intent|orphans> [args]"
+    std::cout << "usage: jobctl <submit|claim|progress|finish|show|intent|recall|orphans> [args]"
                  "   (JOB_STORE must be set)\n";
     std::cout << "  submit --kind K --spec '<json>' [--total N] [--requires a,b]\n";
     std::exit(2);
@@ -114,7 +114,7 @@ std::chrono::milliseconds ttl_from(const std::string& raw, double fallback_secon
 Json parse_json_flag(const std::string& raw, const char* what) {
     try {
         return Json::parse(raw);
-    } catch (const Json::exception& e) {
+    } catch (const Json::Error& e) {
         fatal(std::string(what) + " is not valid JSON: " + e.what());
     }
 }
@@ -227,6 +227,18 @@ int main(int argc, char** argv) {
             const std::string by = flag(args, "by", "jobctl-cpp");
             const Record r = store.set_intent(args.id, args.positional.front(), by);
             std::cout << r.id << " " << r.wants() << std::endl;
+
+        } else if (command == "recall") {
+            // --epoch is the one the caller SAW, not one it holds: a third
+            // party recalling a residency it has only read.
+            if (args.id.empty() || flag(args, "reason").empty()) {
+                fatal("usage: jobctl recall <id> --epoch N --reason WHY [--grace SECONDS] [--by who]");
+            }
+            const Record r = store.recall(
+                args.id, std::stoll(flag(args, "epoch", "0")), flag(args, "reason"),
+                flag(args, "by", "jobctl-cpp"), ttl_from(flag(args, "grace"), 30.0));
+            std::cout << r.id << " recalled until " << abstraction::job::format_rfc3339(r.lease.recall->until)
+                      << std::endl;
 
         } else if (command == "orphans") {
             for (const Record& r : store.orphans()) {

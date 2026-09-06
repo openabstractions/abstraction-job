@@ -1,4 +1,5 @@
 #include <abstraction/job/record.h>
+#include <abstraction/job/ranges.h>
 
 #include <algorithm>
 #include <array>
@@ -269,6 +270,14 @@ void Record::validate_with(const std::vector<std::string>& check_content,
             throw Invalid("delegation needs both a system and an external id");
         }
     }
+    if (lease.recall) {
+        if (trim(lease.recall->reason).empty()) {
+            throw Invalid("a recall needs a reason the holder can act on");
+        }
+        if (lease.recall->until == TimePoint{}) {
+            throw Invalid("a recall needs a deadline");
+        }
+    }
 }
 
 std::string Record::encode() const {
@@ -277,7 +286,21 @@ std::string Record::encode() const {
     // or by const reference and none of them should have to remember a step.
     std::vector<std::string> derived_content;
     std::vector<std::string> derived_critical;
-    derive_models(*this, derived_content, derived_critical);
+    derive_features(*this, derived_content, derived_critical);
+
+    // One spelling of one proven set, whoever wrote it and however they wrote
+    // it. Only the two keys this layer owns are touched, and only when the
+    // checkpoint actually carries them: a single-stream record is written byte
+    // for byte as it always was, and a kind that never heard of ranges is never
+    // rewritten. A copy, because this stays const.
+    std::optional<Json> canonical = checkpoint;
+    if (canonical && canonical->is_object() && canonical->contains("verified")) {
+        canonical = checkpoint_with_ranges(canonical, ranges_from_checkpoint(canonical));
+        if (std::find(derived_content.begin(), derived_content.end(), feature::kRanges) ==
+            derived_content.end()) {
+            derived_content.push_back(feature::kRanges);
+        }
+    }
 
     validate_with(derived_content, derived_critical);
 
@@ -297,8 +320,8 @@ std::string Record::encode() const {
     d["kind"] = kind;
     d["state"] = state;
     d["spec"] = spec;
-    if (checkpoint) {
-        d["checkpoint"] = *checkpoint;
+    if (canonical) {
+        d["checkpoint"] = *canonical;
     }
 
     Json p = Json::object();
@@ -328,6 +351,16 @@ std::string Record::encode() const {
     l["owner"] = lease.owner;
     l["epoch"] = lease.epoch;
     l["expires_at"] = format_rfc3339(lease.expires_at);
+    if (lease.recall) {
+        Json rc = Json::object();
+        rc["reason"] = lease.recall->reason;
+        if (!lease.recall->by.empty()) {
+            rc["by"] = lease.recall->by;
+        }
+        rc["at"] = format_rfc3339(lease.recall->at);
+        rc["until"] = format_rfc3339(lease.recall->until);
+        l["recall"] = std::move(rc);
+    }
     d["lease"] = std::move(l);
 
     if (delegation) {
@@ -381,7 +414,7 @@ Record Record::decode(const std::string& text) {
     Json d;
     try {
         d = Json::parse(text);
-    } catch (const Json::exception& e) {
+    } catch (const Json::Error& e) {
         throw Invalid(std::string("not valid JSON: ") + e.what());
     }
     if (!d.is_object()) {
@@ -408,19 +441,19 @@ Record Record::decode(const std::string& text) {
         }
         bool ok = false;
         const int legacy = d.at("schema").get<int>();
-        r.content = models_for_legacy_schema(legacy, &ok);
+        r.content = features_for_legacy_schema(legacy, &ok);
         if (!ok) {
             throw UnknownSchema("legacy schema " + std::to_string(legacy));
         }
         r.critical.clear();
         for (const std::string& m : r.content) {
-            if (m != model::kStep) {
+            if (m != feature::kStep) {
                 r.critical.push_back(m);
             }
         }
         if (d.contains("delegation") && !d.at("delegation").is_null()) {
-            r.content.push_back(model::kDelegation);
-            r.critical.push_back(model::kDelegation);
+            r.content.push_back(feature::kDelegation);
+            r.critical.push_back(feature::kDelegation);
         }
     }
     if (const std::string missing = first_unknown_critical(r.critical); !missing.empty()) {
@@ -468,10 +501,23 @@ Record Record::decode(const std::string& text) {
         if (!l.is_object()) {
             throw Invalid("lease must be an object");
         }
-        reject_unknown_keys(l, {"owner", "epoch", "expires_at"}, "lease");
+        reject_unknown_keys(l, {"owner", "epoch", "expires_at", "recall"}, "lease");
         r.lease.owner = string_field(l, "owner");
         r.lease.epoch = int_field(l, "epoch");
         r.lease.expires_at = time_field(l, "expires_at");
+        if (l.contains("recall") && !l.at("recall").is_null()) {
+            const Json& rc = l.at("recall");
+            if (!rc.is_object()) {
+                throw Invalid("recall must be an object");
+            }
+            reject_unknown_keys(rc, {"reason", "by", "at", "until"}, "recall");
+            Recall recall;
+            recall.reason = string_field(rc, "reason");
+            recall.by = string_field(rc, "by");
+            recall.at = time_field(rc, "at");
+            recall.until = time_field(rc, "until");
+            r.lease.recall = recall;
+        }
     }
 
     if (d.contains("delegation") && !d.at("delegation").is_null()) {
@@ -529,37 +575,46 @@ Record Record::decode(const std::string& text) {
 }
 
 
-bool is_known_model(const std::string& name) {
-    return name == model::kBase || name == model::kIntent || name == model::kDelegation ||
-           name == model::kStep || name == model::kRanges;
+bool is_known_feature(const std::string& name) {
+    return name == feature::kBase || name == feature::kIntent || name == feature::kDelegation ||
+           name == feature::kStep || name == feature::kTerminal || name == feature::kRecall ||
+           name == feature::kRanges;
 }
 
-bool is_carried_model(const std::string& name) { return name == model::kRanges; }
+std::vector<std::string> known_features() {
+    std::vector<std::string> names = {feature::kBase,     feature::kIntent, feature::kDelegation,
+                                      feature::kStep,     feature::kTerminal, feature::kRecall,
+                                      feature::kRanges};
+    std::sort(names.begin(), names.end());
+    return names;
+}
 
-bool is_never_critical_model(const std::string& name) {
-    return name == model::kStep || name == model::kRanges;
+bool is_carried_feature(const std::string& name) { return name == feature::kRanges; }
+
+bool is_never_critical_feature(const std::string& name) {
+    return name == feature::kStep || name == feature::kRanges;
 }
 
 std::string first_unknown_critical(const std::vector<std::string>& critical) {
     for (const std::string& name : critical) {
-        if (!is_known_model(name)) {
+        if (!is_known_feature(name)) {
             return name;
         }
     }
     return "";
 }
 
-std::vector<std::string> models_for_legacy_schema(int schema, bool* ok) {
+std::vector<std::string> features_for_legacy_schema(int schema, bool* ok) {
     if (ok != nullptr) {
         *ok = true;
     }
     switch (schema) {
         case 3:
-            return {model::kBase};
+            return {feature::kBase};
         case 4:
-            return {model::kBase, model::kIntent};
+            return {feature::kBase, feature::kIntent};
         case 5:
-            return {model::kBase, model::kIntent, model::kStep};
+            return {feature::kBase, feature::kIntent, feature::kStep};
         default:
             if (ok != nullptr) {
                 *ok = false;
@@ -568,26 +623,34 @@ std::vector<std::string> models_for_legacy_schema(int schema, bool* ok) {
     }
 }
 
-void derive_models(const Record& r, std::vector<std::string>& out_content,
+void derive_features(const Record& r, std::vector<std::string>& out_content,
                    std::vector<std::string>& out_critical) {
-    out_content = {model::kBase};
-    out_critical = {model::kBase};
+    out_content = {feature::kBase};
+    out_critical = {feature::kBase};
 
     if (r.intent.has_value()) {
-        out_content.push_back(model::kIntent);
-        out_critical.push_back(model::kIntent);
+        out_content.push_back(feature::kIntent);
+        out_critical.push_back(feature::kIntent);
     }
     if (r.delegation.has_value()) {
-        out_content.push_back(model::kDelegation);
-        out_critical.push_back(model::kDelegation);
+        out_content.push_back(feature::kDelegation);
+        out_critical.push_back(feature::kDelegation);
     }
     // Advisory, and deliberately not critical: a reader that ignores a step is
     // correct about everything that matters.
     if (r.progress.step.has_value()) {
-        out_content.push_back(model::kStep);
+        out_content.push_back(feature::kStep);
+    }
+    if (r.terminal()) {
+        out_content.push_back(feature::kTerminal);
+        out_critical.push_back(feature::kTerminal);
+    }
+    if (r.lease.recall.has_value()) {
+        out_content.push_back(feature::kRecall);
+        out_critical.push_back(feature::kRecall);
     }
 
-    // A model this layer declares but cannot derive, because what it describes
+    // A feature this layer declares but cannot derive, because what it describes
     // lives inside the checkpoint and a checkpoint is opaque here.
     // Rediscovering it would mean reading one, so the declaration is carried
     // instead — the same treatment an unknown extension gets. Sorted, and
@@ -595,7 +658,7 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
     // implementations put it in the same slot.
     std::vector<std::string> carried;
     for (const std::string& name : r.content) {
-        if (is_carried_model(name) &&
+        if (is_carried_feature(name) &&
             std::find(carried.begin(), carried.end(), name) == carried.end()) {
             carried.push_back(name);
         }
@@ -615,14 +678,14 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
     }
 
     // Whatever the caller marked critical that this layer did not derive -- an
-    // extension, or a model a newer writer knows about -- stays marked.
+    // extension, or a feature a newer writer knows about -- stays marked.
     //
-    // Except the models whose own definition says a reader ignoring them is
+    // Except the features whose own definition says a reader ignoring them is
     // still correct. Marking one of those critical tells a stranger to refuse
     // the job over a decoration, and this layer will not relay that however it
     // arrived.
     for (const std::string& name : r.critical) {
-        if (is_never_critical_model(name)) {
+        if (is_never_critical_feature(name)) {
             continue;
         }
         const bool already =
@@ -636,8 +699,8 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
 }
 
 // Derived into locals and only then stored, because `content` and `critical`
-// are both an INPUT to derive_models and where its answer goes. Handing the
-// members straight in aliased the two: the first line of derive_models cleared
+// are both an INPUT to derive_features and where its answer goes. Handing the
+// members straight in aliased the two: the first line of derive_features cleared
 // them, so the loops that read what the caller had declared were reading a list
 // that had already been emptied, and appending to a vector while iterating it
 // besides. Nothing visible went wrong while every declaration was derivable
@@ -646,7 +709,7 @@ void derive_models(const Record& r, std::vector<std::string>& out_content,
 void Record::describe() {
     std::vector<std::string> derived_content;
     std::vector<std::string> derived_critical;
-    derive_models(*this, derived_content, derived_critical);
+    derive_features(*this, derived_content, derived_critical);
     content = std::move(derived_content);
     critical = std::move(derived_critical);
 }

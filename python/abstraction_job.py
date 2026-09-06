@@ -30,140 +30,115 @@ import binascii
 import json
 import os
 import secrets
-import tempfile
+import subprocess
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
-# The data models this implementation understands, and writes.
+try:
+    import abstraction_cas as _cas
+except ImportError:
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "cas", "python"))
+    import abstraction_cas as _cas
+
+# The data features this implementation understands, and writes.
 #
 # A name is namespaced and versioned: "abstraction.job/base@1". The version is
 # part of the name rather than a separate field, so an incompatible change to one
-# model is a NEW name that old readers correctly fail to recognise, while every
-# other model in the record stays readable.
+# feature is a NEW name that old readers correctly fail to recognise, while every
+# other feature in the record stays readable.
 #
 # This replaced an integer version. A version conflates WHAT CHANGED with WHAT
 # YOU MUST UNDERSTAND, so the only safe response to any unknown version was to
 # refuse the whole record -- even when the addition was decoration a reader could
 # have ignored. See CRITICAL below for the half that makes this more than a
 # rename.
-MODEL_BASE = "abstraction.job/base@1"
-MODEL_INTENT = "abstraction.job/intent@1"
-MODEL_DELEGATION = "abstraction.job/delegation@1"
-MODEL_STEP = "abstraction.job/step@1"
-# A checkpoint carrying proven byte ranges rather than only a prefix. NEVER
-# critical -- see the range section below for why that is the half of the design
-# that makes it an addition rather than a break.
-MODEL_RANGES = "abstraction.download/ranges@1"
+FEATURE_BASE = "abstraction.job/base@1"
+FEATURE_INTENT = "abstraction.job/intent@1"
+FEATURE_DELEGATION = "abstraction.job/delegation@1"
+FEATURE_STEP = "abstraction.job/step@1"
+# That a finished record is closed to its own lease holder: no update, no
+# release, no intent. It names a RULE rather than a field, which is why it went
+# out under an unchanged FEATURE_BASE and why a published reader walks a complete
+# job back to pending on a record this tree wrote. Declared whenever the state
+# is terminal, and critical there, because a reader that does not know the rule
+# is exactly the reader that breaks it.
+FEATURE_TERMINAL = "abstraction.job/terminal@1"
+# That the issuer has asked the holder for the lease back: ``lease.recall`` and
+# its rules -- a renew never extends past ``until``, the holder cannot re-claim
+# to shed it, and the lease lapsing at ``until`` is the eviction. Critical
+# whenever present.
+FEATURE_RECALL = "abstraction.job/recall@1"
+# A checkpoint that names WHICH byte ranges a predecessor proved, rather than
+# only how many leading ones. A single prefix describes one stream appending to
+# the end of a file and nothing else, so a caller fetching sixteen ranged parts
+# at once had to delete its parallelism to use this library.
+FEATURE_RANGES = "abstraction.download/ranges@1"
 
 # What this implementation can read. A record naming anything else in `critical`
 # is refused.
-KNOWN_MODELS = frozenset(
-    {MODEL_BASE, MODEL_INTENT, MODEL_DELEGATION, MODEL_STEP, MODEL_RANGES}
+KNOWN_FEATURES = frozenset(
+    {FEATURE_BASE, FEATURE_INTENT, FEATURE_DELEGATION, FEATURE_STEP, FEATURE_TERMINAL,
+     FEATURE_RECALL, FEATURE_RANGES}
 )
 
-# Models this layer declares but cannot derive, because what they describe lives
+# The features nobody is entitled to make a reader refuse a record over, because
+# ignoring them costs a reader nothing it can measure. Stripped rather than
+# merely not added: a writer that marked one critical would make every older
+# implementation reject records it would have handled correctly.
+# Features this layer declares but cannot derive, because what they describe lives
 # inside a field that is opaque here.
 #
 # Everything else in `content` is rediscovered on every write, so a declaration
-# cannot drift from the data. A model describing the CHECKPOINT's contents
+# cannot drift from the data. A feature describing the CHECKPOINT's contents
 # cannot be: working it out would mean reading the checkpoint, and this module
 # does not know what a checkpoint is. So the declaration is carried instead --
 # the same treatment an unknown extension gets, for the same reason.
-CARRIED_MODELS = frozenset({MODEL_RANGES})
+CARRIED_FEATURES = frozenset({FEATURE_RANGES})
 
-# Models that must not appear in `critical` whoever asked for it. Both are
-# advisory by their own definition, so marking one critical tells a stranger to
-# refuse work over a decoration. This layer will not relay that.
-NEVER_CRITICAL = frozenset({MODEL_STEP, MODEL_RANGES})
+NEVER_CRITICAL = frozenset({FEATURE_STEP, FEATURE_RANGES})
 
-# The integer this format used to carry, mapped onto the models each version
+# The integer this format used to carry, mapped onto the features each version
 # implied. No longer written; still read, because stores full of version 3 and 4
 # records exist on real disks and on a NAS. The mapping is exact rather than a
 # guess: those versions are frozen and it is known what each could contain.
 LEGACY_SCHEMAS = {
-    3: (MODEL_BASE,),
-    4: (MODEL_BASE, MODEL_INTENT),
-    5: (MODEL_BASE, MODEL_INTENT, MODEL_STEP),
+    3: (FEATURE_BASE,),
+    4: (FEATURE_BASE, FEATURE_INTENT),
+    5: (FEATURE_BASE, FEATURE_INTENT, FEATURE_STEP),
 }
 
 
-def understands(critical) -> tuple:
-    """The first critical model this implementation cannot read, and whether it
-    can proceed.
+def _reject_unknown_keys(obj, known, where: str) -> None:
+    """Refuse a field this implementation does not know.
 
-    Only `critical` is consulted. `content` is informational: a name there that
-    nobody here knows is data to carry, not a reason to stop.
+    Absent or not an object is nothing to check: the callers below all tolerate
+    a missing section, and a section of the wrong type is caught where it is
+    read.
     """
-    for name in critical or ():
-        if name not in KNOWN_MODELS:
-            return name, False
-    return "", True
+    if not isinstance(obj, dict):
+        return
+    for key in obj:
+        if key not in known:
+            raise Invalid(
+                f"unknown field {key!r} in {where} "
+                "-- refusing a record written by something newer"
+            )
 
 
-# What somebody wants to happen, as against what is happening.
-RUN = "run"
-PAUSE = "pause"
-CANCEL = "cancel"
-_WANTS = (RUN, PAUSE, CANCEL)
-# History, kept because each bump cost something and the next one should have to
-# justify itself against these:
-#   1  first cut.
-#   2  added Delegation. v1 assumed whoever held the lease was also doing the
-#      work; Windows BITS takes the whole job, works under its own service
-#      account while every process that asked is closed, and hands back only a
-#      GUID. A v1 reader would have seen no progress and concluded it stalled.
-#   3  moved artifact/sources/sink out into an opaque spec, and generalised
-#      progress. Those were download concepts sitting in the generic layer, so
-#      download could not evolve without changing everyone's schema. This is the
-#      bump that is supposed to stop the bumps.
+def _offset(value) -> int:
+    """Refuse 4194304.5 rather than rounding it.
 
-# States. The one that earns its place is TRANSFERRED: the work is finished and
-# proven, but the result has not been taken delivery of. It exists because the
-# process that does the work and the process that wants the result are not the
-# same process — which is the entire premise.
-PENDING = "pending"
-RUNNING = "running"
-TRANSFERRED = "transferred"
-COMPLETE = "complete"
-FAILED = "failed"
-CANCELLED = "cancelled"
-
-_STATES = {PENDING, RUNNING, TRANSFERRED, COMPLETE, FAILED, CANCELLED}
-_TERMINAL = {COMPLETE, FAILED, CANCELLED}
-
-
-class JobError(Exception):
-    """Base for every refusal this module makes."""
-
-
-class NotFound(JobError):
-    pass
-
-
-class Invalid(JobError):
-    pass
-
-
-class UnknownSchema(Invalid):
-    pass
-
-
-class LeaseHeld(JobError):
-    """Someone else owns this job right now."""
-
-
-class StaleEpoch(JobError):
-    """The caller's epoch is not the record's epoch: it lost ownership."""
-
-
-class LeaseExpired(JobError):
-    """The caller's lease ran out. Re-claim; do not renew."""
-
-
-class Terminal(JobError):
-    pass
+    JSON has one number type. A decoder that widens an offset to a float
+    re-emits it as one, and the byte-for-byte comparison three implementations
+    are held to then compares two spellings of the same number.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise Invalid(f"offset {value!r} is not a whole number")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +162,7 @@ class Terminal(JobError):
 # WHY THE PREFIX STAYS. Not redundancy and not politeness. A reader that has
 # never heard of `verified` resumes from `verified_prefix` and re-fetches the
 # rest, which is exactly what it does today. That is the whole reason this is an
-# addition rather than a break, and it is why MODEL_RANGES is never critical: an
+# addition rather than a break, and it is why FEATURE_RANGES is never critical: an
 # old reader ignoring the ranges loses some bytes to a second fetch, and marking
 # it critical would stop every existing reader dead for no safety gain. The
 # prefix is DERIVED from the set on write, so nothing has to remember to keep
@@ -395,6 +370,70 @@ def checkpoint_with_ranges(checkpoint, ranges) -> Dict[str, Any]:
     return out
 
 
+def understands(critical) -> tuple:
+    """The first critical feature this implementation cannot read, and whether it
+    can proceed.
+
+    Only `critical` is consulted. `content` is informational: a name there that
+    nobody here knows is data to carry, not a reason to stop.
+    """
+    for name in critical or ():
+        if name not in KNOWN_FEATURES:
+            return name, False
+    return "", True
+
+
+# What somebody wants to happen, as against what is happening.
+RUN = "run"
+PAUSE = "pause"
+CANCEL = "cancel"
+_WANTS = (RUN, PAUSE, CANCEL)
+
+# States. The one that earns its place is TRANSFERRED: the work is finished and
+# proven, but the result has not been taken delivery of. It exists because the
+# process that does the work and the process that wants the result are not the
+# same process — which is the entire premise.
+PENDING = "pending"
+RUNNING = "running"
+TRANSFERRED = "transferred"
+COMPLETE = "complete"
+FAILED = "failed"
+CANCELLED = "cancelled"
+
+_STATES = {PENDING, RUNNING, TRANSFERRED, COMPLETE, FAILED, CANCELLED}
+_TERMINAL = {COMPLETE, FAILED, CANCELLED}
+
+
+class JobError(Exception):
+    """Base for every refusal this module makes."""
+
+
+class NotFound(JobError):
+    pass
+
+
+class Invalid(JobError):
+    pass
+
+
+class UnknownSchema(Invalid):
+    pass
+
+
+class LeaseHeld(JobError):
+    """Someone else owns this job right now."""
+
+
+class StaleEpoch(JobError):
+    """The caller's epoch is not the record's epoch: it lost ownership."""
+
+
+class LeaseExpired(JobError):
+    """The caller's lease ran out. Re-claim; do not renew."""
+
+
+class Terminal(JobError):
+    pass
 
 
 def _rfc3339(t: datetime) -> str:
@@ -483,9 +522,40 @@ class Lease:
     owner: str = ""
     epoch: int = 0
     expires_at: datetime = field(default_factory=lambda: datetime.fromtimestamp(0, timezone.utc))
+    recall: Optional["Recall"] = None
 
     def held(self, now: datetime) -> bool:
         return bool(self.owner) and now < self.expires_at
+
+    def recalled(self) -> bool:
+        return self.recall is not None
+
+
+@dataclass
+class Recall:
+    """The issuer asking for the lease back -- the half of a lease this design
+    lacked. Ours expired; none could be revoked early with a reason the holder
+    could act on.
+
+    Not an intent. Intent is what the user wants of the job; a recall is what
+    the issuer demands of the resource, addressed to one holding -- the epoch it
+    was decided against -- so a claim replaces it with nothing.
+
+    The fallback is the lease lapsing at ``until``: the recall moves
+    ``expires_at`` earlier and renew never extends past it. WDDM's shape, not
+    Android's -- residency ends whether or not the holder trimmed, and the
+    holder finds out on its next write. A lease cannot kill a process on another
+    machine; it can stop believing in it.
+
+    ``reason`` is opaque here, chosen by the issuer for the holder's kind, as
+    ``kind`` scopes ``spec``. Required: a recall without one is a cancel wearing
+    the wrong field.
+    """
+
+    reason: str = ""
+    by: str = ""
+    at: datetime = field(default_factory=lambda: datetime.fromtimestamp(0, timezone.utc))
+    until: datetime = field(default_factory=lambda: datetime.fromtimestamp(0, timezone.utc))
 
 
 @dataclass
@@ -559,8 +629,8 @@ class Record:
     kind: str = ""
     state: str = PENDING
     # What this record carries, and the subset a reader MUST understand or
-    # refuse it entirely. See MODEL_BASE and the `critical` rule: not knowing
-    # the step model is harmless, not knowing the intent model means working on
+    # refuse it entirely. See FEATURE_BASE and the `critical` rule: not knowing
+    # the step feature is harmless, not knowing the intent feature means working on
     # a job somebody asked to stop.
     content: List[str] = field(default_factory=list)
     critical: List[str] = field(default_factory=list)
@@ -591,6 +661,7 @@ class Record:
         missing, ok = understands(self.critical)
         if not ok:
             raise UnknownSchema(f"requires {missing!r}")
+        self.checkpoint_ranges()
         for name, value in (self.extensions or {}).items():
             if not str(name).strip():
                 raise Invalid("an extension needs a name saying who understands it")
@@ -624,6 +695,12 @@ class Record:
         if self.delegation is not None:
             if not self.delegation.system.strip() or not self.delegation.external_id.strip():
                 raise Invalid("delegation needs both a system and an external id")
+        rc = self.lease.recall
+        if rc is not None:
+            if not rc.reason.strip():
+                raise Invalid("a recall needs a reason the holder can act on")
+            if rc.until.timestamp() == 0:
+                raise Invalid("a recall needs a deadline")
 
     def terminal(self) -> bool:
         return self.state in _TERMINAL
@@ -644,12 +721,55 @@ class Record:
         """Somebody asked this to stop and it has not finished."""
         return self.wants() == PAUSE and not self.terminal()
 
-    # ---- ranges -----------------------------------------------------------
-    #
-    # A checkpoint is opaque to this module, and these four methods do not make
-    # it less so: they are a canonical form offered to a caller that has decided
-    # its checkpoint holds proven ranges, not a meaning read out of every record
-    # relayed. See the range section above.
+    def stranded(self) -> bool:
+        """Whether this record's own state and intent leave work for a sweep.
+
+        Written once and asked by every store, because the two answers here were
+        each bought with a real loss and neither is recoverable from the words
+        "nobody holds the lease".
+
+        A TRANSFERRED job is not stranded, and the difference cost a NAS 313 MB:
+        transferred is deliberately not terminal, so a sweep saw a finished,
+        digest-proven job with a lapsed lease and fetched the whole thing again,
+        then again thirty seconds later, forever. What it waits for is an
+        acknowledgement and no amount of re-downloading produces one.
+
+        A PAUSED job is not stranded either -- it looks abandoned and is not,
+        and adopting it would restart work seconds after a person stopped it.
+        Unless nobody ever carried the pause out: an owner that honours one
+        releases the lease and the record stops being RUNNING, so a record still
+        RUNNING under nobody is an owner that died between the two. Skipping
+        that one makes the state permanent, because nothing may claim the job
+        and therefore nothing may pause, resume or cancel it either.
+        """
+        if self.state == TRANSFERRED:
+            return False
+        return not self.paused() or self.state == RUNNING
+
+    def delegated(self) -> bool:
+        """Something outside this process is doing the work.
+
+        A caller finding this true must not start working itself: the external
+        system does not participate in the lease, so two workers is exactly the
+        damage the lease exists to prevent.
+        """
+        return self.delegation is not None
+
+    def _canonicalise_ranges(self) -> None:
+        """Rewrite the two keys this layer owns into the one form all three
+        implementations write, and leave every other key alone.
+
+        A checkpoint with no ``verified`` key is untouched, byte for byte: that
+        is what keeps a single-stream record identical to the one this format
+        has always written, and it is why a kind that never heard of ranges is
+        never rewritten.
+        """
+        cp = self.checkpoint
+        if not isinstance(cp, dict) or VERIFIED_KEY not in cp:
+            return
+        self.checkpoint = checkpoint_with_ranges(cp, ranges_from_checkpoint(cp))
+        if FEATURE_RANGES not in self.content:
+            self.content = list(self.content) + [FEATURE_RANGES]
 
     def checkpoint_ranges(self) -> List[Range]:
         """The proven ranges this record's checkpoint carries.
@@ -662,7 +782,7 @@ class Record:
 
     def set_checkpoint_ranges(self, ranges) -> None:
         """Record what is proven, merged into canonical form, and declare the
-        ranges model.
+        ranges feature.
 
         Both halves matter. Without the canonical form two writers spell one
         state two ways; without the declaration a reader cannot tell whether an
@@ -670,8 +790,8 @@ class Record:
         writer had never heard of ranges".
         """
         self.checkpoint = checkpoint_with_ranges(self.checkpoint, ranges)
-        if MODEL_RANGES not in self.content:
-            self.content = list(self.content) + [MODEL_RANGES]
+        if FEATURE_RANGES not in self.content:
+            self.content = list(self.content) + [FEATURE_RANGES]
 
     def add_checkpoint_range(self, start: int, end: int) -> None:
         """Fold one newly proven range into the checkpoint. What a parallel
@@ -682,41 +802,36 @@ class Record:
         """Remove the ranges and the declaration, leaving every other key alone.
 
         The declaration is carried rather than derived, so it has to be
-        withdrawn explicitly; a record that kept declaring a model whose data it
+        withdrawn explicitly; a record that kept declaring a feature whose data it
         no longer holds sends a reader looking for something that is not there.
         """
         if isinstance(self.checkpoint, dict):
             rest = {k: v for k, v in self.checkpoint.items() if k != VERIFIED_KEY}
             self.checkpoint = {k: rest[k] for k in sorted(rest)} or None
-        self.content = [n for n in self.content if n != MODEL_RANGES]
-
-    def delegated(self) -> bool:
-        """Something outside this process is doing the work.
-
-        A caller finding this true must not start working itself: the external
-        system does not participate in the lease, so two workers is exactly the
-        damage the lease exists to prevent.
-        """
-        return self.delegation is not None
+        self.content = [n for n in self.content if n != FEATURE_RANGES]
 
     def to_json(self) -> bytes:
+        # One spelling of one proven set, whoever wrote it and however they
+        # wrote it -- see _canonicalise_ranges. Before describe(), so the
+        # declaration that follows sees the ranges the record actually carries.
+        self._canonicalise_ranges()
         # Describe first, then check, which is the order Go's Encode and C++'s
         # encode() use. This module used to validate first, so a record whose
         # declaration had not been filled in yet was refused for saying nothing
         # about itself -- while the other two implementations derived the
         # declaration and wrote it. Each half was self-consistent, so no unit
         # test in one language could see it.
-        #
-        # What this implementation writes, it writes as its own version. A
-        # record read at 3 and written back at 3 while carrying an intent would
-        # tell an older reader it is safe to ignore fields it does not know,
-        # which is exactly the risk the schema check refuses.
         self.describe()
         self.validate()
         # Key order and omissions match the Go struct tags exactly. Go decodes
         # with DisallowUnknownFields, so an extra key here is not a cosmetic
         # difference — it makes the record unreadable to the other half of the
         # abstraction.
+        #
+        # What this implementation writes, it writes as its own version. A
+        # record read at 3 and written back at 3 while carrying an intent
+        # would tell an older reader it is safe to ignore fields it does not
+        # know, which is exactly the risk the schema check refuses.
         d: Dict[str, Any] = {
             "content": list(self.content),
         }
@@ -748,6 +863,13 @@ class Record:
             "epoch": self.lease.epoch,
             "expires_at": _rfc3339(self.lease.expires_at),
         }
+        if self.lease.recall is not None:
+            rc: Dict[str, Any] = {"reason": self.lease.recall.reason}
+            if self.lease.recall.by:
+                rc["by"] = self.lease.recall.by
+            rc["at"] = _rfc3339(self.lease.recall.at)
+            rc["until"] = _rfc3339(self.lease.recall.until)
+            d["lease"]["recall"] = rc
         if self.delegation is not None:
             deleg: Dict[str, Any] = {
                 "system": self.delegation.system,
@@ -784,37 +906,38 @@ class Record:
 
         Caller-declared criticals are preserved -- an extension's writer may have
         said "refuse this record if you cannot read my payload", and this layer
-        is not entitled to downgrade that.
+        is not entitled to downgrade that. The exception is NEVER_CRITICAL,
+        where the feature's own definition says nobody may demand it.
         """
-        content = [MODEL_BASE]
-        critical = [MODEL_BASE]
+        content = [FEATURE_BASE]
+        critical = [FEATURE_BASE]
         if self.intent is not None:
-            content.append(MODEL_INTENT)
-            critical.append(MODEL_INTENT)
+            content.append(FEATURE_INTENT)
+            critical.append(FEATURE_INTENT)
         if self.delegation is not None:
-            content.append(MODEL_DELEGATION)
-            critical.append(MODEL_DELEGATION)
+            content.append(FEATURE_DELEGATION)
+            critical.append(FEATURE_DELEGATION)
         # Advisory, and deliberately not critical: a reader that ignores a step
         # is correct about everything that matters.
         if self.progress.step is not None:
-            content.append(MODEL_STEP)
-        # A model this layer declares but cannot derive, because what it
+            content.append(FEATURE_STEP)
+        if self.terminal():
+            content.append(FEATURE_TERMINAL)
+            critical.append(FEATURE_TERMINAL)
+        if self.lease.recall is not None:
+            content.append(FEATURE_RECALL)
+            critical.append(FEATURE_RECALL)
+        # A feature this layer declares but cannot derive, because what it
         # describes lives inside the checkpoint and a checkpoint is opaque here.
         # Rediscovering it would mean reading one, so the declaration is carried
         # instead -- the same treatment an unknown extension gets. Sorted, and
         # placed here rather than among the extension names, so all three
-        # implementations put it in the same slot. See CARRIED_MODELS.
-        content.extend(sorted({n for n in self.content or () if n in CARRIED_MODELS}))
+        # implementations put it in the same slot. See CARRIED_FEATURES.
+        content.extend(sorted({n for n in self.content or () if n in CARRIED_FEATURES}))
         content.extend(sorted(self.extensions or {}))
 
         for name in self.critical or ():
-            # Except the models whose own definition says a reader ignoring them
-            # is still correct. Marking one critical tells a stranger to refuse
-            # the job over a decoration, and this layer will not relay that
-            # however it arrived.
-            if name in NEVER_CRITICAL:
-                continue
-            if name not in critical and name in content:
+            if name not in critical and name in content and name not in NEVER_CRITICAL:
                 critical.append(name)
 
         self.content = content
@@ -826,19 +949,50 @@ class Record:
             d = json.loads(b)
         except ValueError as e:
             raise Invalid(str(e)) from None
+        if not isinstance(d, dict):
+            raise Invalid("record must be a JSON object")
+        # An unknown field is far more likely to be a newer writer than a typo,
+        # and continuing a job whose description we only partly understand is
+        # exactly the risk this refuses to take. Go and C++ have always refused
+        # here; this side quietly DROPPED the field instead, which is worse than
+        # either -- it destroyed a participant's data on the next write, and did
+        # it invisibly, because nobody here could read what was lost.
+        _reject_unknown_keys(
+            d,
+            (
+                "schema", "content", "critical", "id", "kind", "state", "spec",
+                "checkpoint", "progress", "lease", "delegation", "requires",
+                "error", "intent", "extensions", "created_at", "updated_at",
+            ),
+            "record",
+        )
+        _reject_unknown_keys(d.get("progress"), ("done", "total", "updated_at", "step"), "progress")
+        _reject_unknown_keys(
+            (d.get("progress") or {}).get("step"),
+            ("name", "ordinal", "of", "done", "total"),
+            "step",
+        )
+        _reject_unknown_keys(d.get("lease"), ("owner", "epoch", "expires_at", "recall"), "lease")
+        _reject_unknown_keys(
+            (d.get("lease") or {}).get("recall"), ("reason", "by", "at", "until"), "recall"
+        )
+        _reject_unknown_keys(
+            d.get("delegation"), ("system", "external_id", "delivered"), "delegation"
+        )
+        _reject_unknown_keys(d.get("intent"), ("want", "by", "at"), "intent")
         content = list(d.get("content") or ())
         critical = list(d.get("critical") or ())
         if not content and "schema" in d:
             # A legacy record. The mapping is exact, not a guess: those versions
             # are frozen and it is known what each one could contain.
-            models = LEGACY_SCHEMAS.get(d.get("schema"))
-            if models is None:
+            features = LEGACY_SCHEMAS.get(d.get("schema"))
+            if features is None:
                 raise UnknownSchema(f"legacy schema {d.get('schema')}")
-            content = list(models)
-            critical = [m for m in models if m != MODEL_STEP]
+            content = list(features)
+            critical = [m for m in features if m != FEATURE_STEP]
             if d.get("delegation") is not None:
-                content.append(MODEL_DELEGATION)
-                critical.append(MODEL_DELEGATION)
+                content.append(FEATURE_DELEGATION)
+                critical.append(FEATURE_DELEGATION)
         missing, ok = understands(critical)
         if not ok:
             raise UnknownSchema(
@@ -877,6 +1031,16 @@ class Record:
                 owner=l.get("owner", ""),
                 epoch=l.get("epoch", 0),
                 expires_at=_parse_time(l.get("expires_at", "")),
+                recall=(
+                    Recall(
+                        reason=l["recall"].get("reason", ""),
+                        by=l["recall"].get("by", ""),
+                        at=_parse_time(l["recall"].get("at", "")),
+                        until=_parse_time(l["recall"].get("until", "")),
+                    )
+                    if isinstance(l.get("recall"), dict)
+                    else None
+                ),
             ),
             delegation=(
                 Delegation(
@@ -903,6 +1067,33 @@ class Record:
         )
         r.validate()
         return r
+
+
+def _renewed_until(lease: Lease, now: datetime, ttl_seconds: float) -> datetime:
+    """Where a renewal lands: the caller's TTL, or the recall's deadline if that
+    comes first. Without the cap a holder keeps its lease alive through any
+    recall simply by renewing, and eviction is a suggestion."""
+    want = datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc)
+    if lease.recall is not None and lease.recall.until < want:
+        return lease.recall.until
+    return want
+
+
+def _recall(r: Record, now: datetime, epoch: int, reason: str, by: str,
+            grace_seconds: float) -> None:
+    """The rule, shared by every binding. Refusals come in the order a caller
+    would ask about them: finished, moved, nobody there."""
+    if r.terminal():
+        raise Terminal(f"{r.id} is {r.state}")
+    if r.lease.epoch != epoch:
+        raise StaleEpoch(f"record is at epoch {r.lease.epoch}, recall was decided against {epoch}")
+    if not r.lease.held(now):
+        raise LeaseExpired(f"nobody holds {r.id}")
+    until = datetime.fromtimestamp(now.timestamp() + grace_seconds, timezone.utc)
+    r.lease.recall = Recall(reason=reason, by=by, at=now, until=until)
+    if until < r.lease.expires_at:
+        r.lease.expires_at = until
+    r.updated_at = now
 
 
 def new_id() -> str:
@@ -979,12 +1170,19 @@ class Store(Protocol):
 
     def release(self, job_id: str, epoch: int) -> None:
         """Give up a lease early. A courtesy: everything works without it, only
-        more slowly."""
+        more slowly. It is an update, so it is refused on a finished job -- there
+        is nothing left to hand over, and the lease lapses on its own."""
         ...
 
     def update(self, job_id: str, epoch: int, mutate: Callable[["Record"], None]) -> "Record":
         """Apply mutate, but only if the caller still holds the lease at the
-        epoch it presents. The single gate every change passes through."""
+        epoch it presents AND the record is not already complete, failed or
+        cancelled. The single gate every change passes through.
+
+        Terminal is judged on the record as read, so the write that ends a job
+        lands and the one after it does not. An owner therefore puts everything
+        it wants recorded into the same update as the final state.
+        """
         ...
 
     def set_intent(self, job_id: str, want: str, by: str = "") -> "Record":
@@ -994,6 +1192,15 @@ class Store(Protocol):
         the process doing it -- a person clicks cancel while a service on another
         machine moves the bytes -- and requiring a lease would mean stealing the
         job in order to stop it, which is what the lease prevents.
+        """
+        ...
+
+    def recall(self, job_id: str, epoch: int, reason: str, by: str = "",
+               grace_seconds: float = 30.0) -> "Record":
+        """Ask the holder at ``epoch`` -- the epoch the caller OBSERVED, not one
+        it holds -- for the lease back by now+grace, for a reason it can act
+        on. The lease lapses at that deadline either way: that is the fallback,
+        and what makes this a demand rather than a suggestion. Not an intent.
         """
         ...
 
@@ -1027,15 +1234,93 @@ class Scratch(Protocol):
         ...
 
 
-# How long a claim token may exist without its record having caught up before
-# the claimant that made it is presumed gone. The two writes are microseconds
-# apart in the same function, so anything on this scale is a crash rather than a
-# slow disk -- and generous even for a store on a share.
-_CLAIM_HANDOVER_SECONDS = 10.0
+REGISTRY_FILE = "services.json"
 
-# A bound on how far a claim will step over abandoned tokens before giving up
-# and saying so, rather than looping.
-_MAX_EPOCH_SKIP = 64
+
+def _store_segments(rel: str) -> List[str]:
+    """A relative path reduced to the segments a store would see, in the one
+    spelling two of them can be compared in.
+
+    A path that climbs above the root returns nothing: that is containment's
+    question, answered before this one is asked, and answering it again here
+    with a different rule would give two verdicts on one record.
+    """
+    out: List[str] = []
+    for seg in rel.replace("\\", "/").split("/"):
+        if not seg or seg == ".":
+            continue
+        if seg == "..":
+            if not out:
+                return []
+            out.pop()
+            continue
+        out.append(_fold_segment(seg))
+    return out
+
+
+def _fold_segment(seg: str) -> str:
+    """One segment in the spelling a filesystem would give it.
+
+    Windows drops a trailing dot or space from a name, so `jobs.` opens `jobs`.
+    Dropping it here too keeps the answer the same on both platforms, which is
+    the property that matters: a record refused by one and accepted by the other
+    would mean the refusal depends on who looked. A name that is NOTHING but
+    dots and spaces is left alone -- it is a real name on POSIX, and not one
+    Windows will open at all.
+    """
+    trimmed = seg.strip()
+    return (trimmed.rstrip(". ") or trimmed).lower()
+
+
+def reserved(owner: str, rel: str) -> bool:
+    """Does rel -- a path relative to the store root -- name part of the file
+    binding's own layout rather than free space inside it?
+
+    A layer above this one lets a caller name where bytes land, and resolves a
+    relative destination against the store root. Containment stopped such a path
+    climbing OUT of the root; it never stopped one aiming at what is IN it. A
+    final of `jobs/<id>.json` overwrites a job record and a final of
+    `work/<other>` overwrites another job's partial, and both are contained.
+
+    The layout is this binding's, so the answer is this binding's to give. The
+    alternative was the download layer spelling "jobs" and "work" itself, which
+    is the coupling the opaque spec exists to prevent.
+
+    ``owner`` is the job asking. Its own scratch -- work/<owner> and everything
+    under it -- is not reserved against that job and is reserved against every
+    other, so a download can still put its partial where the store told it to.
+    An empty owner asks on behalf of no job, which reserves the whole of work/.
+
+    Case is folded and a trailing dot or space trimmed from every segment, on
+    every platform. Deliberately unlike the containment comparison, which folds
+    case only where the filesystem does: containment compares two paths on THIS
+    machine, and this compares a record's path against names the contract fixed.
+    A record refused by Windows and accepted by Linux would mean the refusal
+    depends on who looked -- and `Jobs/x.json` does land in `jobs/` on NTFS, as
+    does `jobs./x.json`.
+    """
+    segs = _store_segments(rel)
+    if not segs:
+        return False
+    if segs[0] == "jobs":
+        return True
+    if segs[0] == "work":
+        return len(segs) < 2 or segs[1] != _fold_segment(owner or "")
+    return segs[0] == REGISTRY_FILE and len(segs) == 1
+
+
+def root_name(rel: str) -> str:
+    """The name rel takes in the store root, or "" if it names something deeper,
+    climbs out of the root, or is empty.
+
+    The root is a shared namespace and this binding is not its only occupant:
+    the download layer keeps a supervisor heartbeat and a nudge socket beside
+    jobs/ and work/. A layer that puts a file there has to be able to ask
+    whether a path aims at it, and to ask in the same spelling, or the two of
+    them protect different sets of names.
+    """
+    segs = _store_segments(rel)
+    return segs[0] if len(segs) == 1 else ""
 
 
 class FileStore:
@@ -1045,16 +1330,9 @@ class FileStore:
     service and a machine that has just rebooted can all agree on without any of
     them running at the same time. No daemon, no database, no socket.
 
-        <root>/jobs/<id>.json        the record
-        <root>/jobs/<id>.epoch.<n>   claim token for epoch n, created O_EXCL
-        <root>/work/<id>             scratch space for a job that needs it
-
-    The claim tokens are the mutual exclusion. Exclusive create is atomic on both
-    NTFS and POSIX, so exactly one process can create `<id>.epoch.7`. Because
-    each generation gets its own filename, a token left behind by a process that
-    was killed blocks nothing — the next claimant takes epoch 8. A single
-    lockfile would instead have to be broken by timeout, and breaking locks by
-    timeout is how two owners end up working one job.
+        <root>/jobs/<id>.json        the record, every write a cas change on it
+        <root>/jobs/<id>.json.lock   the lock cas takes for that write
+        <root>/work/<id>             the name job <id> may spend on scratch
     """
 
     def __init__(self, root: str, now: Callable[[], datetime] = None):
@@ -1080,13 +1358,16 @@ class FileStore:
     def _record_path(self, job_id: str) -> str:
         return os.path.join(self._root, "jobs", job_id + ".json")
 
-    def _epoch_path(self, job_id: str, epoch: int) -> str:
-        return os.path.join(self._root, "jobs", f"{job_id}.epoch.{epoch}")
-
     def work_path(self, job_id: str) -> str:
-        """Scratch space a job may use while it runs. What goes there is the
-        kind's business; the store only guarantees the path is derived from the
-        id, so a successor can find what a predecessor left."""
+        """The name this job may spend on scratch while it runs.
+
+        A NAME, not a shape. The store guarantees it is derived from the id -- so
+        a successor finds what a predecessor left -- and that nothing else will
+        use it. Whether the job makes it a file or a directory is the job's
+        business: download writes its partial there as a file. The store creates
+        work/; it does not create this. `reserved` says the same from the other
+        side.
+        """
         return os.path.join(self._root, "work", job_id)
 
     # ---- reading ----------------------------------------------------------
@@ -1096,11 +1377,10 @@ class FileStore:
         will. That is what makes progress observable from outside — a callback
         cannot, because a callback is bound to the lifetime of the process that
         registered it, and that lifetime is the one that fails."""
-        try:
-            with open(self._record_path(job_id), "rb") as f:
-                return Record.from_json(f.read())
-        except FileNotFoundError:
-            raise NotFound(job_id) from None
+        data = _cas.read(self._record_path(job_id))
+        if data is None:
+            raise NotFound(job_id)
+        return Record.from_json(data)
 
     def list(self) -> List[Record]:
         out = []
@@ -1125,26 +1405,25 @@ class FileStore:
         over — so a design that relies on graceful handoff has no answer for the
         case that actually loses a 40 GB download.
 
-        A TRANSFERRED job is not an orphan, and the difference cost a NAS 313 MB.
-        Transferred is not terminal — deliberately, because the requester still
-        has to take delivery — so ``claimable`` says yes to it, and a supervisor
-        sweeping for stranded work saw a finished, digest-proven job with a
-        lapsed lease and downloaded the whole thing again. Then again 30 seconds
-        later, forever. What a transferred job waits for is an acknowledgement,
-        and no amount of re-downloading produces one.
-
-        A PAUSED job is not an orphan either, and for the same reason: it looks
-        abandoned and is not. Somebody asked it to stop, so the lease was
-        released deliberately — and a sweep that adopted it would start the work
-        again seconds after a person pressed pause, which is worse than never
-        having offered pause at all.
+        Which records qualify is ``Record.stranded``.
         """
-        return [
-            r for r in self.list()
-            if self.claimable(r) and r.state != TRANSFERRED and not r.paused()
-        ]
+        return [r for r in self.list() if self.claimable(r) and r.stranded()]
 
     # ---- writing ----------------------------------------------------------
+
+    def _change(self, job_id: str, edit: Callable[[Record], None]) -> Record:
+        out: List[Record] = []
+
+        def step(cur):
+            if cur is None:
+                raise NotFound(job_id)
+            r = Record.from_json(cur)
+            edit(r)
+            out.append(r)
+            return r.to_json()
+
+        _cas.change(self._record_path(job_id), step)
+        return out[0]
 
     def set_intent(self, job_id: str, want: str, by: str = "") -> Record:
         """Say what should happen, WITHOUT holding the lease.
@@ -1161,14 +1440,15 @@ class FileStore:
         """
         if want not in _WANTS:
             raise Invalid(f"intent {want!r}")
-        r = self.load(job_id)
-        if r.terminal():
-            raise Terminal(f"{job_id} is {r.state}")
-        now = self._now()
-        r.intent = Intent(want=want, by=by, at=now)
-        r.updated_at = now
-        self._write(r)
-        return r
+
+        def edit(r: Record) -> None:
+            if r.terminal():
+                raise Terminal(f"{job_id} is {r.state}")
+            now = self._now()
+            r.intent = Intent(want=want, by=by, at=now)
+            r.updated_at = now
+
+        return self._change(job_id, edit)
 
     def submit(self, r: Record) -> str:
         if not r.id:
@@ -1180,123 +1460,48 @@ class FileStore:
         r.created_at = now
         r.updated_at = now
         r.progress.updated_at = now
-        data = r.to_json()
-        # Exclusive: submitting the same id twice is a caller bug, not something
-        # to paper over by overwriting a job that may be running right now.
-        fd = os.open(self._record_path(r.id), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        try:
+            _cas.write(self._record_path(r.id), None, r.to_json())
+        except _cas.Moved:
+            raise Invalid(f"{r.id} already exists") from None
         return r.id
 
     def claim(self, job_id: str, owner: str, ttl_seconds: float) -> Record:
         """Take ownership for ttl_seconds, returning the record with the caller's
         new epoch. Every later write must present that epoch."""
+        return self.claim_from(self.load(job_id), owner, ttl_seconds)
+
+    def claim_from(self, seen: Record, owner: str, ttl_seconds: float) -> Record:
+        """Take ownership of the job AS THE CALLER LAST READ IT.
+
+        Refused with LeaseHeld if the job changed hands since, so a sweeper that
+        already holds a record from ``orphans`` is told rather than quietly
+        claiming a job that is no longer the one it decided about. The record
+        written is the one on disk under the lock, never the caller's copy, so
+        an intent set since the caller read is kept.
+        """
         if not owner.strip():
             raise JobError("claim requires an owner")
-        r = self.load(job_id)
-        if r.terminal():
-            raise Terminal(f"{job_id} is {r.state}")
-        now = self._now()
-        if r.lease.held(now) and r.lease.owner != owner:
-            raise LeaseHeld(f"{r.lease.owner} holds it until {_rfc3339(r.lease.expires_at)}")
 
-        fd, nxt = self._take_epoch(job_id, r.lease.epoch + 1)
-        with os.fdopen(fd, "w") as f:
-            f.write(owner + "\n")
+        def edit(r: Record) -> None:
+            if r.lease.epoch != seen.lease.epoch:
+                raise LeaseHeld(
+                    f"the record moved to epoch {r.lease.epoch} since it was read at {seen.lease.epoch}"
+                )
+            if r.terminal():
+                raise Terminal(f"{r.id} is {r.state}")
+            now = self._now()
+            if r.lease.held(now) and (r.lease.owner != owner or r.lease.recalled()):
+                raise LeaseHeld(f"{r.lease.owner} holds it until {_rfc3339(r.lease.expires_at)}")
+            r.lease = Lease(
+                owner=owner,
+                epoch=r.lease.epoch + 1,
+                expires_at=datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc),
+            )
+            if r.state in (PENDING, RUNNING):
+                r.state = RUNNING
 
-        r.lease = Lease(
-            owner=owner,
-            epoch=nxt,
-            expires_at=datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc),
-        )
-        if r.state in (PENDING, RUNNING):
-            r.state = RUNNING
-        self._write(r)
-
-        # The previous epoch's token can go now. Nobody will ever ask for it
-        # again: a claimant derives its epoch from the RECORD, which now says
-        # nxt. Left alone these accumulate one file per claim, forever -- a real
-        # store reached 1069 files for 17 jobs.
-        if nxt > 1:
-            try:
-                os.remove(self._epoch_path(job_id, nxt - 1))
-            except OSError:
-                pass
-        return r
-
-    def _age_on_store(self, mtime: float) -> float:
-        """How old a file is according to the clock that stamped it.
-
-        The obvious ``time.time() - mtime`` compares two clocks: this machine's,
-        and whatever holds the store. On a share those are different machines. A
-        store host running behind by more than the handover makes every freshly
-        written token look abandoned, so two claimants skip past each other and
-        both start work -- which is what the epoch exists to prevent.
-
-        So the age is measured against a mark the store itself just made. When
-        that cannot be done the answer is "too recent to touch": refusing a claim
-        costs a retry, taking one wrongly costs correctness.
-        """
-        jobs = os.path.join(self._root, "jobs")
-        try:
-            fd, probe = tempfile.mkstemp(prefix=".now-", dir=jobs)
-            os.close(fd)
-        except OSError:
-            return 0.0
-        try:
-            return os.stat(probe).st_mtime - mtime
-        except OSError:
-            return 0.0
-        finally:
-            try:
-                os.unlink(probe)
-            except OSError:
-                pass
-
-    def _take_epoch(self, job_id: str, first: int):
-        """Create the claim token for the first epoch at or after `first` that
-        nobody holds, and return (fd, epoch).
-
-        # Why this is not simply "create the next one"
-
-        It was, and a job could be bricked by it. The token is created BEFORE the
-        record is written, so a process that dies in between leaves a token for
-        an epoch the record never reached. Every later claim then computes the
-        same next epoch, finds that token, and fails -- permanently. The job
-        cannot be claimed, so it cannot be updated, cancelled, adopted or
-        finished by anyone, ever.
-
-        Seen on a live store: record at epoch 216, a token for 217, and a
-        supervisor reporting a healthy sweep every five seconds while that job
-        silently failed its claim. Setting an intent on it did nothing either,
-        because honouring an intent requires claiming first.
-
-        # Why skipping is safe, and when it is not
-
-        Skipping past a HELD epoch would destroy the exclusivity the token exists
-        to provide, so freshness decides. A claimant that is genuinely mid-flight
-        wrote its token moments ago and is about to write the record; this claim
-        must lose to it. A token that has sat there while the record stayed
-        behind belongs to nobody.
-
-        Compared against real time, not the store's clock: an injected test clock
-        says nothing about when the filesystem wrote a file.
-        """
-        for nxt in range(first, first + _MAX_EPOCH_SKIP):
-            path = self._epoch_path(job_id, nxt)
-            try:
-                return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), nxt
-            except FileExistsError:
-                try:
-                    age = self._age_on_store(os.stat(path).st_mtime)
-                except OSError:
-                    raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
-                if age < _CLAIM_HANDOVER_SECONDS:
-                    raise LeaseHeld(f"epoch {nxt} was taken by someone else") from None
-                # Abandoned. Take the epoch after it.
-        raise LeaseHeld(
-            f"{_MAX_EPOCH_SKIP} epochs from {first} are all spoken for"
-        )
+        return self._change(seen.id, edit)
 
     def renew(self, job_id: str, epoch: int, ttl_seconds: float) -> Record:
         """Extend a lease the caller still holds.
@@ -1307,15 +1512,21 @@ class FileStore:
         epoch, so anything it had in flight is refused rather than landing on top
         of work a different owner may since have done.
         """
-        r = self.load(job_id)
-        if r.lease.epoch != epoch:
-            raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
-        if not r.lease.held(self._now()):
-            raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}, re-claim instead")
-        now = self._now()
-        r.lease.expires_at = datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc)
-        self._write(r)
-        return r
+
+        def edit(r: Record) -> None:
+            if r.lease.epoch != epoch:
+                raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
+            if not r.lease.held(self._now()):
+                raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}, re-claim instead")
+            r.lease.expires_at = _renewed_until(r.lease, self._now(), ttl_seconds)
+
+        return self._change(job_id, edit)
+
+    def recall(self, job_id: str, epoch: int, reason: str, by: str = "",
+               grace_seconds: float = 30.0) -> Record:
+        if not reason.strip():
+            raise Invalid("a recall needs a reason the holder can act on")
+        return self._change(job_id, lambda r: _recall(r, self._now(), epoch, reason, by, grace_seconds))
 
     def release(self, job_id: str, epoch: int) -> None:
         """Give up a lease early so the job can be taken immediately. The
@@ -1338,30 +1549,31 @@ class FileStore:
 
     def update(self, job_id: str, epoch: int, mutate: Callable[[Record], None]) -> Record:
         """The single gate every change passes through, so staleness is checked
-        in exactly one place instead of once per call site."""
-        r = self.load(job_id)
-        if r.lease.epoch != epoch:
-            raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
-        if not r.lease.held(self._now()):
-            raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}")
-        mutate(r)
-        r.updated_at = self._now()
-        self._write(r)
-        return r
+        in exactly one place instead of once per call site.
 
-    def _write(self, r: Record) -> None:
-        """Replace the record atomically. A reader opening the file at any moment
-        sees the old record or the new one, never half of one — and one of those
-        readers may be deciding right now whether this job is an orphan."""
-        data = r.to_json()
-        d = os.path.join(self._root, "jobs")
-        tmp = os.path.join(d, f"{r.id}.tmp-{os.getpid()}-{secrets.token_hex(4)}")
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, self._record_path(r.id))
+        The terminal test reads the state as LOADED, never the state mutate
+        leaves behind, and the difference is how a job ever finishes: the write
+        that MAKES a record complete, failed or cancelled is an ordinary update
+        onto a record that is not yet terminal, and it must land. What is refused
+        is the write after it. So an owner puts everything it wants recorded --
+        the error text, the last checkpoint -- into the same update as the final
+        state, because nothing of its epoch may write again.
+        """
+
+        def edit(r: Record) -> None:
+            if r.terminal():
+                raise Terminal(f"{job_id} is {r.state}")
+            if r.lease.epoch != epoch:
+                raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
+            if not r.lease.held(self._now()):
+                raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}")
+            mutate(r)
+            r.updated_at = self._now()
+
+        return self._change(job_id, edit)
 
 
-class Memory:
+class MemoryStore:
     """Jobs in a dict, for a process that wants the semantics and no disk.
 
     The point of this binding is not convenience. A socket in front of a
@@ -1411,10 +1623,7 @@ class Memory:
         return not r.terminal() and not r.lease.held(self._now())
 
     def orphans(self) -> List[Record]:
-        return [
-            r for r in self.list()
-            if self.claimable(r) and r.state != TRANSFERRED and not r.paused()
-        ]
+        return [r for r in self.list() if self.claimable(r) and r.stranded()]
 
     # ---- writing ----------------------------------------------------------
 
@@ -1440,7 +1649,7 @@ class Memory:
         if r.terminal():
             raise Terminal(f"{job_id} is {r.state}")
         now = self._now()
-        if r.lease.held(now) and r.lease.owner != owner:
+        if r.lease.held(now) and (r.lease.owner != owner or r.lease.recalled()):
             raise LeaseHeld(f"{r.lease.owner} holds it until {_rfc3339(r.lease.expires_at)}")
         r.lease = Lease(
             owner=owner,
@@ -1458,8 +1667,16 @@ class Memory:
             raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
         if not r.lease.held(self._now()):
             raise LeaseExpired(f"expired at {_rfc3339(r.lease.expires_at)}, re-claim instead")
-        now = self._now()
-        r.lease.expires_at = datetime.fromtimestamp(now.timestamp() + ttl_seconds, timezone.utc)
+        r.lease.expires_at = _renewed_until(r.lease, self._now(), ttl_seconds)
+        self._put(r)
+        return r
+
+    def recall(self, job_id: str, epoch: int, reason: str, by: str = "",
+               grace_seconds: float = 30.0) -> Record:
+        if not reason.strip():
+            raise Invalid("a recall needs a reason the holder can act on")
+        r = self._get(job_id)
+        _recall(r, self._now(), epoch, reason, by, grace_seconds)
         self._put(r)
         return r
 
@@ -1476,6 +1693,8 @@ class Memory:
 
     def update(self, job_id: str, epoch: int, mutate: Callable[[Record], None]) -> Record:
         r = self._get(job_id)
+        if r.terminal():
+            raise Terminal(f"{job_id} is {r.state}")
         if r.lease.epoch != epoch:
             raise StaleEpoch(f"record is at epoch {r.lease.epoch}, caller holds {epoch}")
         if not r.lease.held(self._now()):
@@ -1496,3 +1715,201 @@ class Memory:
         r.updated_at = now
         self._put(r)
         return r
+
+
+# ---------------------------------------------------------------- watching ---
+
+POLL_EVERY = 0.75
+
+
+@dataclass
+class Notice:
+    records: List[Record]
+    quiet: bool = False
+    silence: float = 0.0
+
+
+class Subscription:
+    """A live view of the jobs of one kind. ``records`` is what was true at the
+    last read; ``next`` is what reads."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def records(self) -> List[Record]:
+        return list(self._inner.current() or [])
+
+    def next(self, timeout: Optional[float] = None) -> Notice:
+        n = self._inner.next(timeout)
+        return Notice(list(n.now or []), n.quiet, n.silence)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Notice:
+        from abstraction_watch import Closed
+
+        try:
+            return self.next()
+        except Closed:
+            raise StopIteration
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def watch(store: Store, kind: str, budget: float = 0.0) -> Subscription:
+    """The jobs of one kind, and quiet once nothing visible has changed for
+    ``budget`` seconds. The file binding has nothing to push, so it is asked,
+    at most every POLL_EVERY."""
+    from abstraction_watch import poll
+
+    every = POLL_EVERY if budget <= 0 else min(POLL_EVERY, budget)
+
+    def read():
+        mine = [r for r in store.list() if r.kind == kind]
+        return mine, _fingerprint(mine)
+
+    return Subscription(poll(read, every, budget))
+
+
+def _fingerprint(records: List[Record]) -> str:
+    """What "changed" means: identity, state, progress, owner and error. Not
+    updated_at -- a lease renewal moves it and nothing a person can see."""
+    return "".join(
+        f"{r.id}|{r.state}|{r.progress.done}/{r.progress.total}|{r.lease.owner}|{r.error}\n"
+        for r in records
+    )
+
+
+class KeepAwake:
+    """The machine stays out of idle sleep while this process holds the lease
+    ``claimed`` carries, and not a moment longer: ended by ``release``, by the
+    lease ending in the store -- released, lapsed, or the job turning terminal
+    -- and by the operating system if the process dies. The lease is the
+    lifetime; nothing here has one of its own."""
+
+    def __init__(self, store: Store, claimed: Record):
+        self._store = store
+        self._id = claimed.id
+        self._epoch = claimed.lease.epoch
+        self._until = claimed.lease.expires_at
+        self._lock = threading.Lock()
+        self._free: Optional[Callable[[], None]] = None
+        self._sub: Optional[Subscription] = None
+        self._follower: Optional[threading.Thread] = None
+        if not self._alive(claimed):
+            return
+        self._free = _keep_awake(claimed.lease.owner, f"{claimed.kind} {claimed.id}")
+        if self._free is None:
+            return
+        self._sub = watch(store, claimed.kind)
+        self._follower = threading.Thread(target=self._follow, daemon=True)
+        self._follower.start()
+
+    def held(self) -> bool:
+        with self._lock:
+            return self._free is not None
+
+    def release(self) -> None:
+        with self._lock:
+            free, self._free = self._free, None
+            sub, self._sub = self._sub, None
+        if sub is not None:
+            sub.close()
+        if free is not None:
+            free()
+        follower = self._follower
+        if follower is not None and follower is not threading.current_thread():
+            follower.join()
+
+    def _follow(self) -> None:
+        from abstraction_watch import Closed
+
+        while True:
+            sub = self._sub
+            if sub is None:
+                return
+            try:
+                left = (self._until - datetime.now(timezone.utc)).total_seconds()
+                n = sub.next(max(0.0, left))
+                r = next((r for r in n.records if r.id == self._id), None)
+            except TimeoutError:
+                try:
+                    r = self._store.load(self._id)
+                except JobError:
+                    r = None
+            except Closed:
+                return
+            if not self._alive(r):
+                self.release()
+                return
+            self._until = r.lease.expires_at
+
+    def _alive(self, r: Optional[Record]) -> bool:
+        return (
+            r is not None
+            and r.lease.epoch == self._epoch
+            and r.lease.held(datetime.now(timezone.utc))
+            and not r.terminal()
+        )
+
+
+def _keep_awake(who: str, why: str) -> Optional[Callable[[], None]]:
+    if os.name == "nt":
+        return _keep_awake_windows(who, why)
+    if sys.platform == "darwin":
+        cmd = ["caffeinate", "-i", "sh", "-c", "echo; exec cat"]
+    else:
+        cmd = ["systemd-inhibit", "--what=idle:sleep", "--mode=block",
+               f"--who={who}", f"--why={why}", "sh", "-c", "echo; exec cat"]
+    # The inhibitor is a child that lives exactly as long as its stdin: our end
+    # of the pipe closes when this process exits, however it exits, and cat goes
+    # with it. That is the lifetime a D-Bus inhibitor fd has, without a D-Bus
+    # client. The echo arrives once the inhibitor is in place, so the hold is
+    # real on return.
+    try:
+        child = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    if not child.stdout.read(1):
+        child.stdin.close()
+        child.wait()
+        return None
+
+    def free() -> None:
+        child.stdin.close()
+        child.wait()
+
+    return free
+
+
+def _keep_awake_windows(who: str, why: str) -> Optional[Callable[[], None]]:
+    import ctypes
+    from ctypes import wintypes
+
+    class ReasonContext(ctypes.Structure):
+        _fields_ = [("version", wintypes.ULONG), ("flags", wintypes.ULONG),
+                    ("reason", wintypes.LPWSTR)]
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.PowerCreateRequest.restype = wintypes.HANDLE
+    k.PowerCreateRequest.argtypes = [ctypes.POINTER(ReasonContext)]
+    k.PowerSetRequest.argtypes = [wintypes.HANDLE, ctypes.c_int]
+    k.PowerClearRequest.argtypes = [wintypes.HANDLE, ctypes.c_int]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    system_required = 1
+    ctx = ReasonContext(0, 1, f"{who}: {why}")
+    h = k.PowerCreateRequest(ctypes.byref(ctx))
+    if not h or h == wintypes.HANDLE(-1).value:
+        return None
+    if not k.PowerSetRequest(h, system_required):
+        k.CloseHandle(h)
+        return None
+
+    def free() -> None:
+        k.PowerClearRequest(h, system_required)
+        k.CloseHandle(h)
+
+    return free

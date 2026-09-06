@@ -11,9 +11,9 @@ import (
 // With an integer, "I do not know version 6" was the only thing a reader could
 // say, so refusing everything was the only safe response — including for the
 // overwhelmingly common case where the addition was decoration it could have
-// ignored. Here the question is per-model, and the answer differs.
-func TestAnUnknownAdvisoryModelIsReadAndAnUnknownCriticalOneIsNot(t *testing.T) {
-	// Written by a future implementation that has a model this one has never
+// ignored. Here the question is per-feature, and the answer differs.
+func TestAnUnknownAdvisoryFeatureIsReadAndAnUnknownCriticalOneIsNot(t *testing.T) {
+	// Written by a future implementation that has a feature this one has never
 	// heard of. It is in content but NOT in critical, so it is decoration.
 	future := []byte(`{
   "content": [
@@ -34,13 +34,13 @@ func TestAnUnknownAdvisoryModelIsReadAndAnUnknownCriticalOneIsNot(t *testing.T) 
 }`)
 	r, err := Decode(future)
 	if err != nil {
-		t.Fatalf("a record whose only unknown model is advisory must still be read: %v", err)
+		t.Fatalf("a record whose only unknown feature is advisory must still be read: %v", err)
 	}
 	if r.State != StateRunning {
 		t.Fatalf("state %q", r.State)
 	}
 
-	// The same record, with that model declared critical. Now the writer is
+	// The same record, with that feature declared critical. Now the writer is
 	// saying "you cannot act on this correctly without understanding me", and
 	// the only honest answer is to refuse.
 	critical := strings.Replace(string(future),
@@ -52,12 +52,12 @@ func TestAnUnknownAdvisoryModelIsReadAndAnUnknownCriticalOneIsNot(t *testing.T) 
     "abstraction.job/hovercraft@7"
   ]`, 1)
 	if _, err := Decode([]byte(critical)); !errors.Is(err, ErrUnknownSchema) {
-		t.Fatalf("a record requiring an unknown model was accepted: %v", err)
+		t.Fatalf("a record requiring an unknown feature was accepted: %v", err)
 	}
 }
 
 // Stores full of the old integer exist on real disks and on a NAS. The mapping
-// onto models is exact rather than a guess, so nothing is assumed about what
+// onto features is exact rather than a guess, so nothing is assumed about what
 // those records contain — and refusing them would orphan work in flight.
 func TestLegacyVersionedRecordsStillRead(t *testing.T) {
 	for _, tc := range []struct {
@@ -65,8 +65,8 @@ func TestLegacyVersionedRecordsStillRead(t *testing.T) {
 		wants    Want
 		contains string
 	}{
-		{3, WantRun, ModelBase},
-		{4, WantRun, ModelIntent},
+		{3, WantRun, FeatureBase},
+		{4, WantRun, FeatureIntent},
 	} {
 		body := `{
   "schema": ` + itoa(tc.schema) + `,
@@ -128,10 +128,10 @@ func TestAStepIsNeverCritical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(got.Content, ModelStep) {
+	if !contains(got.Content, FeatureStep) {
 		t.Fatalf("a record with a step must declare it: %v", got.Content)
 	}
-	if contains(got.Critical, ModelStep) {
+	if contains(got.Critical, FeatureStep) {
 		t.Fatal("a step is advisory and must never be critical")
 	}
 	if got.Progress.Step == nil || got.Progress.Step.Name != "copying from nas" {

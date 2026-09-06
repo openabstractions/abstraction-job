@@ -21,7 +21,7 @@
 // An earlier version of this comment said the record "on disk, in JSON" WAS the
 // contract. That sentence was believed, and it cost: an encoding was promoted to
 // a contract, the filesystem became the IPC by default, and the name FileStore
-// reached nine public signatures as far up as model.Get.
+// reached nine public signatures as far up as model.Submit.
 //
 // # What this package does NOT know
 //
@@ -77,48 +77,65 @@ import (
 //	   have been safe, and it is worth saying so, because that is the argument
 //	   for tolerating unknown fields rather than the argument for a version 6.
 //
-// The data models this implementation understands, and writes.
+// The data features this implementation understands, and writes.
 //
 // A name is namespaced and versioned: "abstraction.job/base@1". The version is
 // part of the name rather than a separate field, so an incompatible change to
-// one model is a NEW name that old readers correctly fail to recognise, while
-// every other model in the record stays readable.
+// one feature is a NEW name that old readers correctly fail to recognise, while
+// every other feature in the record stays readable.
 const (
-	// ModelBase is the record every reader must understand: id, kind, state,
+	// FeatureBase is the record every reader must understand: id, kind, state,
 	// spec, checkpoint, progress, lease. Always present and always critical —
 	// a reader that cannot read this cannot do anything at all.
-	ModelBase = "abstraction.job/base@1"
+	FeatureBase = "abstraction.job/base@1"
 
-	// ModelIntent is what somebody WANTS to happen. Critical whenever present:
+	// FeatureIntent is what somebody WANTS to happen. Critical whenever present:
 	// a reader that ignores it works on a job somebody asked to stop.
-	ModelIntent = "abstraction.job/intent@1"
+	FeatureIntent = "abstraction.job/intent@1"
 
-	// ModelDelegation is that the work is being done by an external system.
+	// FeatureDelegation is that the work is being done by an external system.
 	// Critical: a reader that misses it would adopt a job BITS is already
 	// running and fetch the same bytes twice.
-	ModelDelegation = "abstraction.job/delegation@1"
+	FeatureDelegation = "abstraction.job/delegation@1"
 
-	// ModelStep is which phase of multi-phase work is happening now. NEVER
+	// FeatureStep is which phase of multi-phase work is happening now. NEVER
 	// critical: it is advisory, for telling a person what is going on, and a
 	// reader that ignores it is correct about everything that matters.
-	ModelStep = "abstraction.job/step@1"
+	FeatureStep = "abstraction.job/step@1"
+
+	// FeatureTerminal is that a finished record is closed to its own lease
+	// holder: no update, no release, no intent. It names a RULE rather than a
+	// field, which is why it went out under an unchanged name and why a
+	// published reader walks a complete job back to pending on a record this
+	// tree wrote. Declared whenever State is terminal, and critical there,
+	// because a reader that does not know the rule is exactly the reader that
+	// breaks it.
+	FeatureTerminal = "abstraction.job/terminal@1"
+
+	// FeatureRecall is that the issuer has asked the holder to give the lease
+	// back: lease.recall, and the rules that come with it — a renew never
+	// extends past `until`, the holder cannot re-claim to shed it, and the lease
+	// lapsing at `until` is the eviction. Critical whenever present.
+	FeatureRecall = "abstraction.job/recall@1"
 )
 
 // known is what this implementation can read. A record naming anything else in
 // Critical is refused.
 var known = map[string]bool{
-	ModelBase:       true,
-	ModelIntent:     true,
-	ModelDelegation: true,
-	ModelStep:       true,
+	FeatureBase:       true,
+	FeatureIntent:     true,
+	FeatureDelegation: true,
+	FeatureStep:       true,
+	FeatureTerminal:   true,
+	FeatureRecall:     true,
 	// A checkpoint of proven ranges. Defined in ranges.go, and readable here
 	// even though it describes the contents of a field this layer treats as
 	// opaque: a record that wrongly marks it critical is still one this
 	// implementation can act on.
-	ModelRanges: true,
+	FeatureRanges: true,
 }
 
-// legacySchemas maps the integer this format used to carry onto the models that
+// legacySchemas maps the integer this format used to carry onto the features that
 // version implied.
 //
 // The integer is no longer WRITTEN. It is still read, because stores full of
@@ -126,10 +143,28 @@ var known = map[string]bool{
 // would orphan work in flight for no reason — the mapping is exact, not a
 // guess, so nothing is being assumed about what those records contain.
 var legacySchemas = map[int][]string{
-	3: {ModelBase},
-	4: {ModelBase, ModelIntent},
-	5: {ModelBase, ModelIntent, ModelStep},
+	3: {FeatureBase},
+	4: {FeatureBase, FeatureIntent},
+	5: {FeatureBase, FeatureIntent, FeatureStep},
 }
+
+// KnownFeatures is every content-set name this implementation can read, sorted.
+//
+// Exported so a harness can diff one implementation's roster against another's.
+// Three readers that do not know the same names are not three implementations
+// of one contract, and nothing could see that until this was askable.
+func KnownFeatures() []string {
+	names := make([]string, 0, len(known))
+	for name := range known {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// NeverCritical reports whether a name is advisory by its own definition, so a
+// record marking it critical is relaying a refusal this layer will not pass on.
+func NeverCritical(name string) bool { return neverCritical[name] }
 
 // Understands reports whether this implementation can safely act on a record.
 //
@@ -271,17 +306,19 @@ func (w Want) Valid() bool {
 //  1. Anyone may write it, lease or no lease. It is the ONE field exempt, and
 //     that exemption is the point.
 //  2. Only the lease holder may write State. Unchanged.
-//  3. An owner MUST check it at least as often as it checkpoints and move
-//     toward it. An owner that reads a record and ignores this is not an
-//     implementation of this abstraction.
+//  3. An owner MUST check it at least as often as it checkpoints AND before it
+//     starts, and move toward it. An owner that reads a record and ignores this
+//     is not an implementation of this abstraction.
 //  4. WantCancel must be honoured by everything. Stopping is universal.
 //  5. WantPause must be honoured by implementations that advertise it; one that
 //     cannot must FAIL the job with a reason rather than carry on, because a
 //     pause that quietly does nothing is worse than a refusal.
-//  6. A paused job is NOT an orphan — see Store.Orphans. A sweep that adopted it
-//     would resume it a moment after somebody stopped it, which is the same trap
-//     TRANSFERRED set when it cost a NAS 313 MB for looking abandoned while it
-//     was merely waiting.
+//  6. A paused job is NOT an orphan unless it is still RUNNING — see
+//     Record.Stranded. A sweep that adopted a paused job would resume it a
+//     moment after somebody stopped it, which is the same trap TRANSFERRED set
+//     when it cost a NAS 313 MB for looking abandoned while it was merely
+//     waiting. Rule 3 and this one are one rule in two places: only sweeping
+//     restarts a stopped download, only checking strands it forever.
 //  7. Once State is terminal, this is history.
 type Intent struct {
 	Want Want `json:"want"`
@@ -369,12 +406,41 @@ type Lease struct {
 	Owner     string    `json:"owner"`
 	Epoch     int64     `json:"epoch"`
 	ExpiresAt Timestamp `json:"expires_at"`
+	Recall    *Recall   `json:"recall,omitempty"`
+}
+
+// Recall is the issuer asking for the lease back, which is the half of a lease
+// this design lacked: ours expired and none could be revoked early with a
+// reason the holder could act on.
+//
+// It is not an intent. Intent is what the user wants of the job; a recall is
+// what the issuer demands of the resource, and it is addressed to one holding —
+// the epoch it was decided against — so a claim replaces it with nothing.
+//
+// The fallback is the lease lapsing at Until, which Recall itself arranges by
+// moving ExpiresAt earlier and Renew keeps by never extending past it. That is
+// WDDM's shape rather than Android's: residency ends whether or not the holder
+// trimmed, and the holder finds out on its next write. A lease cannot kill a
+// process on another machine, but it can stop believing in it.
+//
+// Reason is opaque here, chosen by the issuer for the holder's kind, exactly as
+// Kind scopes Spec. It is required: a recall without one is a cancel wearing
+// the wrong field.
+type Recall struct {
+	Reason string    `json:"reason"`
+	By     string    `json:"by,omitempty"`
+	At     Timestamp `json:"at"`
+	Until  Timestamp `json:"until"`
 }
 
 // Held reports whether the lease is still valid at now.
 func (l Lease) Held(now time.Time) bool {
 	return l.Owner != "" && now.Before(l.ExpiresAt.Time)
 }
+
+// Recalled reports whether the issuer has asked for this lease back. A holder
+// checks it wherever it checks Intent, and yields by Until or is evicted.
+func (l Lease) Recalled() bool { return l.Recall != nil }
 
 // Delegation records that the work has been handed to something outside this
 // process entirely — a system service, a daemon on a NAS — which is now doing it.
@@ -406,7 +472,7 @@ type Delegation struct {
 // needs in order to continue this work must be in here, because nothing else
 // survives.
 type Record struct {
-	// Content names the data models this record carries.
+	// Content names the data features this record carries.
 	//
 	// # Why this is not a version number
 	//
@@ -426,15 +492,17 @@ type Record struct {
 	// record entirely.
 	//
 	// This is the distinction that makes the whole mechanism work rather than
-	// just renaming the version. Not knowing the step model is harmless: it is
+	// just renaming the version. Not knowing the step feature is harmless: it is
 	// advisory, and a reader that ignores it is still correct about everything
-	// that matters. Not knowing the intent model is not harmless at all — it
+	// that matters. Not knowing the intent feature is not harmless at all — it
 	// means carrying on with a job somebody asked to stop, which is the
 	// partly-understood record this check exists to refuse.
 	//
-	// X.509 settled this decades ago with critical certificate extensions:
-	// unknown and critical means reject the certificate, unknown and
-	// non-critical means ignore the extension. Same problem, same answer.
+	// X.509 settled the fallback decades ago with critical certificate
+	// extensions (RFC 5280 §4.2). JOSE settled the shape: "crit" (RFC 7515
+	// §4.1.11) is a parallel list naming things that must appear elsewhere in
+	// the same header, which is why Encode drops a critical name that is not in
+	// Content rather than keeping the two lists able to disagree.
 	//
 	// Extension keys may appear here too, so a participant can say "refuse this
 	// record if you cannot read my payload" using the same mechanism.
@@ -538,6 +606,30 @@ func (r *Record) Paused() bool {
 	return r.Wants() == WantPause && !r.State.Terminal()
 }
 
+// Stranded reports whether this record's own state and intent leave work for a
+// sweep. Written once and asked by every Store, because it was spelled twice and
+// the second copy was already wrong.
+//
+// A TRANSFERRED job is not stranded, and the difference cost a NAS 313 MB:
+// transferred is deliberately not terminal, so a sweep saw a finished,
+// digest-proven job with a lapsed lease and fetched the whole thing again, then
+// again thirty seconds later, forever. What it waits for is an acknowledgement
+// and no amount of re-downloading produces one.
+//
+// A PAUSED job is not stranded either — it looks abandoned and is not, and
+// adopting it would restart work seconds after a person stopped it. Unless
+// nobody ever carried the pause out: an owner that honours one releases the
+// lease and the record stops being RUNNING, so a record still RUNNING under
+// nobody is an owner that died between the two. Skipping that one makes the
+// state permanent, because nothing may claim the job and therefore nothing may
+// pause, resume or cancel it either.
+func (r *Record) Stranded() bool {
+	if r.State == StateTransferred {
+		return false
+	}
+	return !r.Paused() || r.State == StateRunning
+}
+
 var (
 	ErrUnknownSchema = errors.New("job: unknown record schema")
 	ErrInvalid       = errors.New("job: invalid record")
@@ -585,22 +677,22 @@ func Decode(b []byte) (*Record, error) {
 	}
 
 	if len(r.Content) == 0 && legacy.Schema != nil {
-		models, ok := legacySchemas[*legacy.Schema]
+		features, ok := legacySchemas[*legacy.Schema]
 		if !ok {
 			return nil, fmt.Errorf("%w: legacy schema %d", ErrUnknownSchema, *legacy.Schema)
 		}
 		// The mapping is exact rather than a guess: those versions are frozen
 		// and it is known precisely what each one could contain.
-		r.Content = append([]string(nil), models...)
+		r.Content = append([]string(nil), features...)
 		r.Critical = nil
-		for _, m := range models {
-			if m != ModelStep {
+		for _, m := range features {
+			if m != FeatureStep {
 				r.Critical = append(r.Critical, m)
 			}
 		}
 		if r.Delegation != nil {
-			r.Content = append(r.Content, ModelDelegation)
-			r.Critical = append(r.Critical, ModelDelegation)
+			r.Content = append(r.Content, FeatureDelegation)
+			r.Critical = append(r.Critical, FeatureDelegation)
 		}
 	}
 
@@ -618,6 +710,19 @@ func Decode(b []byte) (*Record, error) {
 // indented, with a trailing newline, so a human can read it and a diff is
 // legible.
 func (r *Record) Encode() ([]byte, error) {
+	// One spelling of one proven set, whoever wrote it and however they wrote
+	// it. See canonicalCheckpoint.
+	canonical, declares, err := canonicalCheckpoint(r.Checkpoint)
+	if err != nil {
+		return nil, err
+	}
+	r.Checkpoint = canonical
+	if declares && !contains(r.Content, FeatureRanges) {
+		// The declaration follows the data. A record whose checkpoint names
+		// ranges and whose content does not would send a reader looking in the
+		// wrong place, and this is the one moment the two are both in hand.
+		r.Content = append(r.Content, FeatureRanges)
+	}
 	// What is written describes what is actually here. A record read as legacy
 	// and written back keeps its old shape otherwise, and an older reader would
 	// be told it is safe to ignore fields it does not know.
@@ -696,6 +801,14 @@ func (r *Record) Validate() error {
 			return fmt.Errorf("%w: delegation needs both a system and an external id", ErrInvalid)
 		}
 	}
+	if rc := r.Lease.Recall; rc != nil {
+		if strings.TrimSpace(rc.Reason) == "" {
+			return fmt.Errorf("%w: a recall needs a reason the holder can act on", ErrInvalid)
+		}
+		if rc.Until.IsZero() {
+			return fmt.Errorf("%w: a recall needs a deadline", ErrInvalid)
+		}
+	}
 	return nil
 }
 
@@ -754,24 +867,32 @@ func (r *Record) SetCheckpoint(v any) error {
 // "refuse this record if you cannot read my payload", and this layer is not
 // entitled to downgrade that.
 func (r *Record) describe() {
-	content := []string{ModelBase}
-	critical := []string{ModelBase}
+	content := []string{FeatureBase}
+	critical := []string{FeatureBase}
 
 	if r.Intent != nil {
-		content = append(content, ModelIntent)
-		critical = append(critical, ModelIntent)
+		content = append(content, FeatureIntent)
+		critical = append(critical, FeatureIntent)
 	}
 	if r.Delegation != nil {
-		content = append(content, ModelDelegation)
-		critical = append(critical, ModelDelegation)
+		content = append(content, FeatureDelegation)
+		critical = append(critical, FeatureDelegation)
 	}
 	// Advisory, and deliberately not added to critical: a reader that ignores a
 	// step is correct about everything that matters.
 	if r.Progress.Step != nil {
-		content = append(content, ModelStep)
+		content = append(content, FeatureStep)
+	}
+	if r.State.Terminal() {
+		content = append(content, FeatureTerminal)
+		critical = append(critical, FeatureTerminal)
+	}
+	if r.Lease.Recall != nil {
+		content = append(content, FeatureRecall)
+		critical = append(critical, FeatureRecall)
 	}
 
-	// A model this layer declares but cannot derive, because what it describes
+	// A feature this layer declares but cannot derive, because what it describes
 	// lives inside the checkpoint and a checkpoint is opaque here. Rediscovering
 	// it would mean reading one, so the declaration is carried instead — the
 	// same treatment an unknown extension gets. Sorted, and placed here rather
@@ -797,9 +918,9 @@ func (r *Record) describe() {
 	content = append(content, names...)
 
 	// Whatever the caller marked critical that this layer did not derive — an
-	// extension, or a model a newer writer knows about — stays marked.
+	// extension, or a feature a newer writer knows about — stays marked.
 	//
-	// Except the models whose own definition says a reader ignoring them is
+	// Except the features whose own definition says a reader ignoring them is
 	// still correct. Marking one of those critical tells a stranger to refuse
 	// the job over a decoration, and this layer will not relay that however it
 	// arrived. See neverCritical in ranges.go.

@@ -95,6 +95,10 @@ func apply(store Store, req request) response {
 		r, err := store.SetIntent(req.ID, Want(req.Want), req.By)
 		return one(r, err)
 
+	case "recall":
+		r, err := store.Recall(req.ID, req.Epoch, req.Reason, req.By, time.Duration(req.TTLMS)*time.Millisecond)
+		return one(r, err)
+
 	case "write":
 		// The closure form of Update cannot cross a process boundary, which is
 		// the thing writing the IDL caught. A client therefore reads, applies

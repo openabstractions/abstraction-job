@@ -93,6 +93,7 @@ type request struct {
 	TTLMS  int64           `json:"ttl_ms,omitempty"`
 	Want   string          `json:"want,omitempty"`
 	By     string          `json:"by,omitempty"`
+	Reason string          `json:"reason,omitempty"`
 	Record json.RawMessage `json:"record,omitempty"`
 }
 

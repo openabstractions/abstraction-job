@@ -189,7 +189,7 @@ func TestVersionThreeRecordsAreStillReadable(t *testing.T) {
 	if strings.Contains(string(b), `"schema"`) {
 		t.Fatal("the legacy version integer must not be written back out")
 	}
-	if want := fmt.Sprintf(`"%s"`, ModelBase); !strings.Contains(string(b), want) {
+	if want := fmt.Sprintf(`"%s"`, FeatureBase); !strings.Contains(string(b), want) {
 		t.Fatalf("a record written by this implementation must declare %s", want)
 	}
 }

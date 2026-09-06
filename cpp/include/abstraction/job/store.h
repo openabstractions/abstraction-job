@@ -14,48 +14,17 @@ namespace job {
 // in roughly submission order without anything having to record that.
 std::string new_id();
 
-// Store is where jobs live, and it is the interface this server can implement
-// for itself.
-//
-// # Why this is an interface at all
-//
-// It is the SEMANTICS of the lease protocol and nothing else: a claim is
+// Store is where jobs live: the lease protocol and nothing else. A claim is
 // exclusive, an epoch only ever increases, every write presents the epoch it
 // holds, and a successor continues only from what a predecessor proved. Not one
-// clause of that mentions a byte, a file or a directory.
+// clause of that mentions a byte, a file or a directory, which is what lets a
+// service binding replace the file one without a caller noticing. C++ has one
+// implementation today, FileStore.
 //
-// # What this is NOT for, having checked
-//
-// The plan was that Lemonade's own engine (include/lemon/jobs/) would implement
-// this and there would be one job system instead of two. It cannot, and the
-// reason is worth writing down rather than rediscovering.
-//
-// That engine has named steps, a cursor, ops in a pluggable registry, and a
-// pause/interrupt/resume lifecycle persisted across a restart. What it does not
-// have, anywhere in its headers, is a lease, an epoch, an owner or a claim —
-// zero occurrences of any of them. It is a SINGLE-PROCESS orchestrator: this
-// server owns every job it knows about, so there is nothing to be exclusive
-// against and no need for any of that.
-//
-// Our contract is strictly stronger, and the extra part is the whole point: work
-// survives the process that asked for it and can be adopted by a supervisor, or
-// by a daemon on a NAS. An adapter would have to fabricate a lease it could not
-// honour, and a fabricated lease is exactly the two-owners damage the lease
-// exists to prevent.
-//
-// So the layering is the other way round from what integrating.md guessed:
-//
-//     their engine   the ORCHESTRATOR — steps, ops, the pause button, the UI
-//     this Store     the SUBSTRATE    — durable, cross-process, adoptable
-//
-// A download op in their engine submits here and observes; their pause and
-// resume become set_intent, which is precisely why schema 4 added it. That is
-// one executor, which was the requirement, without pretending a single-process
-// manager can arbitrate between machines.
-//
-// The interface still earns its place: it is what lets a service binding replace
-// the file one later without a caller noticing. But in C++ it has ONE
-// implementation today, and calling that an abstraction would be premature.
+// A single-process job engine — named steps, a cursor, a pause button — is not
+// a Store and cannot be adapted into one: without a lease it has nothing to be
+// exclusive against a supervisor on another machine. It sits above this and
+// submits here; its pause and resume are set_intent.
 class Store {
 public:
     virtual ~Store() = default;
@@ -80,6 +49,13 @@ public:
     // stealing the job in order to stop it.
     virtual Record set_intent(const std::string& id, const std::string& want,
                               const std::string& by) = 0;
+
+    // Asks the holder at `epoch` — the epoch the caller OBSERVED, not one it
+    // holds — for the lease back by now+grace, for a reason it can act on. The
+    // lease lapses at that deadline either way: that is the fallback, and what
+    // makes this a demand rather than a suggestion. Not an intent.
+    virtual Record recall(const std::string& id, std::int64_t epoch, const std::string& reason,
+                          const std::string& by, std::chrono::milliseconds grace) = 0;
 };
 
 // LocalStore is an OPTIONAL capability: a store whose binding happens to be a
@@ -96,27 +72,12 @@ public:
     virtual std::string work_path(const std::string& id) const = 0;
 };
 
-// FileStore is the FILE BINDING of Store: jobs as files in a directory.
-//
-// The bottom tier, not the substrate. It is the default because it needs no
-// daemon, no database, no server and no port — a directory is the one thing a Go
-// process, a Python process, a Windows service and a machine that has just
-// rebooted can all agree on without any of them running at the same time.
-//
-//     <root>/jobs/<id>.json        the record
-//     <root>/jobs/<id>.epoch.<n>   claim token for epoch n, created O_EXCL
-//     <root>/work/<id>             scratch space for a job that needs it
-//
-// The claim tokens are the mutual exclusion. Exclusive create is atomic on both
-// NTFS and POSIX, so exactly one process can create `<id>.epoch.7` and
-// therefore exactly one process can own epoch 7. Because each generation gets
-// its own filename, a token left behind by a process that was killed blocks
-// nothing — the next claimant takes epoch 8. A single lockfile would instead
-// have to be broken by timeout, and breaking locks by timeout is how two owners
-// end up working one job.
-//
-// Everything below this line — the layout, the epoch tokens, the JSON — is
-// private to this binding. Nothing written against Store may depend on any of it.
+// FileStore is the FILE BINDING of Store: one record per job under
+// <root>/jobs/<id>.json, every write a cas change on that file, so writers in
+// any process on this host apply their edit to the truth. <root>/work/<id> is
+// the name job <id> may spend on scratch. The layout is normative for anything
+// sharing the directory and is written in job/README.md; nothing written
+// against Store may depend on it.
 class FileStore : public Store, public LocalStore {
 public:
     explicit FileStore(std::string root);
@@ -134,10 +95,9 @@ public:
     // meaningful.
     std::string submit(Record r) override;
 
-    // Any process may do this, including one that holds no lease and never
-    // will. That is what makes progress observable from outside — a callback
-    // cannot, because a callback is bound to the lifetime of the process that
-    // registered it, and that lifetime is the one that fails.
+    // Never takes the lock. Any process may do this, including one that holds
+    // no lease and never will; that is what makes progress observable from
+    // outside.
     Record load(const std::string& id) const override;
 
     std::vector<Record> list() const override;
@@ -154,6 +114,14 @@ public:
     Record claim(const std::string& id, const std::string& owner,
                  std::chrono::milliseconds ttl) override;
 
+    // Takes ownership of the job AS THE CALLER LAST READ IT: refused with
+    // LeaseHeld if the job changed hands since, so a sweeper that already holds
+    // a record from `orphans` is told rather than quietly claiming a job that is
+    // no longer the one it decided about. The record written is the one on disk
+    // under the lock, never the caller's copy, so an intent set since the
+    // caller read is kept.
+    Record claim_from(Record seen, const std::string& owner, std::chrono::milliseconds ttl);
+
     // Extends a lease the caller still holds. Refuses once expired even when
     // the epoch still matches and nobody else has claimed: a process suspended
     // for an hour wakes believing it is still the owner, and forcing it to
@@ -163,11 +131,21 @@ public:
                  std::chrono::milliseconds ttl) override;
 
     // Gives up a lease early so the job can be taken immediately. A courtesy:
-    // everything still works without it, just more slowly.
+    // everything still works without it, just more slowly. It is an update, so
+    // it is refused on a finished job — there is nothing left to hand over, and
+    // the lease lapses on its own.
     void release(const std::string& id, std::int64_t epoch) override;
 
     // The single gate every change passes through, so staleness is checked in
-    // exactly one place instead of once per call site.
+    // exactly one place instead of once per call site — and the one place a
+    // finished job is protected from being written over.
+    //
+    // Terminal is judged on the record as LOADED, never on what mutate leaves
+    // behind, and that is how a job ever finishes: the write that MAKES a record
+    // complete, failed or cancelled lands, and the write after it does not. An
+    // owner therefore puts everything it wants recorded — the error text, the
+    // last checkpoint — into the same update as the final state, because nothing
+    // of its epoch may write again.
     Record update(const std::string& id, std::int64_t epoch,
                   const std::function<void(Record&)>& mutate) override;
 
@@ -185,17 +163,15 @@ public:
     Record set_intent(const std::string& id, const std::string& want,
                       const std::string& by) override;
 
+    Record recall(const std::string& id, std::int64_t epoch, const std::string& reason,
+                  const std::string& by, std::chrono::milliseconds grace) override;
+
     // Injectable so lease tests are neither slow nor flaky.
     void set_clock(std::function<TimePoint()> now) { now_ = std::move(now); }
 
 private:
     std::string record_path(const std::string& id) const;
-    std::string epoch_path(const std::string& id, std::int64_t epoch) const;
-    // Creates the claim token for the first free epoch at or after `first`,
-    // stepping over tokens abandoned by a process that died between writing one
-    // and writing its record. Without that step such a token bricks the job.
-    std::int64_t take_epoch(const std::string& id, std::int64_t first, const std::string& owner);
-    void write_atomically(const Record& r) const;
+    Record change(const std::string& id, const std::function<void(Record&)>& edit) const;
     TimePoint now() const { return now_(); }
 
     std::string root_;

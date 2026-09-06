@@ -67,6 +67,15 @@ def main() -> None:
     s_int.add_argument("want", choices=[RUN, PAUSE, CANCEL])
     s_int.add_argument("--by", default="")
 
+    # Ask the holder for the lease back. --epoch is the one the caller SAW, not
+    # one it holds: a third party recalling a residency it has only read.
+    s_rec = sub.add_parser("recall")
+    s_rec.add_argument("id")
+    s_rec.add_argument("--epoch", type=int, required=True)
+    s_rec.add_argument("--reason", required=True)
+    s_rec.add_argument("--grace", type=float, default=30.0)
+    s_rec.add_argument("--by", default="")
+
     sub.add_parser("orphans")
 
     a = p.parse_args()
@@ -110,6 +119,11 @@ def main() -> None:
             by = a.by or f"jobctl.py@{platform.node()}:{os.getpid()}"
             r = st.set_intent(a.id, a.want, by)
             print(f"{r.id} {r.wants()}")
+
+        elif a.cmd == "recall":
+            by = a.by or f"jobctl.py@{platform.node()}:{os.getpid()}"
+            r = st.recall(a.id, a.epoch, a.reason, by, a.grace)
+            print(f"{r.id} recalled until {r.lease.recall.until.isoformat()}")
 
         elif a.cmd == "orphans":
             for r in st.orphans():

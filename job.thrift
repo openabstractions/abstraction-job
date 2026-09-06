@@ -50,6 +50,15 @@ const string MODEL_INTENT     = "abstraction.job/intent@1"
 const string MODEL_DELEGATION = "abstraction.job/delegation@1"
 const string MODEL_STEP       = "abstraction.job/step@1"
 
+// That a finished record is closed to its own lease holder: no update, no
+// release, no intent. It names a RULE rather than a field, and it is the only
+// one here that does. The rule shipped under an unchanged MODEL_BASE, so a
+// reader published before it walks a `complete` record back to `pending` while
+// reading everything about it correctly. Declared whenever `state` is terminal,
+// and critical there, because the reader that does not know the rule is exactly
+// the reader that breaks it.
+const string MODEL_TERMINAL   = "abstraction.job/terminal@1"
+
 // The checkpoint carries a set of proven byte ranges as well as a prefix:
 //
 //     {"verified_prefix": 4194304, "verified": [[0, 4194304], [8388608, 12582912]]}
@@ -202,6 +211,19 @@ struct Lease {
   1: string owner,
   2: i64 epoch,
   3: Timestamp expires_at,
+  // The issuer has asked for the lease back. Present until the next claim.
+  4: optional Recall recall,
+}
+
+// The issuer's demand about the resource, as against intent, which is the
+// user's wish about the job. Addressed to one holding: a claim replaces it with
+// nothing. The lease lapses at `until` whether or not the holder yielded — that
+// lapse is the eviction, and renew never extends past it.
+struct Recall {
+  1: string reason,               // opaque here; the holder's kind acts on it
+  2: optional string by,
+  3: Timestamp at,
+  4: Timestamp until,
 }
 
 // The work has been handed to something outside this process entirely — a system
@@ -335,6 +357,15 @@ service Store {
   // owner reports that, because only the owner knows what it can do.
   Record set_intent(1: string id, 2: Want want, 3: optional string by)
     throws (1: NotFound e1, 2: Terminal e2),
+
+  // Ask the holder for the lease back by now+grace, for a reason it can act on.
+  // epoch is the one the caller OBSERVED, not one it holds: the fencing token
+  // pointed the other way, so a recall decided against one holding cannot land
+  // on the next. Refused where nobody holds the lease, and on a finished job.
+  Record recall(1: string id, 2: i64 epoch, 3: string reason, 4: optional string by,
+                5: i64 grace_ms)
+    throws (1: NotFound e1, 2: StaleEpoch e2, 3: LeaseExpired e3, 4: Terminal e4,
+            5: Invalid e5),
 }
 
 // Pause and resume are NOT a separate service, and that is the design decision

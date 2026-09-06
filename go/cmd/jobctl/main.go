@@ -42,6 +42,8 @@ func main() {
 		cmdShow(s, os.Args[2:])
 	case "intent":
 		cmdIntent(s, os.Args[2:])
+	case "recall":
+		cmdRecall(s, os.Args[2:])
 	case "cancel":
 		cmdCancel(s, os.Args[2:])
 	case "orphans":
@@ -53,8 +55,32 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: jobctl <submit|claim|progress|finish|show|cancel|intent|orphans> [args]   (JOB_STORE must be set)")
+	fmt.Println("usage: jobctl <submit|claim|progress|finish|show|cancel|intent|recall|orphans> [args]   (JOB_STORE must be set)")
 	fmt.Println("  submit --kind K --spec '<json>' [--total N] [--requires a,b]")
+	fmt.Println("  recall <id> --epoch N --reason WHY [--grace SECONDS] [--by who]")
+}
+
+// cmdRecall asks the holder for the lease back. The epoch is the one the caller
+// SAW, not one it holds: a third party recalling a residency it has only read.
+func cmdRecall(s job.Store, args []string) {
+	if len(args) < 1 {
+		fatal(fmt.Errorf("usage: jobctl recall <id> --epoch N --reason WHY [--grace SECONDS] [--by who]"))
+	}
+	fs := flag.NewFlagSet("recall", flag.ExitOnError)
+	epoch := fs.Int64("epoch", 0, "the epoch the recall was decided against")
+	reason := fs.String("reason", "", "why, in words the holder's kind can act on")
+	grace := fs.Float64("grace", 30, "seconds the holder has before the lease lapses")
+	by := fs.String("by", "", "who is asking")
+	fs.Parse(args[1:])
+	if *by == "" {
+		host, _ := os.Hostname()
+		*by = fmt.Sprintf("jobctl@%s:%d", host, os.Getpid())
+	}
+	rec, err := s.Recall(args[0], *epoch, *reason, *by, time.Duration(*grace*float64(time.Second)))
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("%s recalled until %s\n", rec.ID, rec.Lease.Recall.Until.Format(time.RFC3339))
 }
 
 // compact puts raw JSON on one line. The record on disk is indented for humans,

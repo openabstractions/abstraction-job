@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -245,10 +247,9 @@ func TestReleaseHandsOffImmediately(t *testing.T) {
 	}
 }
 
-// TestEpochTokensDoNotBlock: a token left by a process that was killed must not
-// stop the next owner. This is why the epoch is in the filename rather than
-// there being one lockfile to break.
-func TestEpochTokensDoNotBlock(t *testing.T) {
+// A claim leaves the record and its lock beside it and nothing else: the lock
+// is the whole of the exclusion, so nothing accumulates per claim.
+func TestAClaimLeavesOnlyTheRecordAndItsLock(t *testing.T) {
 	s, c := newTestStore(t)
 	id, _ := s.Submit(sampleRecord())
 	for i := 1; i <= 3; i++ {
@@ -261,21 +262,16 @@ func TestEpochTokensDoNotBlock(t *testing.T) {
 		}
 		c.add(2 * time.Second)
 	}
-	// The CURRENT epoch's token is what proves this owner holds it, so it stays.
-	if _, err := os.Stat(s.epochPath(id, 3)); err != nil {
-		t.Fatalf("the current epoch's token is missing: %v", err)
+	entries, err := os.ReadDir(filepath.Join(s.Root(), "jobs"))
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The spent ones do not. This assertion used to be the opposite — it
-	// required every token ever created to still be there — which pinned an
-	// unbounded leak: one file per claim, forever. A real store reached 1069
-	// files for 17 jobs, 217 of them from a single job being reconciled every
-	// five seconds. Nobody can ask for a spent epoch again, because a claimant
-	// derives its epoch from the record.
-	for i := 1; i <= 2; i++ {
-		if _, err := os.Stat(s.epochPath(id, int64(i))); !os.IsNotExist(err) {
-			t.Fatalf("token for spent epoch %d is still there: %v", i, err)
-		}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{id + ".json", id + ".json.lock"}; !slices.Equal(names, want) {
+		t.Fatalf("jobs/ holds %v, want %v", names, want)
 	}
 }
 
@@ -472,142 +468,145 @@ func TestReleasingDelegatedJobKeepsItRunning(t *testing.T) {
 	}
 }
 
-// A claim token that is AHEAD of its record must not brick the job.
-//
-// The token is created before the record is written, so a process that dies in
-// between leaves a token for an epoch the record never reached. Every later
-// claim then computed the same next epoch, found that token, and failed —
-// permanently. The job could not be claimed, so it could not be updated,
-// cancelled, adopted or finished by anyone, ever.
-//
-// Seen on a live store: record at epoch 216, token for 217, and a supervisor
-// reporting a healthy sweep every five seconds while that job silently failed
-// its claim. Setting an intent on it did nothing either, because honouring an
-// intent requires claiming first.
-func TestAnAbandonedClaimTokenDoesNotBrickTheJob(t *testing.T) {
+// A claim writes the record as it is under the lock, not as the claimant read
+// it. The old compare-then-rename compared the epoch and wrote the caller's
+// copy, which erased an intent set in between while reporting success.
+func TestAClaimKeepsWhatWasWrittenSinceTheCallerRead(t *testing.T) {
 	s, _ := newTestStore(t)
 	id, _ := s.Submit(sampleRecord())
-
-	held, err := s.Claim(id, "first", time.Minute)
+	seen, err := s.Load(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Release(id, held.Lease.Epoch); err != nil {
+	if _, err := s.SetIntent(id, WantPause, "ui"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Exactly what a process killed between the two writes leaves behind: the
-	// token for the next epoch, with the record still at this one.
-	orphan := s.epochPath(id, held.Lease.Epoch+1)
-	if err := os.WriteFile(orphan, []byte("a process that died\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Old enough that its author is presumed gone. A fresh one must still win —
-	// that case is below.
-	old := time.Now().Add(-2 * claimHandover)
-	if err := os.Chtimes(orphan, old, old); err != nil {
-		t.Fatal(err)
-	}
-
-	next, err := s.Claim(id, "successor", time.Minute)
+	held, err := s.ClaimFrom(seen, "sweeper", time.Minute)
 	if err != nil {
-		t.Fatalf("a successor could not claim a job whose only obstacle was an "+
-			"abandoned token; the job is bricked: %v", err)
+		t.Fatal(err)
 	}
-	if next.Lease.Epoch <= held.Lease.Epoch {
-		t.Fatalf("epoch went backwards or stood still: %d after %d",
-			next.Lease.Epoch, held.Lease.Epoch)
+	if held.Wants() != WantPause {
+		t.Fatal("the claim returned a record without the pause set since it was read")
 	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatal("the abandoned token was skipped but never cleaned up")
+	r, _ := s.Load(id)
+	if r.Wants() != WantPause || r.Lease.Owner != "sweeper" {
+		t.Fatalf("the claim erased the pause: intent %v, owner %q", r.Intent, r.Lease.Owner)
 	}
 }
 
-// The other half: a token written moments ago belongs to a claimant that is
-// still mid-flight, and this claim must lose to it. Skipping past a held epoch
-// would destroy the exclusivity the token exists to provide.
-func TestAFreshClaimTokenStillWins(t *testing.T) {
-	s, _ := newTestStore(t)
+// A claim computed from a record that has since moved must not commit: the
+// epoch would go backwards, a zombie holding the earlier number would pass the
+// staleness check in Update, and two processes would work one job while every
+// command reported success.
+func TestAStaleClaimCannotCommitOverANewerOwner(t *testing.T) {
+	s, c := newTestStore(t)
 	id, _ := s.Submit(sampleRecord())
 
-	// Somebody has just taken the next epoch and has not written the record yet.
-	if err := os.WriteFile(s.epochPath(id, 1), []byte("mid-flight\n"), 0o644); err != nil {
+	// What a straggler read before it was descheduled: the job, unclaimed.
+	seen, err := s.Load(id)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := s.Claim(id, "interloper", time.Minute); !errors.Is(err, ErrLeaseHeld) {
-		t.Fatalf("a claim jumped over an epoch somebody was still taking: %v", err)
+	// Two claims go through while it is not looking.
+	zombie, err := s.Claim(id, "first", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
+	c.add(31 * time.Second)
+	current, err := s.Claim(id, "second", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Lease.Epoch != 2 {
+		t.Fatalf("staging: the record is at epoch %d, want 2", current.Lease.Epoch)
+	}
+
+	// The straggler wakes up and finishes the claim it started.
+	if _, err := s.ClaimFrom(seen, "straggler", 30*time.Second); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("a claim computed from epoch %d committed over epoch %d: %v",
+			seen.Lease.Epoch, current.Lease.Epoch, err)
+	}
+
+	after, err := s.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Lease.Epoch != 2 || after.Lease.Owner != "second" {
+		t.Fatalf("the lease is %q at epoch %d; the epoch went backwards and the "+
+			"owner doing the work no longer owns it", after.Lease.Owner, after.Lease.Epoch)
+	}
+
+	// The damage that would have followed: the first owner's lease expired and
+	// its writes must stay refused. They only stay refused while the epoch on
+	// disk is above its own.
+	if _, err := s.Update(id, zombie.Lease.Epoch, func(r *Record) error {
+		r.Progress.Done = 999
+		return nil
+	}); !errors.Is(err, ErrStaleEpoch) {
+		t.Fatalf("a zombie owner's write = %v, want ErrStaleEpoch", err)
+	}
+
 }
 
-// A token's age decides whether a claimant may step over it, and it used to be
-// measured with time.Since -- this machine's clock against a modification time
-// stamped by whatever holds the store. On a share those are two machines. A
-// store host running behind by more than claimHandover makes every fresh token
-// look abandoned, so two claimants skip past each other and both start work.
-//
-// This pins the boundary. It cannot reproduce real skew, which needs a store on
-// a second machine with a wrong clock; what it guards is that the calculation
-// stays anchored to a mark the store itself made.
-func TestATokenIsJudgedOldByTheClockThatStampedIt(t *testing.T) {
-	dir := t.TempDir()
-	s, err := NewFileStore(dir)
+// Every write here is load, edit, replace, and a filesystem does not make those
+// one operation. Two that overlapped used to lose one, silently, and the loser
+// was usually the thing somebody meant: a renewing owner is a standing writer —
+// three times a lease TTL for the whole of a transfer — so it erased pauses and
+// sent checkpoints backwards while reporting success to everybody.
+func TestAConcurrentWriteIsNotOverwritten(t *testing.T) {
+	s, err := NewFileStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := s.Submit(Record{Kind: "test", State: StatePending, Spec: []byte(`{}`)})
+	id, err := s.Submit(sampleRecord())
 	if err != nil {
 		t.Fatal(err)
 	}
+	held, err := s.Claim(id, "owner", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := held.Lease.Epoch
 
-	// What the store thinks the time is, which is the only clock that matters.
-	probe, err := os.CreateTemp(filepath.Join(dir, "jobs"), ".probe-*")
+	stop := make(chan struct{})
+	var renewing sync.WaitGroup
+	renewing.Add(1)
+	go func() {
+		defer renewing.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			s.Renew(id, epoch, time.Minute)
+		}
+	}()
+
+	const steps = 50
+	for n := int64(1); n <= steps; n++ {
+		if _, err := s.Update(id, epoch, func(r *Record) error {
+			r.Progress.Done = n
+			return nil
+		}); err != nil {
+			t.Fatalf("progress %d was refused: %v", n, err)
+		}
+	}
+	if _, err := s.SetIntent(id, WantPause, "ui"); err != nil {
+		t.Fatalf("the pause was refused: %v", err)
+	}
+	close(stop)
+	renewing.Wait()
+
+	r, err := s.Load(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe.Close()
-	pst, err := os.Stat(probe.Name())
-	if err != nil {
-		t.Fatal(err)
+	if r.Progress.Done != steps {
+		t.Fatalf("a renewal put the checkpoint back to %d of %d", r.Progress.Done, steps)
 	}
-	storeNow := pst.ModTime()
-	os.Remove(probe.Name())
-
-	for _, tc := range []struct {
-		name      string
-		age       time.Duration
-		abandoned bool
-	}{
-		{"just written", 1 * time.Second, false},
-		{"still within the handover", claimHandover - 2*time.Second, false},
-		{"well past the handover", claimHandover + 30*time.Second, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tok := s.epochPath(id, 1)
-			if err := os.WriteFile(tok, nil, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			defer os.Remove(tok)
-			stamp := storeNow.Add(-tc.age)
-			if err := os.Chtimes(tok, stamp, stamp); err != nil {
-				t.Fatal(err)
-			}
-
-			f, epoch, err := s.takeEpoch(id, 1)
-			if f != nil {
-				// Windows will not remove a directory while a handle is open,
-				// so leaking one here fails the parent test and not this one.
-				f.Close()
-			}
-			switch {
-			case tc.abandoned && err != nil:
-				t.Fatalf("a token %v old should have been steppable, got %v", tc.age, err)
-			case tc.abandoned && epoch == 1:
-				t.Fatal("stepped onto the abandoned epoch rather than past it")
-			case !tc.abandoned && err == nil:
-				t.Fatalf("a token %v old was treated as abandoned; a live owner "+
-					"would now have company", tc.age)
-			}
-		})
+	if r.Wants() != WantPause {
+		t.Fatal("a renewal erased the pause")
 	}
 }

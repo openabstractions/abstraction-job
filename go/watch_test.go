@@ -1,13 +1,28 @@
 package job
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	watch "github.com/openabstractions/abstraction-watch/go"
 )
+
+const watchBudget = 200 * time.Millisecond
+
+func nextNotice(t *testing.T, sub Subscription) Notice {
+	t.Helper()
+	n, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
 
 func TestWatchSeesWorkThatPredatesTheSubscription(t *testing.T) {
 	var s Store = openStore(t)
-	id := submitOne(t, s) // exists BEFORE anyone watches
+	id := submitOne(t, s)
 
 	sub := Watch(s, "test")
 	defer sub.Close()
@@ -15,6 +30,9 @@ func TestWatchSeesWorkThatPredatesTheSubscription(t *testing.T) {
 	got := sub.Records()
 	if len(got) != 1 || got[0].ID != id {
 		t.Fatalf("initial snapshot = %d records, want the one submitted earlier", len(got))
+	}
+	if n := nextNotice(t, sub); len(n.Records) != 1 || n.Quiet {
+		t.Fatalf("first notice = %+v, want the present", n)
 	}
 }
 
@@ -55,31 +73,35 @@ func TestWatchPushesAChange(t *testing.T) {
 	}
 }
 
-// A lease renewal changes UpdatedAt and nothing a person can see. If that woke
-// the UI, a progress bar would flicker on every heartbeat.
-func TestWatchIgnoresChangesNobodyCanSee(t *testing.T) {
+func TestWatchReportsQuietOnlyWhenNothingVisibleMoved(t *testing.T) {
 	var s Store = openStore(t)
 	id := submitOne(t, s)
-	sub := Watch(s, "test")
+	sub := WatchQuiet(s, "test", watchBudget)
 	defer sub.Close()
+	nextNotice(t, sub)
 
 	claimed, err := s.Claim(id, "owner", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Drain the change the claim legitimately caused (state and lease owner).
-	select {
-	case <-sub.Changes():
-	case <-time.After(10 * time.Second):
-		t.Fatal("claim should have been visible")
+	if n := nextNotice(t, sub); n.Quiet || n.Records[0].State != StateRunning {
+		t.Fatalf("after a claim: %+v, want the change", n)
 	}
 
 	if _, err := s.Renew(id, claimed.Lease.Epoch, 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case snap := <-sub.Changes():
-		t.Fatalf("renewing a lease woke the watcher: %v", snap)
-	case <-time.After(2 * time.Second):
+	if n := nextNotice(t, sub); !n.Quiet || n.Silence < watchBudget {
+		t.Fatalf("after a renewal: %+v, want quiet — a renewal is invisible", n)
+	}
+}
+
+func TestWatchClosedEndsTheStream(t *testing.T) {
+	var s Store = openStore(t)
+	sub := Watch(s, "test")
+	nextNotice(t, sub)
+	go sub.Close()
+	if _, err := sub.Next(context.Background()); !errors.Is(err, watch.ErrClosed) {
+		t.Fatalf("err = %v after Close, want ErrClosed", err)
 	}
 }

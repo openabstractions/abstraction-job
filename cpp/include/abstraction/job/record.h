@@ -14,9 +14,9 @@
 // mirrors and chunk manifests without the record every language must agree
 // about changing underneath them.
 
+#include <abstraction/json/value.h>
 #include <chrono>
 #include <cstdint>
-#include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -26,27 +26,27 @@ namespace abstraction {
 namespace job {
 
 // Key order is part of the on-disk contract — Go decodes with
-// DisallowUnknownFields and the file is read by humans in diffs — so this must
-// be the insertion-ordered specialisation, never the std::map-backed default
-// that would silently alphabetise every object it touches, spec included.
-using Json = nlohmann::ordered_json;
+// DisallowUnknownFields and the file is read by humans in diffs — so this keeps
+// insertion order rather than sorting, which would silently alphabetise every
+// object it touched, spec included.
+using Json = json::Value;
 
 using Clock = std::chrono::system_clock;
 using TimePoint = Clock::time_point;
 
-// The data models this implementation understands, and writes.
+// The data features this implementation understands, and writes.
 //
 // A name is namespaced and versioned: "abstraction.job/base@1". The version is
 // part of the name rather than a separate field, so an incompatible change to
-// one model is a NEW name that old readers correctly fail to recognise, while
-// every other model in the record stays readable.
+// one feature is a NEW name that old readers correctly fail to recognise, while
+// every other feature in the record stays readable.
 //
 // This replaced an integer version. A version conflates WHAT CHANGED with WHAT
 // YOU MUST UNDERSTAND: "schema 5" cannot say which part a reader is missing, so
 // refusing the whole record was the only safe answer even when the addition was
 // decoration. See kCritical below for the half that makes this more than a
 // rename.
-namespace model {
+namespace feature {
 // The record every reader must understand. Always present, always critical.
 constexpr const char* kBase = "abstraction.job/base@1";
 // What somebody WANTS to happen. Critical whenever present: a reader that
@@ -58,39 +58,57 @@ constexpr const char* kDelegation = "abstraction.job/delegation@1";
 // Which phase of multi-phase work is happening now. NEVER critical: advisory,
 // for telling a person what is going on.
 constexpr const char* kStep = "abstraction.job/step@1";
+// That a finished record is closed to its own lease holder: no update, no
+// release, no intent. It names a RULE rather than a field, which is why it went
+// out under an unchanged kBase and why a published reader walks a complete job
+// back to pending on a record this tree wrote. Declared whenever the state is
+// terminal, and critical there, because a reader that does not know the rule is
+// exactly the reader that breaks it.
+constexpr const char* kTerminal = "abstraction.job/terminal@1";
+// That the issuer has asked the holder for the lease back: lease.recall and
+// its rules — a renew never extends past `until`, the holder cannot re-claim to
+// shed it, and the lease lapsing at `until` is the eviction. Critical whenever
+// present.
+constexpr const char* kRecall = "abstraction.job/recall@1";
 // A checkpoint carrying proven byte ranges rather than only a prefix. NEVER
 // critical: a reader that ignores it resumes from the prefix and re-fetches the
 // rest, which costs a second fetch, while marking it critical would stop every
 // existing reader dead for no safety gain. Defined in ranges.h.
 constexpr const char* kRanges = "abstraction.download/ranges@1";
-}  // namespace model
+}  // namespace feature
 
-// Models this layer declares but cannot derive, because what they describe
-// lives inside a field that is opaque here. See derive_models.
-bool is_carried_model(const std::string& name);
+// Features this layer declares but cannot derive, because what they describe
+// lives inside a field that is opaque here. See derive_features.
+bool is_carried_feature(const std::string& name);
 
-// Models that must not appear in `critical` whoever asked for it: both are
+// Features that must not appear in `critical` whoever asked for it: both are
 // advisory by their own definition, so marking one critical tells a stranger to
 // refuse work over a decoration.
-bool is_never_critical_model(const std::string& name);
+bool is_never_critical_feature(const std::string& name);
 
-// Whether this implementation can read a model named in a record's `critical`.
-bool is_known_model(const std::string& name);
+// Whether this implementation can read a feature named in a record's `critical`.
+bool is_known_feature(const std::string& name);
 
-// The models a record carries, derived from what is actually in it.
-void derive_models(const struct Record& r, std::vector<std::string>& out_content,
+// Every content-set name this implementation can read, sorted. Exposed so a
+// harness can diff one implementation's roster against another's: three readers
+// that do not know the same names are not three implementations of one
+// contract, and nothing could see that until this was askable.
+std::vector<std::string> known_features();
+
+// The features a record carries, derived from what is actually in it.
+void derive_features(const struct Record& r, std::vector<std::string>& out_content,
                    std::vector<std::string>& out_critical);
 
-// The first critical model this implementation cannot read, or "" if it can
+// The first critical feature this implementation cannot read, or "" if it can
 // read them all. Only `critical` is consulted: a name in `content` that nobody
 // here knows is data to carry, not a reason to stop.
 std::string first_unknown_critical(const std::vector<std::string>& critical);
 
-// The integer this format used to carry, mapped onto the models each version
+// The integer this format used to carry, mapped onto the features each version
 // implied. No longer written; still read, because stores full of version 3 and
 // 4 records exist on real disks and on a NAS. The mapping is exact rather than
 // a guess: those versions are frozen and it is known what each could contain.
-std::vector<std::string> models_for_legacy_schema(int schema, bool* ok);
+std::vector<std::string> features_for_legacy_schema(int schema, bool* ok);
 
 // What somebody WANTS to happen, as against what is happening.
 namespace want {
@@ -224,12 +242,37 @@ struct Progress {
 // expiry wakes believing it is still the owner; its writes carry a stale epoch
 // and are refused. Without that, two owners work one job and each believes the
 // result is correct.
+// The issuer asking for the lease back — the half of a lease this design
+// lacked: ours expired, and none could be revoked early with a reason the
+// holder could act on.
+//
+// Not an intent. Intent is what the user wants of the job; a recall is what the
+// issuer demands of the resource, addressed to one holding — the epoch it was
+// decided against — so a claim replaces it with nothing.
+//
+// The fallback is the lease lapsing at `until`: the recall moves `expires_at`
+// earlier and renew never extends past it. WDDM's shape, not Android's —
+// residency ends whether or not the holder trimmed, and the holder finds out on
+// its next write. A lease cannot kill a process on another machine; it can stop
+// believing in it.
+//
+// `reason` is opaque here, chosen by the issuer for the holder's kind, as `kind`
+// scopes `spec`. Required: a recall without one is a cancel in the wrong field.
+struct Recall {
+    std::string reason;
+    std::string by;
+    TimePoint at{};
+    TimePoint until{};
+};
+
 struct Lease {
     std::string owner;
     std::int64_t epoch = 0;
     TimePoint expires_at{};
+    std::optional<Recall> recall;
 
     bool held(TimePoint now) const { return !owner.empty() && now < expires_at; }
+    bool recalled() const { return recall.has_value(); }
 };
 
 // The work has been handed to something outside this process — a system
@@ -267,7 +310,8 @@ struct Delegation {
 //   5. Pause must be honoured by implementations that advertise it. One that
 //      cannot must FAIL the job with a reason rather than carry on, because a
 //      pause that quietly does nothing is worse than a refusal.
-//   6. A paused job is NOT an orphan — see FileStore::orphans.
+//   6. A paused job is NOT an orphan unless it is still RUNNING — see
+//      Record::stranded.
 //   7. Once `state` is terminal this is history.
 struct Intent {
     std::string want = want::kRun;
@@ -283,9 +327,11 @@ struct Intent {
 // continue this work has to be in here, because nothing else survives.
 struct Record {
     // What this record carries, and the subset a reader MUST understand or
-    // refuse it entirely. Not knowing the step model is harmless; not knowing
-    // the intent model means working on a job somebody asked to stop. X.509
-    // settled this with critical certificate extensions.
+    // refuse it entirely. Not knowing the step feature is harmless; not knowing
+    // the intent feature means working on a job somebody asked to stop. X.509
+    // settled the fallback (RFC 5280 §4.2); JOSE's "crit" (RFC 7515 §4.1.11)
+    // settled the shape, a parallel list naming things carried elsewhere in the
+    // same document, so critical is always a subset of content.
     std::vector<std::string> content;
     std::vector<std::string> critical;
     // Data this layer does not understand, keyed by a name that says who does.
@@ -337,10 +383,29 @@ struct Record {
         return intent->want;
     }
 
-    // Somebody asked this to stop and it has not finished. Sweeps use it: a
-    // paused job must not be adopted, or it would be restarted seconds after a
-    // person stopped it.
+    // Somebody asked this to stop and it has not finished.
     bool paused() const { return wants() == want::kPause && !terminal(); }
+
+    // Does this record's own state and intent leave work for a sweep?
+    //
+    // A TRANSFERRED job does not, and the difference cost a NAS 313 MB:
+    // transferred is deliberately not terminal, so a sweep saw a finished,
+    // digest-proven job with a lapsed lease and fetched the whole thing again,
+    // forever. What it waits for is an acknowledgement, and no amount of
+    // re-downloading produces one.
+    //
+    // A PAUSED job does not either — it looks abandoned and is not. Unless
+    // nobody ever carried the pause out: an owner that honours one releases the
+    // lease and the record stops being RUNNING, so a record still RUNNING under
+    // nobody is an owner that died between the two. Skipping that one makes the
+    // state permanent, because nothing may claim the job and therefore nothing
+    // may pause, resume or cancel it either.
+    bool stranded() const {
+        if (state == state::kTransferred) {
+            return false;
+        }
+        return !paused() || state == state::kRunning;
+    }
 
     // The form every implementation agrees on: 2-space indent, trailing
     // newline, keys in this order.

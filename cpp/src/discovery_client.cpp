@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+#include <abstraction/json/value.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -30,7 +30,7 @@
 namespace abstraction {
 namespace discovery {
 
-using Json = nlohmann::json;
+using Json = json::Value;
 using Clock = std::chrono::steady_clock;  // monotonic: a deadline must not move
                                           // when somebody corrects the clock
 using Deadline = Clock::time_point;
@@ -99,8 +99,9 @@ Answer interpret(const std::string& line, const std::string& store_root,
     // Non-throwing parse. A response is untrusted input from whatever managed
     // to bind the endpoint, and an exception escaping into a caller that asked
     // a yes/no question is the thing rule 1 forbids.
-    const Json doc = Json::parse(line, nullptr, /*allow_exceptions=*/false);
-    if (doc.is_discarded() || !doc.is_object()) return Answer::Absent;
+    bool parsed = false;
+    const Json doc = Json::parse(line, &parsed);
+    if (!parsed || !doc.is_object()) return Answer::Absent;
 
     // {"error": ...} answers a request this client did not send. It carries no
     // store and describes no supervisor, so there is nothing to hand work to.
@@ -373,8 +374,9 @@ std::string endpoint_for(const std::string& store_root, const std::string& servi
     std::ostringstream body;
     body << in.rdbuf();
 
-    const Json doc = Json::parse(body.str(), nullptr, /*allow_exceptions=*/false);
-    if (doc.is_discarded() || !doc.is_object()) return {};
+    bool parsed = false;
+    const Json doc = Json::parse(body.str(), &parsed);
+    if (!parsed || !doc.is_object()) return {};
     if (!doc.contains("services") || !doc["services"].is_object()) return {};
     const Json& services = doc["services"];
     if (!services.contains(service) || !services[service].is_string()) return {};

@@ -33,7 +33,7 @@ import (
 // It is not redundancy and it is not politeness. A reader that has never heard
 // of `verified` resumes from `verified_prefix` and re-fetches the rest, which
 // is exactly what it does today. That is the whole reason this is an addition
-// rather than a break, and it is why ModelRanges is never critical: an old
+// rather than a break, and it is why FeatureRanges is never critical: an old
 // reader that ignores the ranges loses some bytes to a second fetch, and
 // marking it critical would stop every existing reader dead for no safety gain.
 //
@@ -58,36 +58,36 @@ import (
 // checkpoint exactly as it found it; only a caller that asks for ranges gets
 // them rewritten.
 //
-// ModelRanges is named for the download kind and lives here for the same reason
+// FeatureRanges is named for the download kind and lives here for the same reason
 // the form does: three languages have to spell the same state identically, and
 // this is the package all three of them share.
 
-// ModelRanges is the content model for a checkpoint carrying proven ranges.
+// FeatureRanges is the content feature for a checkpoint carrying proven ranges.
 //
 // NEVER critical. See the note above: an old reader ignoring it re-fetches
 // bytes, which costs time; refusing it costs every existing reader.
-const ModelRanges = "abstraction.download/ranges@1"
+const FeatureRanges = "abstraction.download/ranges@1"
 
-// carried is the models this layer declares but cannot derive, because what
+// carried is the features this layer declares but cannot derive, because what
 // they describe lives inside a field that is opaque here.
 //
 // Everything else in Content is rediscovered on every write, so a declaration
-// cannot drift from the data. A model describing the CHECKPOINT's contents
+// cannot drift from the data. A feature describing the CHECKPOINT's contents
 // cannot be: working it out would mean reading the checkpoint, and this package
 // does not know what a checkpoint is. So the declaration is carried instead —
 // the same rule an unknown extension gets, for the same reason. A caller that
-// writes ranges declares the model; a caller that stops writing them must clear
+// writes ranges declares the feature; a caller that stops writing them must clear
 // it, which is what ClearCheckpointRanges is for.
-var carried = map[string]bool{ModelRanges: true}
+var carried = map[string]bool{FeatureRanges: true}
 
-// neverCritical is the models that must not appear in Critical whoever asked.
+// neverCritical is the features that must not appear in Critical whoever asked.
 //
 // Both are advisory by definition, and a record that marks one critical is
 // telling a stranger to refuse work over a decoration. Critical is otherwise
 // preserved as the caller left it — an extension's writer is entitled to say
 // "refuse this if you cannot read my payload" — but not for these two, because
 // their own definition says a reader ignoring them is still correct.
-var neverCritical = map[string]bool{ModelStep: true, ModelRanges: true}
+var neverCritical = map[string]bool{FeatureStep: true, FeatureRanges: true}
 
 // Range is a half-open byte interval: Start is included, End is not. An empty
 // range (Start == End) proves nothing and is dropped from a canonical set.
@@ -353,6 +353,34 @@ func CheckpointWithRanges(raw []byte, rs Ranges) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// canonicalCheckpoint rewrites the two keys this layer owns into the one
+// spelling every implementation agrees on, and leaves every other key alone.
+//
+// Called on the way out of Encode, so merge-on-write is a property of the
+// RECORD rather than a habit each caller has to share. Three languages compare
+// these bytes: a form that admits [[0,4],[4,8]] and [[0,8]] as different
+// records is not canonical, and one implementation writing through
+// SetCheckpointRanges while another hands in a literal would be exactly that.
+//
+// A checkpoint with no `verified` key is left untouched, byte for byte. That is
+// what keeps a single-stream record identical to the one this format has always
+// written, and it is why a kind that never heard of ranges is never rewritten.
+func canonicalCheckpoint(raw []byte) ([]byte, bool, error) {
+	var probe map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &probe) != nil {
+		return raw, false, nil
+	}
+	if _, has := probe[keyVerified]; !has {
+		return raw, false, nil
+	}
+	rs, err := RangesFromCheckpoint(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	out, err := CheckpointWithRanges(raw, rs)
+	return out, err == nil, err
+}
+
 // CheckpointRanges is the proven ranges this record's checkpoint carries.
 //
 // A record that has never checkpointed, and one whose checkpoint predates
@@ -363,7 +391,7 @@ func (r *Record) CheckpointRanges() (Ranges, error) {
 }
 
 // SetCheckpointRanges records what is proven, merged into canonical form, and
-// declares the ranges model.
+// declares the ranges feature.
 //
 // Both halves matter. Without the canonical form two writers spell one state
 // two ways; without the declaration a reader cannot tell whether an absent
@@ -375,8 +403,8 @@ func (r *Record) SetCheckpointRanges(rs []Range) error {
 		return err
 	}
 	r.Checkpoint = raw
-	if !contains(r.Content, ModelRanges) {
-		r.Content = append(r.Content, ModelRanges)
+	if !contains(r.Content, FeatureRanges) {
+		r.Content = append(r.Content, FeatureRanges)
 	}
 	return nil
 }
@@ -399,7 +427,7 @@ func (r *Record) AddCheckpointRange(start, end int64) error {
 // other key in the checkpoint alone.
 //
 // The declaration is carried rather than derived, so it has to be withdrawn
-// explicitly; a record that kept declaring a model whose data it no longer
+// explicitly; a record that kept declaring a feature whose data it no longer
 // holds would be telling a reader to look for something that is not there.
 func (r *Record) ClearCheckpointRanges() error {
 	others := map[string]json.RawMessage{}
@@ -438,7 +466,7 @@ func (r *Record) ClearCheckpointRanges() error {
 	}
 	kept := r.Content[:0]
 	for _, name := range r.Content {
-		if name != ModelRanges {
+		if name != FeatureRanges {
 			kept = append(kept, name)
 		}
 	}

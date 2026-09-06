@@ -19,7 +19,7 @@ import (
 //
 // The memory binding is the one that answers the fair objection to the other
 // two: a socket in front of a FileStore is a transport swap, not a second
-// implementation. Memory shares no code with FileStore — the lease, the epoch,
+// implementation. MemoryStore shares no code with FileStore — the lease, the epoch,
 // the exclusivity, the stale-write refusal and the rule that a paused job is not
 // an orphan are all written again. If the semantics were really FileStore all
 // along, this is where it shows.
@@ -58,10 +58,10 @@ func bindings(t *testing.T) []binding {
 
 	return []binding{
 		{"files", fileStore},
-		{"service", Dial(ln.Addr().Network(), ln.Addr().String())},
+		{"service", NewRemoteStore(ln.Addr().Network(), ln.Addr().String())},
 		// Shares no code with the other two. If the semantics were really
 		// FileStore all along, this is where that shows.
-		{"memory", NewMemory()},
+		{"memory", NewMemoryStore()},
 	}
 }
 
@@ -187,7 +187,12 @@ func storeContract(t *testing.T, s Store) {
 		t.Fatalf("successor inherited %+v, want 400 proven", cp)
 	}
 
-	// Terminal is terminal.
+	// Terminal is terminal. The write that MAKES it terminal is an ordinary
+	// update onto a record that is not yet terminal, and it must land; every
+	// write after it is refused, including the caller's own release. Update was
+	// the one operation none of the three implementations refused, so a lease
+	// holder could write progress onto a finished record and Release could walk
+	// it back to pending, where the next sweep offered it as an orphan.
 	if _, err := s.Update(id, next.Lease.Epoch, func(rec *Record) error {
 		rec.State = StateComplete
 		return nil
@@ -199,6 +204,22 @@ func storeContract(t *testing.T, s Store) {
 	}
 	if _, err := s.SetIntent(id, WantCancel, "too-late"); !errors.Is(err, ErrTerminal) {
 		t.Fatalf("a finished job accepted an intent: %v", err)
+	}
+	if _, err := s.Update(id, next.Lease.Epoch, func(rec *Record) error {
+		rec.Progress.Done = 999
+		return nil
+	}); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("a finished job accepted a write: %v", err)
+	}
+	if err := s.Release(id, next.Lease.Epoch); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("a finished job accepted a release: %v", err)
+	}
+	done, _ := s.Load(id)
+	if done.State != StateComplete || done.Progress.Done != 400 {
+		t.Fatalf("a finished record was written over: %s done=%d", done.State, done.Progress.Done)
+	}
+	if orphans, _ := s.Orphans(); len(orphans) != 0 {
+		t.Fatal("a finished job was offered as an orphan")
 	}
 
 	// Not found is not found.

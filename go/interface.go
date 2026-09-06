@@ -21,7 +21,7 @@ import "time"
 // That distinction was not free. This package's own documentation used to say
 // the record "on disk, in JSON" was the contract, which promoted an encoding to
 // a contract and was then believed: FileStore's name reached nine public
-// signatures, as far up as model.Get, three layers above anything that should
+// signatures, as far up as model.Submit, three layers above anything that should
 // know what a file is. Swapping the binding would have been a rewrite of every
 // caller rather than a link-time change.
 //
@@ -62,11 +62,17 @@ type Store interface {
 	Renew(id string, epoch int64, ttl time.Duration) (*Record, error)
 
 	// Release gives up a lease early. A courtesy: everything works without it,
-	// only more slowly.
+	// only more slowly. It is an Update, so it is refused on a finished job —
+	// there is nothing left to hand over, and the lease lapses on its own.
 	Release(id string, epoch int64) error
 
 	// Update applies mutate, but only if the caller still holds the lease at the
-	// epoch it presents. The single gate every change passes through.
+	// epoch it presents AND the record is not already complete, failed or
+	// cancelled. The single gate every change passes through.
+	//
+	// Terminal is judged on the record as read, so the write that ends a job
+	// lands and the one after it does not. An owner therefore puts everything it
+	// wants recorded into the same update as the final state.
 	Update(id string, epoch int64, mutate func(*Record) error) (*Record, error)
 
 	// SetIntent says what should happen, WITHOUT a lease.
@@ -79,6 +85,13 @@ type Store interface {
 	// An owner is required to observe this and converge. See Record.Intent for
 	// the rules that make that a contract rather than a suggestion.
 	SetIntent(id string, want Want, by string) (*Record, error)
+
+	// Recall asks the holder at epoch — the epoch the caller observed, not one
+	// it holds — to give the lease back by now+grace, for a reason it can act
+	// on. The lease lapses at that deadline either way: that is the fallback,
+	// and it is what makes this a demand rather than a suggestion. Not an
+	// intent — the user's wish about the job stays where it is.
+	Recall(id string, epoch int64, reason, by string, grace time.Duration) (*Record, error)
 }
 
 // Scratch is an OPTIONAL capability: a store whose binding happens to BE a local
@@ -101,9 +114,10 @@ type Scratch interface {
 	// PC and read by a NAS names one directory rather than one machine's view
 	// of it.
 	Root() string
-	// WorkPath is scratch space for a single job. What a Kind puts there is its
-	// own business; the only guarantee is that the location is derived from the
-	// id, so a successor can find what a predecessor left.
+	// WorkPath is the name a single job may spend on scratch. A name, not a
+	// shape: the only guarantees are that it is derived from the id, so a
+	// successor can find what a predecessor left, and that nothing else in the
+	// binding will use it. File or directory is the Kind's choice.
 	WorkPath(id string) string
 }
 

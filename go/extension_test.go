@@ -72,8 +72,8 @@ func TestAnUnknownExtensionSurvivesAReaderThatCannotReadIt(t *testing.T) {
 // into the record as Intent instead.
 func TestAnExtensionNeedsANameAndValidJSON(t *testing.T) {
 	var r Record
-	r.Content = []string{ModelBase}
-	r.Critical = []string{ModelBase}
+	r.Content = []string{FeatureBase}
+	r.Critical = []string{FeatureBase}
 	r.State = StatePending
 	r.Kind = "test"
 	r.ID = "1700000000000-abc"

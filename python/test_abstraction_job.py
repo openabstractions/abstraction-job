@@ -5,16 +5,20 @@ pass the same assertions is what makes this an abstraction rather than a file
 format with one reader.
 """
 
+import json
 import os
+import sys
 import tempfile
-import time
 import unittest
 from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cas", "python"))
 
 import abstraction_job
 from abstraction_job import (
     PENDING,
     RUNNING,
+    PAUSE,
     TRANSFERRED,
     Delegation,
     FileStore,
@@ -166,56 +170,60 @@ class JobTest(unittest.TestCase):
         nxt = self.store.claim(jid, "go-worker", 60)  # no clock movement at all
         self.assertEqual(nxt.lease.epoch, 2)
 
-    def test_epoch_tokens_do_not_block(self):
+    def test_a_claim_leaves_only_the_record_and_its_lock(self):
         jid = self.store.submit(self.sample())
         for i in range(1, 4):
             r = self.store.claim(jid, "worker", 1)
             self.assertEqual(r.lease.epoch, i)
             self.clock.add(2)
-        # The CURRENT epoch's token is what proves this owner holds it.
-        self.assertTrue(os.path.exists(self.store._epoch_path(jid, 3)))
-        # The spent ones do not survive. This assertion used to be the opposite
-        # -- every token ever created had to still be there -- which pinned an
-        # unbounded leak: one file per claim, forever. A real store reached 1069
-        # files for 17 jobs.
-        for i in (1, 2):
-            self.assertFalse(
-                os.path.exists(self.store._epoch_path(jid, i)),
-                "the token for spent epoch %d is still there" % i,
-            )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.store.root(), "jobs"))),
+            [jid + ".json", jid + ".json.lock"],
+        )
 
-    def test_an_abandoned_claim_token_does_not_brick_the_job(self):
-        """A token AHEAD of its record must not make a job unclaimable forever.
-
-        The token is created before the record is written, so a process that dies
-        in between leaves a token for an epoch the record never reached. Every
-        later claim then computed the same next epoch, found that token, and
-        failed -- permanently. Seen on a live store: record at 216, token at 217,
-        and a supervisor reporting a healthy sweep every five seconds while the
-        job silently failed its claim.
-        """
+    def test_a_claim_keeps_what_was_written_since_the_caller_read(self):
+        """The record written is the one under the lock, not the caller's copy:
+        the old compare-then-rename compared the epoch and wrote the caller's
+        copy, which erased an intent set in between while reporting success."""
         jid = self.store.submit(self.sample())
-        held = self.store.claim(jid, "first", 60)
-        self.store.release(jid, held.lease.epoch)
+        seen = self.store.load(jid)
+        self.store.set_intent(jid, PAUSE, "ui")
+        held = self.store.claim_from(seen, "sweeper", 60)
+        self.assertEqual(held.wants(), PAUSE)
+        r = self.store.load(jid)
+        self.assertEqual((r.wants(), r.lease.owner), (PAUSE, "sweeper"))
 
-        orphan = self.store._epoch_path(jid, held.lease.epoch + 1)
-        with open(orphan, "w") as f:
-            f.write("a process that died\n")
-        old = time.time() - 2 * abstraction_job._CLAIM_HANDOVER_SECONDS
-        os.utime(orphan, (old, old))
-
-        nxt = self.store.claim(jid, "successor", 60)
-        self.assertGreater(nxt.lease.epoch, held.lease.epoch)
-        self.assertFalse(os.path.exists(orphan), "the abandoned token was never cleaned up")
-
-    def test_a_fresh_claim_token_still_wins(self):
-        """Skipping past an epoch somebody is still taking would destroy the
-        exclusivity the token exists to provide."""
+    def test_a_stale_claim_cannot_commit_over_a_newer_owner(self):
+        """A claim computed from a record that has since moved must not commit:
+        the epoch would go backwards, a zombie holding the earlier number would
+        pass the staleness check in ``update``, and two processes would work one
+        job while every step reported success."""
         jid = self.store.submit(self.sample())
-        with open(self.store._epoch_path(jid, 1), "w") as f:
-            f.write("mid-flight\n")
+        # What a straggler read before it was descheduled: the job, unclaimed.
+        seen = self.store.load(jid)
+
+        # Two claims go through while it is not looking.
+        zombie = self.store.claim(jid, "first", 30)
+        self.clock.add(31)
+        current = self.store.claim(jid, "second", 30)
+        self.assertEqual(current.lease.epoch, 2, "staging: the record must be at epoch 2")
+
+        # The straggler wakes up and finishes the claim it started.
         with self.assertRaises(LeaseHeld):
-            self.store.claim(jid, "interloper", 60)
+            self.store.claim_from(seen, "straggler", 30)
+
+        after = self.store.load(jid)
+        self.assertEqual(
+            (after.lease.epoch, after.lease.owner),
+            (2, "second"),
+            "the epoch went backwards and the owner doing the work no longer owns it",
+        )
+
+        # The damage that would have followed: the first owner's lease expired
+        # and its writes must stay refused. They only stay refused while the
+        # epoch on disk is above its own.
+        with self.assertRaises(StaleEpoch):
+            self.store.update(jid, zombie.lease.epoch, lambda r: setattr(r.progress, "done", 999))
 
     def test_progress_cannot_be_negative(self):
         jid = self.store.submit(self.sample())
@@ -226,6 +234,37 @@ class JobTest(unittest.TestCase):
 
         with self.assertRaises(Invalid):
             self.store.update(jid, held.lease.epoch, bad)
+
+    def test_decode_refuses_an_unknown_field(self):
+        """A field nobody here knows is a newer writer far more often than it is
+        a typo, and continuing a job whose description we only partly understand
+        is the risk this refuses to take.
+
+        Go and C++ have always refused here. This side used to pick out the keys
+        it knew and drop the rest, which is worse than either: the next write
+        destroyed another participant's data, invisibly, because nobody here
+        could read what was lost.
+        """
+        jid = self.store.submit(self.sample())
+        with open(self.store._record_path(jid), "rb") as f:
+            good = json.loads(f.read())
+
+        newer = dict(good)
+        newer["invented_field"] = {"by": "something newer"}
+        with self.assertRaises(Invalid):
+            Record.from_json(json.dumps(newer).encode())
+
+        nested = dict(good)
+        nested["lease"] = dict(good["lease"], invented_field=1)
+        with self.assertRaises(Invalid):
+            Record.from_json(json.dumps(nested).encode())
+
+        # And what belongs to somebody else still goes through untouched, which
+        # is the escape that makes the refusal affordable.
+        carried = dict(good)
+        carried["extensions"] = {"nas.transfer/v1": {"anything": [1, 2, 3]}}
+        back = Record.from_json(json.dumps(carried).encode())
+        self.assertEqual(back.extensions["nas.transfer/v1"], {"anything": [1, 2, 3]})
 
     def test_decode_refuses_unknown_schema(self):
         with self.assertRaises(UnknownSchema):
@@ -250,7 +289,7 @@ class JobTest(unittest.TestCase):
         r = self.sample()
         r.id = "fixed-id"
         self.store.submit(r)
-        with self.assertRaises(FileExistsError):
+        with self.assertRaises(Invalid):
             self.store.submit(r)
 
     def test_round_trip_is_byte_stable(self):
@@ -331,5 +370,110 @@ class JobTest(unittest.TestCase):
         self.assertEqual(self.store.load(plain).state, PENDING)
 
 
+class LayoutTest(unittest.TestCase):
+    """Which relative paths belong to the store rather than to whoever writes
+    into it. Mirrors job/go/layout_test.go; the two must refuse the same set."""
+
+    def test_reserved_covers_every_path_a_store_writes(self):
+        """Read off a real store, not copied from the documentation. A store
+        that grows a directory and a `reserved` that does not would tell the
+        layer above that a path is free space when it is about to be written."""
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        store = abstraction_job.FileStore(d.name)
+        jid = store.submit(Record(id="", kind="download", spec={"what": "a thing"}))
+        rec = store.claim(jid, "owner", 60)
+        store.update(jid, rec.lease.epoch, lambda r: setattr(r.progress, "done", 1))
+        with open(store.work_path(jid), "wb") as fh:
+            fh.write(b"a partial")
+
+        stranger = "0000000000000-000000000000"
+        found = 0
+        for parent, dirs, files in os.walk(d.name):
+            for name in list(dirs) + list(files):
+                rel = os.path.relpath(os.path.join(parent, name), d.name)
+                found += 1
+                self.assertTrue(
+                    abstraction_job.reserved(stranger, rel),
+                    "the store wrote %r and reserved calls it free space" % rel,
+                )
+        self.assertGreaterEqual(found, 4, "this test is not exercising the store")
+
+        own = os.path.relpath(store.work_path(jid), d.name)
+        self.assertFalse(
+            abstraction_job.reserved(jid, own),
+            "a job was refused its own scratch",
+        )
+
+    def test_reserved_names_the_layout_and_nothing_else(self):
+        me = "1757000000000-deadbeef"
+        other = "1757000000001-cafebabe"
+        for p in (
+            "jobs",
+            "jobs/x.json",
+            "jobs/%s.json" % me,
+            "jobs/%s.json.lock" % me,
+            "jobs/%s.tmp-123" % me,
+            "jobs/%s.json.123.tmp" % me,
+            "jobs/deeper/still.json",
+            "work",
+            "work/" + other,
+            "work/%s/part" % other,
+            "services.json",
+            # The spellings a filesystem folds into the ones above.
+            "Jobs/x.json",
+            "JOBS/x.json",
+            "jobs\\x.json",
+            "jobs./x.json",
+            "WORK/" + other,
+            "Services.json",
+            "models/../jobs/x.json",
+            "./jobs/x.json",
+        ):
+            self.assertTrue(abstraction_job.reserved(me, p), p)
+
+        for p in (
+            "",
+            "models/x.gguf",
+            "work/" + me,
+            "work/%s/part" % me,
+            "work/" + me.upper(),
+            "jobsy/x.json",
+            "myjobs/x.json",
+            "a/jobs/x.json",
+            "a/services.json",
+            "services.json.bak",
+            "jobs/../models/x.gguf",
+            # download's, not this layer's -- see download.reserved_sink.
+            "supervisor.json",
+        ):
+            self.assertFalse(abstraction_job.reserved(me, p), p)
+
+        # No owner means no job owns anything, so the whole of work/ is the
+        # store's. That is what a caller asks before it has been given an id.
+        for p in ("work/" + me, "work/" + other):
+            self.assertTrue(abstraction_job.reserved("", p), p)
+
+
+def role(name, path, n):
+    store = FileStore(os.path.dirname(os.path.dirname(path)))
+    jid = os.path.basename(path)[: -len(".json")]
+    epoch = store.load(jid).lease.epoch
+    if name == "writer":
+        for _ in range(n):
+            store.update(jid, epoch, lambda r: setattr(r.progress, "done", r.progress.done + 1))
+            store.renew(jid, epoch, 3600)
+    elif name == "reader":
+        last = 0
+        while last < n:
+            done = store.load(jid).progress.done
+            if done < last:
+                sys.exit("progress went backwards: %d after %d" % (done, last))
+            last = done
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if "JOB_ROLE" in os.environ:
+        role(os.environ["JOB_ROLE"], os.environ["JOB_PATH"], int(os.environ["JOB_N"]))
+    else:
+        unittest.main()

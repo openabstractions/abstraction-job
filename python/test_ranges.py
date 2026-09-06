@@ -14,7 +14,7 @@ import unittest
 from datetime import datetime, timezone
 
 from abstraction_job import (
-    MODEL_RANGES,
+    FEATURE_RANGES,
     RUNNING,
     FileStore,
     Invalid,
@@ -193,14 +193,14 @@ class AdditiveTest(unittest.TestCase):
         # one is there.
         self.assertEqual(r.checkpoint["verified_prefix"], 4194304)
         # And it is never told it must understand ranges before it may proceed.
-        self.assertNotIn(MODEL_RANGES, r.critical)
-        self.assertIn(MODEL_RANGES, r.content)
+        self.assertNotIn(FEATURE_RANGES, r.critical)
+        self.assertIn(FEATURE_RANGES, r.content)
 
     def test_ranges_are_never_critical_even_if_a_writer_says_so(self):
         r = fixture_record()
-        r.critical = list(r.critical) + [MODEL_RANGES]
+        r.critical = list(r.critical) + [FEATURE_RANGES]
         back = json.loads(r.to_json())
-        self.assertNotIn(MODEL_RANGES, back["critical"])
+        self.assertNotIn(FEATURE_RANGES, back["critical"])
 
 
 class ParallelFetcherTest(unittest.TestCase):
@@ -258,7 +258,7 @@ class CheckpointKeysTest(unittest.TestCase):
         r = fixture_record()
         r.clear_checkpoint_ranges()
         text = r.to_json().decode()
-        self.assertNotIn(MODEL_RANGES, text)
+        self.assertNotIn(FEATURE_RANGES, text)
         self.assertNotIn('"verified"', text)
         # The prefix survives, because it is not ours to remove: an old reader
         # still resumes from it.
@@ -289,7 +289,7 @@ class DeclarationSurvivesTest(unittest.TestCase):
         store.update(jid, claimed.lease.epoch, touch)
 
         got = store.load(jid)
-        self.assertIn(MODEL_RANGES, got.content)
+        self.assertIn(FEATURE_RANGES, got.content)
         self.assertEqual(len(got.checkpoint_ranges()), 3)
 
 

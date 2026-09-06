@@ -9,10 +9,9 @@ namespace job {
 
 namespace {
 
-// A JSON number is only a byte offset if it is a whole number that fits. A
-// double that happens to look like one does not qualify: nlohmann will hand
-// back 4194304.0 for a value some other writer emitted as a float, and
-// accepting it would let a resume point arrive with a fractional part.
+// A JSON number is only a byte offset if it is a whole number that fits. One
+// that some other writer spelled 4194304.0 does not qualify, and accepting it
+// would let a resume point arrive with a fractional part.
 std::int64_t as_offset(const Json& v, const char* what) {
     if (!v.is_number_integer()) {
         throw Invalid(std::string(what) + " is a whole number of bytes, got " + v.dump());
@@ -180,8 +179,8 @@ Ranges checkpoint_ranges(const Record& r) { return ranges_from_checkpoint(r.chec
 
 void set_checkpoint_ranges(Record& r, const Ranges& ranges) {
     r.checkpoint = checkpoint_with_ranges(r.checkpoint, ranges);
-    if (std::find(r.content.begin(), r.content.end(), model::kRanges) == r.content.end()) {
-        r.content.push_back(model::kRanges);
+    if (std::find(r.content.begin(), r.content.end(), feature::kRanges) == r.content.end()) {
+        r.content.push_back(feature::kRanges);
     }
 }
 
@@ -210,7 +209,7 @@ void clear_checkpoint_ranges(Record& r) {
             r.checkpoint = std::move(rest);
         }
     }
-    r.content.erase(std::remove(r.content.begin(), r.content.end(), std::string(model::kRanges)),
+    r.content.erase(std::remove(r.content.begin(), r.content.end(), std::string(feature::kRanges)),
                     r.content.end());
 }
 

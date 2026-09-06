@@ -2,11 +2,12 @@ package job
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
 
-// Memory is a store that keeps jobs in memory, and it exists to answer an
+// MemoryStore is a store that keeps jobs in memory, and it exists to answer an
 // objection to the service binding.
 //
 // # Why this and not just the socket
@@ -30,14 +31,14 @@ import (
 // outlive its process must not be handed one of these. That is a real limit and
 // it is not hidden: there is nowhere for a successor to look, because there is
 // no successor.
-type Memory struct {
+type MemoryStore struct {
 	mu      sync.Mutex
 	records map[string]*Record
 	now     func() time.Time
 }
 
-func NewMemory() *Memory {
-	return &Memory{records: map[string]*Record{}, now: time.Now}
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{records: map[string]*Record{}, now: time.Now}
 }
 
 // copyOf hands out a copy rather than the stored pointer.
@@ -66,13 +67,17 @@ func copyOf(r *Record) *Record {
 		i := *r.Intent
 		c.Intent = &i
 	}
+	if r.Lease.Recall != nil {
+		rc := *r.Lease.Recall
+		c.Lease.Recall = &rc
+	}
 	if r.Requires != nil {
 		c.Requires = append([]string(nil), r.Requires...)
 	}
 	return &c
 }
 
-func (m *Memory) Submit(r Record) (string, error) {
+func (m *MemoryStore) Submit(r Record) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r.ID == "" {
@@ -95,7 +100,7 @@ func (m *Memory) Submit(r Record) (string, error) {
 	return r.ID, nil
 }
 
-func (m *Memory) Load(id string) (*Record, error) {
+func (m *MemoryStore) Load(id string) (*Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.records[id]
@@ -105,7 +110,7 @@ func (m *Memory) Load(id string) (*Record, error) {
 	return copyOf(r), nil
 }
 
-func (m *Memory) List() ([]*Record, error) {
+func (m *MemoryStore) List() ([]*Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	ids := make([]string, 0, len(m.records))
@@ -122,29 +127,29 @@ func (m *Memory) List() ([]*Record, error) {
 	return out, nil
 }
 
-func (m *Memory) Claimable(r *Record) bool {
+func (m *MemoryStore) Claimable(r *Record) bool {
 	return !r.State.Terminal() && !r.Lease.Held(m.now())
 }
 
-func (m *Memory) Orphans() ([]*Record, error) {
+func (m *MemoryStore) Orphans() ([]*Record, error) {
 	all, err := m.List()
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*Record, 0, len(all))
 	for _, r := range all {
-		// Paused is filtered here rather than in Claimable, because pausing
-		// is an intent and Claimable answers about observed state. Folding
-		// one into the other makes the predicate change meaning the moment
-		// somebody writes intent, which needs no lease.
-		if m.Claimable(r) && r.State != StateTransferred && !r.Paused() {
+		// Intent is filtered here rather than in Claimable, because it is a
+		// wish and Claimable answers about observed state. Folding one into the
+		// other makes the predicate change meaning the moment somebody writes
+		// intent, which needs no lease.
+		if m.Claimable(r) && r.Stranded() {
 			out = append(out, r)
 		}
 	}
 	return out, nil
 }
 
-func (m *Memory) Claim(id, owner string, ttl time.Duration) (*Record, error) {
+func (m *MemoryStore) Claim(id, owner string, ttl time.Duration) (*Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.records[id]
@@ -155,7 +160,7 @@ func (m *Memory) Claim(id, owner string, ttl time.Duration) (*Record, error) {
 		return nil, fmt.Errorf("%w: %s is %s", ErrTerminal, id, r.State)
 	}
 	now := m.now()
-	if r.Lease.Held(now) && r.Lease.Owner != owner {
+	if r.Lease.Held(now) && (r.Lease.Owner != owner || r.Lease.Recalled()) {
 		return nil, fmt.Errorf("%w: %s holds it", ErrLeaseHeld, r.Lease.Owner)
 	}
 	r.Lease = Lease{Owner: owner, Epoch: r.Lease.Epoch + 1, ExpiresAt: At(now.Add(ttl))}
@@ -163,10 +168,11 @@ func (m *Memory) Claim(id, owner string, ttl time.Duration) (*Record, error) {
 		r.State = StateRunning
 	}
 	r.UpdatedAt = At(now)
+	r.describe()
 	return copyOf(r), nil
 }
 
-func (m *Memory) Renew(id string, epoch int64, ttl time.Duration) (*Record, error) {
+func (m *MemoryStore) Renew(id string, epoch int64, ttl time.Duration) (*Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r, ok := m.records[id]
@@ -179,11 +185,28 @@ func (m *Memory) Renew(id string, epoch int64, ttl time.Duration) (*Record, erro
 	if !r.Lease.Held(m.now()) {
 		return nil, fmt.Errorf("%w: re-claim instead", ErrLeaseExpiry)
 	}
-	r.Lease.ExpiresAt = At(m.now().Add(ttl))
+	r.Lease.ExpiresAt = renewedUntil(r.Lease, m.now().Add(ttl))
 	return copyOf(r), nil
 }
 
-func (m *Memory) Release(id string, epoch int64) error {
+func (m *MemoryStore) Recall(id string, epoch int64, reason, by string, grace time.Duration) (*Record, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("%w: a recall needs a reason the holder can act on", ErrInvalid)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.records[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	if err := recall(r, m.now(), epoch, reason, by, grace); err != nil {
+		return nil, err
+	}
+	r.describe()
+	return copyOf(r), nil
+}
+
+func (m *MemoryStore) Release(id string, epoch int64) error {
 	_, err := m.Update(id, epoch, func(r *Record) error {
 		r.Lease.ExpiresAt = At(m.now())
 		r.Lease.Owner = ""
@@ -195,12 +218,15 @@ func (m *Memory) Release(id string, epoch int64) error {
 	return err
 }
 
-func (m *Memory) Update(id string, epoch int64, mutate func(*Record) error) (*Record, error) {
+func (m *MemoryStore) Update(id string, epoch int64, mutate func(*Record) error) (*Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	stored, ok := m.records[id]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	if stored.State.Terminal() {
+		return nil, fmt.Errorf("%w: %s is %s", ErrTerminal, id, stored.State)
 	}
 	if stored.Lease.Epoch != epoch {
 		return nil, fmt.Errorf("%w: record is at %d, caller holds %d", ErrStaleEpoch, stored.Lease.Epoch, epoch)
@@ -213,6 +239,7 @@ func (m *Memory) Update(id string, epoch int64, mutate func(*Record) error) (*Re
 		return nil, err
 	}
 	working.UpdatedAt = At(m.now())
+	working.describe()
 	if err := working.Validate(); err != nil {
 		return nil, err
 	}
@@ -220,7 +247,7 @@ func (m *Memory) Update(id string, epoch int64, mutate func(*Record) error) (*Re
 	return copyOf(working), nil
 }
 
-func (m *Memory) SetIntent(id string, want Want, by string) (*Record, error) {
+func (m *MemoryStore) SetIntent(id string, want Want, by string) (*Record, error) {
 	if !want.Valid() {
 		return nil, fmt.Errorf("%w: intent %q", ErrInvalid, want)
 	}
@@ -236,6 +263,7 @@ func (m *Memory) SetIntent(id string, want Want, by string) (*Record, error) {
 	now := m.now()
 	r.Intent = &Intent{Want: want, By: by, At: At(now)}
 	r.UpdatedAt = At(now)
+	r.describe()
 	return copyOf(r), nil
 }
 
@@ -247,6 +275,6 @@ func sortStrings(s []string) {
 	}
 }
 
-// Memory is a Store and, like the service binding, not a Scratch: there is no
+// MemoryStore is a Store and, like the service binding, not a Scratch: there is no
 // local area, and a caller that assumed one has to find out.
-var _ Store = (*Memory)(nil)
+var _ Store = (*MemoryStore)(nil)

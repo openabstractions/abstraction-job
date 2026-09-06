@@ -6,6 +6,7 @@
 
 #include <abstraction/job/store.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -320,8 +321,8 @@ static void test_lease_rules() {
     const Record claimed = store.claim(id, "cpp-worker", std::chrono::seconds(30));
     check("claim: epoch starts at one", claimed.lease.epoch == 1);
     check("claim: state becomes running", claimed.state == state::kRunning);
-    check("claim: token file created",
-          fs::exists(fs::path(root) / "jobs" / (id + ".epoch.1")));
+    check("claim: the record's lock is beside it",
+          fs::exists(fs::path(root) / "jobs" / (id + ".json.lock")));
     check("claim: a held job is not an orphan", store.orphans().empty());
     check("claim: another owner is refused",
           throws_job_error([&] { store.claim(id, "other", std::chrono::seconds(30)); }));
@@ -352,9 +353,23 @@ static void test_lease_rules() {
     check("claim: the predecessor's epoch is now stale",
           throws_job_error([&] { store.update(id, 1, [](Record&) {}); }));
 
+    // The write that MAKES a record terminal is an ordinary update onto a record
+    // that is not yet terminal, and it must land; every write after it is
+    // refused, including the caller's own release. Update was the one operation
+    // no implementation refused, so a lease holder could write progress onto a
+    // finished record and release could walk it back to pending, where the next
+    // sweep offered it as an orphan.
     store.update(id, 2, [](Record& rec) { rec.state = state::kComplete; });
     check("claim: a terminal job is refused",
           throws_job_error([&] { store.claim(id, "late", std::chrono::seconds(30)); }));
+    check("update: a terminal job is refused",
+          throws_job_error([&] { store.update(id, 2, [](Record& rec) { rec.progress.done = 999; }); }));
+    check("release: a terminal job is refused",
+          throws_job_error([&] { store.release(id, 2); }));
+    const Record finished = store.load(id);
+    check("update: a finished record was not written over",
+          finished.state == state::kComplete && finished.progress.done == 460);
+    check("orphans: a finished job is not stranded work", store.orphans().empty());
 
     check("load: an unknown id is not found",
           throws_job_error([&] { store.load("no-such-job"); }));
@@ -426,6 +441,57 @@ static void test_transferred_is_not_an_orphan() {
     fs::remove_all(root, ec);
 }
 
+// A claim computed from a record that has since moved must not commit.
+//
+// Found by reading rather than by two implementations disagreeing: before the
+// record was changed under a lock, the write after a claim was unguarded
+// -- so a claimant descheduled between reading the record and writing it could
+// rename its own version over a newer owner's and return success to a caller
+// that then went and did the work.
+//
+// The epoch even went backwards. A successful claim removes the previous
+// epoch's token, so the number a straggler was going to take is free again by
+// the time it wakes up, and it writes epoch 1 over epoch 2 with every step
+// reporting success. A zombie holding the earlier epoch 1 then passes the
+// staleness check in update(), which is precisely the two-owners damage the
+// whole lease exists to prevent.
+static void test_a_stale_claim_cannot_commit_over_a_newer_owner() {
+    const std::string root = temp_root();
+    FileStore store(root);
+
+    Record r;
+    r.kind = "download";
+    const std::string id = store.submit(std::move(r));
+
+    // What a straggler read before it was descheduled: the job, unclaimed.
+    const Record seen = store.load(id);
+
+    // Two claims go through while it is not looking. The second one's cleanup
+    // removes the token for epoch 1, so the number the straggler is about to
+    // take is free again.
+    const Record zombie = store.claim(id, "first", std::chrono::seconds(30));
+    store.set_clock([] { return Clock::now() + std::chrono::seconds(31); });
+    const Record current = store.claim(id, "second", std::chrono::seconds(30));
+    check("staging: the record is at epoch 2", current.lease.epoch == 2);
+
+    // The straggler wakes up and finishes the claim it started.
+    check("claim: a claim computed from a record that has moved is refused",
+          throws_job_error([&] { store.claim_from(seen, "straggler", std::chrono::seconds(30)); }));
+
+    const Record after = store.load(id);
+    check("claim: the epoch did not go backwards",
+          after.lease.epoch == 2 && after.lease.owner == "second");
+
+    // The damage that would have followed: the first owner's lease expired and
+    // its writes must stay refused. They only stay refused while the epoch on
+    // disk is above its own.
+    check("claim: a zombie owner's write is still refused",
+          throws_job_error([&] { store.update(id, zombie.lease.epoch, [](Record&) {}); }));
+
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
 // Delegation releases the lease immediately, so a delegated job spends most of
 // its life unleased. Demoting it to pending would invite a second tier to start
 // the same work again.
@@ -464,6 +530,72 @@ static void test_releasing_delegated_job_keeps_it_running() {
     fs::remove_all(root, ec);
 }
 
+static void test_recall() {
+    const std::string root = temp_root();
+    FileStore store(root);
+    // Microseconds, because that is what the record can hold and the test
+    // compares against what comes back off disk.
+    const TimePoint start = std::chrono::time_point_cast<std::chrono::microseconds>(Clock::now());
+    TimePoint clock = start;
+    store.set_clock([&] { return clock; });
+
+    Record r;
+    r.kind = "test-kind";
+    r.spec = Json::parse(R"({"what":"a thing"})");
+    const std::string id = store.submit(std::move(r));
+
+    check("recall: nobody holding is lease-expired",
+          throws_job_error([&] { store.recall(id, 0, "yield", "", std::chrono::seconds(60)); }));
+    const Record held = store.claim(id, "holder", std::chrono::hours(1));
+    check("recall: an epoch nobody observed is stale",
+          throws_job_error([&] { store.recall(id, 2, "yield", "", std::chrono::seconds(60)); }));
+    check("recall: a reason is required",
+          throws_job_error([&] { store.recall(id, 1, " ", "", std::chrono::seconds(60)); }));
+
+    const Record recalled = store.recall(id, 1, "yield", "issuer", std::chrono::seconds(10));
+    check("recall: recorded with its reason",
+          recalled.lease.recalled() && recalled.lease.recall->reason == "yield");
+    check("recall: intent untouched", recalled.wants() == want::kRun);
+    check("recall: the lease now ends at the deadline",
+          recalled.lease.expires_at == start + std::chrono::seconds(10));
+    check("recall: declared critical",
+          std::find(recalled.critical.begin(), recalled.critical.end(), feature::kRecall) !=
+              recalled.critical.end());
+    check("recall: round trip is byte-stable",
+          Record::decode(recalled.encode()).encode() == recalled.encode());
+
+    store.renew(id, 1, std::chrono::hours(1));
+    check("renew: never extends past the deadline",
+          store.load(id).lease.expires_at == start + std::chrono::seconds(10));
+    store.update(id, 1, [](Record& rec) { rec.progress.done = 8; });
+    check("claim: the holder cannot shed a recall by re-claiming",
+          throws_job_error([&] { store.claim(id, "holder", std::chrono::hours(1)); }));
+
+    clock = start + std::chrono::seconds(11);
+    check("update: evicted at the deadline",
+          throws_job_error([&] { store.update(id, 1, [](Record&) {}); }));
+    check("orphans: an evicted job is offered", store.orphans().size() == 1);
+    const Record evicted = store.load(id);
+    check("evicted: still says who was asked and what they proved",
+          evicted.lease.recalled() && evicted.lease.owner == "holder" && evicted.progress.done == 8);
+
+    const Record next = store.claim(id, "successor", std::chrono::hours(1));
+    check("claim: a new holding carries no recall",
+          !next.lease.recalled() &&
+              std::find(next.content.begin(), next.content.end(), feature::kRecall) ==
+                  next.content.end());
+    store.recall(id, 2, "yield", "", std::chrono::seconds(60));
+    store.release(id, 2);
+    const Record complied = store.load(id);
+    check("release: compliance keeps the recall and drops the owner",
+          complied.lease.recalled() && complied.lease.owner.empty() &&
+              complied.state == state::kPending);
+    (void)held;
+
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
 int main() {
     // Unbuffered, so a crash still tells you which check it died after. When
     // stdout is a pipe it is fully buffered, so a test that dies mid-run prints
@@ -478,7 +610,9 @@ int main() {
     test_lease_rules();
     test_atomic_replacement();
     test_transferred_is_not_an_orphan();
+    test_a_stale_claim_cannot_commit_over_a_newer_owner();
     test_releasing_delegated_job_keeps_it_running();
+    test_recall();
 
     std::printf("\n%s: %d failure(s)\n", g_failures == 0 ? "OK" : "FAILED", g_failures);
     return g_failures == 0 ? 0 : 1;
