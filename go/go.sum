@@ -1,0 +1,4 @@
+github.com/openabstractions/abstraction-cas/go v0.0.0-20260906174855-1e71bb92cfdc h1:+1VHHeOf6ufHJcIi6oZabf3nYFEyhUiVSWQecLEoBs8=
+github.com/openabstractions/abstraction-cas/go v0.0.0-20260906174855-1e71bb92cfdc/go.mod h1:uCqBVttRdaxJX8BgB2SiuvWds/at5N5A20QBE3IK8S4=
+github.com/openabstractions/abstraction-watch/go v0.0.0-20260906180147-40e6e6ff482f h1:nWgqaKPwU0sBJdUFGCPVjUEyTZPQR8lNsmuV0Pojbsg=
+github.com/openabstractions/abstraction-watch/go v0.0.0-20260906180147-40e6e6ff482f/go.mod h1:RF56LZfdbxZj/UU7fKbOAOGIHPeLJlIQxPrX+EN0Rj4=
