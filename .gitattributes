@@ -1,0 +1,5 @@
+# testdata holds files that are compared BYTE FOR BYTE by Go, Python and C++.
+# Without this, a clone on Windows with core.autocrlf=true checks them out with
+# CRLF, every implementation encodes with LF, and all three byte comparisons
+# fail for a reason no diff of the file shows.
+testdata/** -text

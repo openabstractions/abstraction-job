@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+@ABSTRACTION_JOB_DEPS@
+include("${CMAKE_CURRENT_LIST_DIR}/abstraction_jobTargets.cmake")
+
+check_required_components(abstraction_job)

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# C++ / CMake
+build/
+cmake-build-*/
+_deps/
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.obj
+*.lib
+*.a
+*.exe
+*.pdb
+*.ilk
+
+# Go
+/go/jobctl
+/go/jobctl.exe
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

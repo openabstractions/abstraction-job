@@ -1,0 +1,45 @@
+# What a supervisor is told when it asks. The half a record file cannot carry.
+#
+# record<TAB>action<TAB>supervisor schemas<TAB>supervisor actions<TAB>verdict
+#
+# The two supervisor columns are space separated, "-" for none, and they are
+# what the CALLER built in its own process. Nothing here is read out of a
+# record: that is the shape the whole design turns on, because an unknown schema
+# is then answered from a list the caller already holds and there is nowhere for
+# the answer to be a fetch.
+#
+# Verdicts: ok · invalid · unknown_schema · not_supported
+#
+# The three refusals are three different questions and a supervisor branches on
+# which one it got. `unknown_schema` means leave this job alone; `not_supported`
+# means this job is mine and this is not one of the things it does;
+# `invalid` means the record is wrong and somebody should be told.
+
+# --- the schema the record follows -----------------------------------------
+accept.vendor-actions.json	cancel	-	cancel	unknown_schema
+accept.vendor-actions.json	cancel	someone.else/other@1	cancel	unknown_schema
+accept.vendor-actions.json	cancel	nas.example/transfer@2	cancel	ok
+
+# --- a namespaced action does not collide with a bare one ------------------
+accept.vendor-actions.json	nas.example/transfer@2#cancel	nas.example/transfer@2	nas.example/transfer@2#cancel	ok
+accept.base-actions.json	nas.example/transfer@2#cancel	nas.example/transfer@2	nas.example/transfer@2#cancel	not_supported
+accept.vendor-actions.json	cancel	nas.example/transfer@2	nas.example/transfer@2#cancel	not_supported
+
+# --- an action the kind does not declare -----------------------------------
+accept.base-actions.json	nas.example/transfer@2#verify	nas.example/transfer@2	nas.example/transfer@2#verify	not_supported
+accept.schema-only.json	pause	nas.example/transfer@2	pause	not_supported
+accept.no-envelope.json	pause	nas.example/transfer@2	pause	not_supported
+
+# --- an action the kind declares and this supervisor has not built ----------
+accept.vendor-actions.json	nas.example/transfer@2#re-mirror	nas.example/transfer@2	nas.example/transfer@2#verify	not_supported
+accept.base-actions.json	recall	nas.example/transfer@2	pause resume cancel	not_supported
+
+# --- what a supervisor holding everything can do ---------------------------
+accept.base-actions.json	pause	nas.example/transfer@2	pause resume cancel recall	ok
+accept.base-actions.json	recall	nas.example/transfer@2	pause resume cancel recall	ok
+accept.vendor-actions.json	nas.example/transfer@2#verify	nas.example/transfer@2 someone.else/other@1	nas.example/transfer@2#verify	ok
+
+# --- not an action name at all ---------------------------------------------
+accept.base-actions.json	Pause	nas.example/transfer@2	pause	invalid
+accept.base-actions.json	https://example.invalid/x@1#pause	nas.example/transfer@2	pause	invalid
+accept.base-actions.json	nas.example/transfer@2#	nas.example/transfer@2	pause	invalid
