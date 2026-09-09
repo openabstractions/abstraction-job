@@ -1055,6 +1055,45 @@ Full surveys, with sources: [`research/async/`](https://github.com/openabstracti
 
 ---
 
+## Where a store comes from
+
+Nothing above this line says where a root is; every rule on this page governs
+what is inside one. That silence shipped: an installer put `dl` and `jobctl` on
+one machine's `PATH`, `dl` found the store and `jobctl` refused for want of an
+environment variable nothing sets, and the first install ever performed died
+there.
+
+**A store root is discovered, not demanded.** A tool handed no root resolves one,
+and never refuses for want of being told:
+
+1. its own override, if it has one — `JOB_STORE` for `jobctl`, `MODELGET_STORE`
+   for `jobd`. That rung exists for a harness pointing several implementations at
+   one directory, and for a container;
+2. `ABSTRACTION_STORE`;
+3. `store` in the per-user `abstraction/config.json`, at the location the OS
+   designates — `%APPDATA%` on Windows, `~/Library/Application Support` on macOS,
+   `$XDG_CONFIG_HOME` or `~/.config` elsewhere;
+4. `<home>/.abstraction`, whether or not it exists yet.
+
+**A tool that cannot open the root it resolved names that root and says which
+rung produced it.** The failure that removes is a person who cannot find out
+which directory a tool was looking at, and so cannot find the file to edit.
+
+This carries no invariant tag, because no sequence of store calls can observe it:
+every harness on this page is handed a root. Its test is the `verify` job of the
+release workflow in `openabstractions/service-jobd`, which installs the package,
+fetches one file with `dl`, and requires `jobctl list` to name the record `dl`
+just wrote — once with the store redirected, then again with nothing set at all.
+
+Discovery is the subject of
+[`abstraction-config`](https://github.com/openabstractions/abstraction-config),
+and `job` reimplements the order above in each language rather than depending on
+it. That duplication is a known cost, not a design, and the copies already
+differ: `config.JobStore` also reads a machine-wide file and an older
+`~/.modelget`, and no `jobctl` does.
+
+---
+
 ## Layout
 
 ```

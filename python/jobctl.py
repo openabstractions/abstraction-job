@@ -23,11 +23,63 @@ from abstraction_job import (
 )
 
 
+def _user_config_dir() -> str:
+    if sys.platform == "win32":
+        return os.environ.get("APPDATA", "")
+    if sys.platform == "darwin":
+        home = os.environ.get("HOME", "")
+        return os.path.join(home, "Library", "Application Support") if home else ""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return xdg
+    home = os.environ.get("HOME", "")
+    return os.path.join(home, ".config") if home else ""
+
+
+def store_root():
+    """Resolve a store root rather than demanding one.
+
+    The same four rungs, in the same order, as the Go and C++ jobctl and as
+    every other tool that shares this store. JOB_STORE keeps the top rung
+    because the conformance harness points three implementations at one
+    directory with it and must not inherit what the machine has configured.
+    """
+    for name in ("JOB_STORE", "ABSTRACTION_STORE"):
+        value = os.environ.get(name)
+        if value:
+            return value, name
+
+    config_dir = _user_config_dir()
+    if config_dir:
+        path = os.path.join(config_dir, "abstraction", "config.json")
+        try:
+            with open(path, "rb") as fh:
+                configured = json.load(fh).get("store")
+            if configured:
+                return configured, path
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    home = os.path.expanduser("~")
+    if not home or home == "~":
+        sys.exit(
+            "jobctl: this machine has no home directory, so there is no store to "
+            "default to\n  ABSTRACTION_STORE=…   names one"
+        )
+    return os.path.join(home, ".abstraction"), "the default; nothing is configured"
+
+
 def store() -> FileStore:
-    root = os.environ.get("JOB_STORE")
-    if not root:
-        sys.exit("jobctl: JOB_STORE is not set")
-    return FileStore(root)
+    root, came_from = store_root()
+    try:
+        return FileStore(root)
+    except OSError as e:
+        sys.exit(
+            "jobctl: %s: %s\n"
+            "  that root came from %s\n"
+            "  jobd setup --show     what this machine has configured, and which file said so\n"
+            "  ABSTRACTION_STORE=…   names a store for one run" % (root, e, came_from)
+        )
 
 
 def main() -> None:
@@ -90,6 +142,7 @@ def main() -> None:
     s_rec.add_argument("--by", default="")
 
     sub.add_parser("orphans")
+    sub.add_parser("list")
 
     a = p.parse_args()
     st = store()
@@ -142,6 +195,14 @@ def main() -> None:
             for r in st.orphans():
                 cp = json.dumps(r.checkpoint, separators=(",", ":")) if r.checkpoint else "none"
                 print(f"{r.id} kind={r.kind} state={r.state} checkpoint={cp}")
+
+        elif a.cmd == "list":
+            for r in st.list():
+                cp = json.dumps(r.checkpoint, separators=(",", ":")) if r.checkpoint else "none"
+                print(
+                    f"{r.id} kind={r.kind} state={r.state} "
+                    f"done={r.progress.done} checkpoint={cp}"
+                )
 
     except JobError as e:
         sys.exit(f"jobctl: {type(e).__name__}: {e}")

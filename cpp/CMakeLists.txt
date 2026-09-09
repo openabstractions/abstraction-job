@@ -90,6 +90,11 @@ target_include_directories(abstraction_job PUBLIC
 # namespaced name is spelled the same in both cases.
 target_link_libraries(abstraction_job PUBLIC
     abstraction::json abstraction::watch abstraction::cas)
+# nudge() opens an AF_UNIX socket, and on Windows that is Winsock. Without this
+# every program linking this library fails at LINK with six unresolved imports —
+# true for as long as discovery.cpp has been in the target, and unfound because
+# no gate run on a machine without cmake ever reached a linker.
+target_link_libraries(abstraction_job PUBLIC $<$<PLATFORM_ID:Windows>:ws2_32>)
 # PUBLIC rather than a directory-level CMAKE_CXX_STANDARD: the headers use
 # std::optional, so a consumer left at CMake's default of C++14 fails on the
 # first #include. The requirement has to travel with the target.

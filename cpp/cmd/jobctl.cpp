@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <abstraction/job/discovery.h>
 #include <abstraction/job/store.h>
 #include <map>
 #include <string>
@@ -78,10 +79,28 @@ std::string compact(const Record& r) {
 }
 
 [[noreturn]] void usage() {
-    std::cout << "usage: jobctl <submit|claim|progress|finish|show|intent|recall|orphans> [args]"
-                 "   (JOB_STORE must be set)\n";
+    std::cout << "usage: jobctl <list|submit|claim|progress|finish|show|intent|recall|orphans> [args]\n";
     std::cout << "  submit --kind K --spec '<json>' [--total N] [--requires a,b]\n";
+    std::cout << "  the store is the one this machine already has; ABSTRACTION_STORE names another\n";
     std::exit(2);
+}
+
+// A store root is resolved, not demanded: CONTRACT.md § Where a store comes from.
+//
+// JOB_STORE keeps the top rung because the conformance harness points three
+// implementations at one directory with it; everything below is the machine's
+// own answer, which is what dl and jobd already read.
+std::string store_root() {
+    const std::string named = abstraction::job::env_utf8("JOB_STORE");
+    if (!named.empty()) return named;
+    const std::string found = abstraction::job::store_or_default();
+    if (found.empty()) {
+        std::cerr << "jobctl: this machine has no home directory, so there is no store to "
+                     "default to\n"
+                     "  ABSTRACTION_STORE=…   names one\n";
+        std::exit(1);
+    }
+    return found;
 }
 
 std::chrono::milliseconds ttl_from(const std::string& raw, double fallback_seconds) {
@@ -149,10 +168,7 @@ int main(int argc, char** argv) {
     const std::vector<std::string> rest(argv + 2, argv + argc);
     const Args args = parse_args(rest);
 
-    const char* root = std::getenv("JOB_STORE");
-    if (root == nullptr || *root == '\0') {
-        fatal("JOB_STORE is not set");
-    }
+    const std::string root = store_root();
 
     try {
         FileStore store(root);
@@ -243,6 +259,13 @@ int main(int argc, char** argv) {
         } else if (command == "orphans") {
             for (const Record& r : store.orphans()) {
                 std::cout << r.id << " kind=" << r.kind << " state=" << r.state
+                          << " checkpoint=" << compact(r) << std::endl;
+            }
+
+        } else if (command == "list") {
+            for (const Record& r : store.list()) {
+                std::cout << r.id << " kind=" << r.kind << " state=" << r.state
+                          << " done=" << r.progress.done
                           << " checkpoint=" << compact(r) << std::endl;
             }
 

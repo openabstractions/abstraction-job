@@ -130,6 +130,8 @@ double parse_duration(const std::string& s) {
 
 }  // namespace
 
+std::string env_utf8(const char* name) { return env(name); }
+
 std::string machine_store() {
     // An environment override first, so a test or a container can redirect one
     // run without editing a file other processes are reading.
@@ -157,8 +159,22 @@ std::string machine_store() {
     return fs::exists(fallback) ? utf8_of(fallback) : std::string();
 }
 
-Supervisor supervisor_of(const std::string& store_root) {
-    Supervisor out;
+std::string store_or_default() {
+    const std::string configured = machine_store();
+    if (!configured.empty()) return configured;
+    const std::string home = env(
+#ifdef _WIN32
+        "USERPROFILE"
+#else
+        "HOME"
+#endif
+    );
+    if (home.empty()) return {};
+    return utf8_of(path_of(home) / ".abstraction");
+}
+
+Heartbeat supervisor_of(const std::string& store_root) {
+    Heartbeat out;
     if (store_root.empty()) return out;
 
     const Json hb = read_json(path_of(store_root) / "supervisor.json");

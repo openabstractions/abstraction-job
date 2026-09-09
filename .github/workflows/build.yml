@@ -148,16 +148,28 @@ jobs:
           fi
           "$CXX" --version | head -1
           out=testbin
-          [ "$RUNNER_OS" = Windows ] && out=testbin.exe
+          static=""
+          if [ "$RUNNER_OS" = Windows ]; then
+            out=testbin.exe
+            # Git Bash puts its own mingw64\bin ahead of the runner's C:\mingw64\bin,
+            # so a dynamically linked binary loads Git's older libstdc++-6.dll and
+            # dies in the loader before main: no output, no message, exit 127.
+            case "$("$CXX" --version | head -1)" in *g++*) static=-static ;; esac
+          fi
           "$CXX" -std=c++17 -I cpp/include \
             -I ../abstraction-cas/cpp/include -I ../abstraction-watch/cpp/include \
             cpp/test/test_job_record.cpp cpp/src/json.cpp cpp/src/record.cpp \
             cpp/src/ranges.cpp cpp/src/store.cpp cpp/src/awake.cpp \
-            ../abstraction-cas/cpp/src/cas.cpp -o "$out"
-          "./$out" | tee out.txt
+            ../abstraction-cas/cpp/src/cas.cpp -o "$out" $static
+          code=0
+          "./$out" | tee out.txt || code=$?
           n=$(grep -c PASS out.txt || true)
           if [ "$n" -lt 1 ]; then
             printf 'FAIL  the test binary printed no PASS line, and an empty run is not a pass\n'
+            exit 1
+          fi
+          if [ "$code" -ne 0 ]; then
+            printf 'FAIL  the run exited %s\n' "$code"
             exit 1
           fi
           printf '%s: c++ %s, %s assertions\n' \

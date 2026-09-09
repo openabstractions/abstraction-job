@@ -35,9 +35,31 @@ namespace job {
 // been configured, which is the ordinary case and not an error.
 std::string machine_store();
 
+// The same question a shell tool asks, which has no empty answer.
+//
+// "This machine has no store" is a real answer to machine_store: no store means
+// no supervisor, and the caller downloads for itself. A person who has just
+// typed a command needs a directory to open, so the default stands whether or
+// not it exists yet.
+std::string store_or_default();
+
+// The environment, losslessly, because on Windows the narrow one is not.
+//
+// Exported so a tool reading its own variable does not reach for getenv and
+// reintroduce the mapping this file measured: under Windows-1252,
+// `C:\Reinīs-Modeļi` came back as `C:\Reinis-Modeli`, a valid path naming a
+// different directory, with no error anywhere.
+std::string env_utf8(const char* name);
+
 // What a live supervisor looks like. Absent means this machine has none, and
 // the caller downloads for itself exactly as it always did.
-struct Supervisor {
+//
+// Named for the file it reads, not for the process behind it, because
+// `Supervisor` in this namespace is already the envelope's — what a caller has
+// built, in Go, Python and record.h. Two structs of one name in one namespace
+// is not a style question: abstraction_job stopped compiling the day the second
+// arrived, and no gate on this machine had a C++ compiler to say so.
+struct Heartbeat {
     std::string owner;  // program@host:pid, for a status line
     std::string tier;   // what IT delegates to, purely so a human can see the
                         // whole chain. Lemonade never acts on this.
@@ -48,7 +70,7 @@ struct Supervisor {
 // killed leaves its heartbeat behind, so trusting the file's existence would
 // hand work to a directory nobody is watching -- which looks exactly like a
 // download that started and then never progressed.
-Supervisor supervisor_of(const std::string& store_root);
+Heartbeat supervisor_of(const std::string& store_root);
 
 // Ask a supervisor to sweep now instead of at its next tick.
 //

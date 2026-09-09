@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,16 +22,19 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	root := os.Getenv("JOB_STORE")
-	if root == "" {
-		fatal(fmt.Errorf("JOB_STORE is not set"))
-	}
+	root, from := storeRoot()
 	s, err := job.NewFileStore(root)
 	if err != nil {
-		fatal(err)
+		fmt.Fprintf(os.Stderr, "jobctl: %s: %v\n", root, err)
+		fmt.Fprintf(os.Stderr, "  that root came from %s\n", from)
+		fmt.Fprintln(os.Stderr, "  jobd setup --show     what this machine has configured, and which file said so")
+		fmt.Fprintln(os.Stderr, "  ABSTRACTION_STORE=…   names a store for one run")
+		os.Exit(1)
 	}
 
 	switch os.Args[1] {
+	case "list":
+		cmdList(s, os.Args[2:])
 	case "submit":
 		cmdSubmit(s, os.Args[2:])
 	case "claim":
@@ -58,9 +62,45 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("usage: jobctl <submit|claim|progress|finish|show|cancel|intent|recall|orphans> [args]   (JOB_STORE must be set)")
+	fmt.Println("usage: jobctl <list|submit|claim|progress|finish|show|cancel|intent|recall|orphans> [args]")
 	fmt.Println("  submit --kind K --spec '<json>' [--total N] [--requires a,b]")
 	fmt.Println("  recall <id> --epoch N --reason WHY [--grace SECONDS] [--by who]")
+	fmt.Println("  the store is the one this machine already has; ABSTRACTION_STORE names another")
+}
+
+// storeRoot resolves a store root rather than demanding one, and says
+// which rung answered so a failure to open it can name the file to edit.
+//
+// A tool shipped in the same installer as dl and jobd, asked about the same
+// machine, must not need an environment variable neither of them needs: that
+// disagreement shipped, and the first install ever performed died on it.
+//
+// JOB_STORE stays, on the rung MODELGET_STORE occupies for jobd: five scripts
+// point three implementations at one directory with it, and a conformance run
+// must not inherit whatever the machine it runs on has configured.
+func storeRoot() (root, from string) {
+	if v := os.Getenv("JOB_STORE"); v != "" {
+		return v, "JOB_STORE"
+	}
+	if v := os.Getenv("ABSTRACTION_STORE"); v != "" {
+		return v, "ABSTRACTION_STORE"
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		path := filepath.Join(dir, "abstraction", "config.json")
+		var cfg struct {
+			Store string `json:"store"`
+		}
+		if b, err := os.ReadFile(path); err == nil && json.Unmarshal(b, &cfg) == nil && cfg.Store != "" {
+			return cfg.Store, path
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "jobctl: this machine has no home directory, so there is no store to default to:", err)
+		fmt.Fprintln(os.Stderr, "  ABSTRACTION_STORE=…   names one")
+		os.Exit(1)
+	}
+	return filepath.Join(home, ".abstraction"), "the default; nothing is configured"
 }
 
 // need parses or ends the process. A command line this tool will not act on
@@ -207,6 +247,28 @@ func cmdShow(s job.Store, args []string) {
 		fatal(err)
 	}
 	fmt.Print(string(b))
+}
+
+// cmdList prints every record, and what it could not read, on cmdOrphans' terms.
+//
+// It exists because the store's List is half the interface a shell can reach and
+// this tool could not reach it: `dl list` renders downloads, and a person holding
+// a store of some other kind had nothing to type.
+func cmdList(s job.Store, args []string) {
+	need(flag.NewFlagSet("list", flag.ContinueOnError), args)
+	rs, err := s.List()
+	var unread *job.ErrUnreadable
+	if err != nil && !errors.As(err, &unread) {
+		fatal(err)
+	}
+	for _, r := range rs {
+		fmt.Printf("%s kind=%s state=%s done=%d checkpoint=%s\n",
+			r.ID, r.Kind, r.State, r.Progress.Done, compact(r.Checkpoint))
+	}
+	if unread != nil {
+		fmt.Fprintln(os.Stderr, "jobctl:", unread)
+		os.Exit(1)
+	}
 }
 
 // cmdOrphans prints what the sweep found AND what it could not read, then exits
