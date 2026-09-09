@@ -225,6 +225,50 @@ lid or power button as it always did.
 A queued job holds nothing. A delegated job holds nothing here, which is the
 point of delegation: the NAS's fetch is the NAS's power.
 
+### Who may hold is a service's decision, and this is where it is enforced
+
+`KeepAwakeVia(holder, store, claimed)` asks before it holds. The ancestor is
+[polkit](https://www.freedesktop.org/software/polkit/docs/latest/polkit.8.html):
+a policy decision point answering *may this subject do this action*, and a
+policy enforcement point in every program that acts on the answer. The
+decision point is [`rights`](https://github.com/openabstractions/abstraction-rights);
+`rights.Registration` — the service and the secret a person's approval gave the
+application — is the `Holder` that asks it for `awake` and lets the service
+keep the platform request on the application's behalf. What the service
+records is the hold itself: `rights holds` shows the application, the right,
+the lease owner and the job's kind and id as the reason, when, and the program
+the kernel says asked; and the service's log carries the same line on `hold`,
+`released` and `revoked`. `rights revoke` ends a live hold the same second.
+
+Three answers, and each has one meaning:
+
+- **A refusal holds nothing, and the caller is told why.** Not registered, not
+  granted, an unidentifiable caller: `Held()` is false and `Why()` is what the
+  service said, verbatim. The platform is not asked instead.
+- **Nobody answering means the platform.** With no service at the endpoint the
+  hold takes the platform's inhibitor itself, exactly as `KeepAwake` does, and
+  `Why()` is nil. Absent means permitted here, because the measurement this
+  section opens with was of work that slept; an absent service must not put it
+  back to sleep. Absent is *nothing listened* and nothing else: every answer
+  the service gives, including *refused*, is a decision.
+- **Decided once, at the moment of asking.** A hold the service grants and
+  later takes away — a person revoked the right, or the service stopped, and
+  the client cannot tell which — ends, `Why()` is `ErrTakenAway`, and nothing
+  falls back to the platform behind the person's back.
+
+`KeepAwake(store, claimed)` is `KeepAwakeVia(Platform, …)`: it asks nobody,
+and it is what every caller in this tree still does. One deliberate divergence
+from the ancestor: polkit's subject is the calling process, so any library can
+ask; `rights` designates an application by its secret, so a library cannot,
+and the adopter brings the registration. The rules above are held by
+`TestARefusalHoldsNothingAndSaysWhy`, `TestNobodyAnsweringMeansThePlatform`
+and `TestAHoldTakenAwayEndsAndDoesNotFallBack` in `go/`, and against the
+running service by `TestAJobAsksBeforeItHolds`,
+`TestNoServiceMeansThePlatformHolds` and
+`TestAStoppedServiceTakesItsHoldsWithIt` in `rights/go`; the conformance
+driver has no policy service in its vocabulary, so no scenario file can reach
+them, and the `awake` scenario's every `hold` is the absent case.
+
 ### 4. The issuer can ask for it back
 
 ```json
