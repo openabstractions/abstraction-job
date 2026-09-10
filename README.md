@@ -1,7 +1,10 @@
 # abstraction-job
 
-**Ready.** Tagged `go/v0.2.0`, cross-language conformance passes (Go, Python,
-C++), and the example below runs as shown.
+**Ready.** Cross-language conformance passes (Go, Python, C++) and the example
+below runs as shown. No version number is typed on this page: a tag is the only
+thing that cannot drift, so
+[the tag list](https://github.com/openabstractions/abstraction-job/tags) is the
+answer to "which release".
 
 A record on disk describing work somebody asked for, and rules for who is allowed
 to be doing it right now. Any process, in any of three languages, can pick up
@@ -23,9 +26,16 @@ and the conformance suite that judges implementations of this contract.
 
     go get github.com/openabstractions/abstraction-job/go
 
-Current release [`go/v0.2.0`](https://github.com/openabstractions/abstraction-job/releases/tag/go%2Fv0.2.0).
-**Go 1.26 or later is required.** Python and C++ implementations are in this
-repository and on no package index; see Requirements.
+[Releases, newest first](https://github.com/openabstractions/abstraction-job/tags).
+`go get` with no version takes the newest; pin the exact tag you tested against.
+**Go 1.26 or later is required.**
+
+**Python** is in this repository and on no package index —
+[what to install, import and call](python/README.md). **C++** is here too, with
+no tagged release; see Requirements.
+
+Whether to adopt this at all, what it costs and what is not proven:
+[Adopting](CONTRIBUTING.md#adopting).
 
 ## An example that runs
 
@@ -74,8 +84,9 @@ can be another process, another language, or this machine after a reboot.
 
 **`Store`** is the whole interface; `NewFileStore(root)` is the implementation
 that ships. `jobctl`, present in all three languages, drives a store from a
-shell, and finds one rather than asking to be told — `ABSTRACTION_STORE`, then
-the machine's `abstraction/config.json`, then `~/.abstraction`. See
+shell, and finds one rather than asking to be told — its own `JOB_STORE`, then
+`ABSTRACTION_STORE`, then the machine's `abstraction/config.json`, then
+`~/.abstraction`. See
 [CONTRACT.md § Where a store comes from](CONTRACT.md#where-a-store-comes-from).
 
 | call | what it does |
@@ -123,8 +134,8 @@ carries an API stability promise.
 
 **Go** 1.26 or later, depending on this project's `cas` and `watch` layers and
 nothing else. **Python** 3.9 or later, standard library only, on no package
-index: `pip install ./cas/python ./watch/python ./job/python` from a checkout of
-each.
+index — the install line, the example and the API are on
+[`python/README.md`](python/README.md).
 
 **C++** 17, standard library only: `cpp/src/json.cpp` is this layer's JSON
 reader and there is no third-party dependency. `cpp/CMakeLists.txt` builds it,

@@ -418,7 +418,7 @@ this whole mechanism exists to avoid, and a newer writer's addition is far more
 likely than a typo. Anything a participant needs to carry that is not here goes
 in `extensions`, under a namespaced key, and every reader must write back
 untouched what it could not read [JOB-F2] — which is protobuf's unknown-field
-preservation, and the seat `annotations` fills in Kubernetes and OCI.
+preservation, and the role `annotations` plays in Kubernetes and OCI.
 
 **Declared as a divergence, because refusing is the unusual half.** Nearly
 everything an adopter has used ignores what it does not know: protobuf keeps
