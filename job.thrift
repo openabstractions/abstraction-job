@@ -136,25 +136,44 @@ const list<i32> permanent_status = [400, 401, 402, 403, 404, 405, 406, 410, 414,
 // nobody could see afterwards, because the thing destroyed was the description.
 // The envelope is optional to HAVE and not optional to UNDERSTAND [JOB-V5].
 //
-// `strip_critical` is the one name a reader must not be stopped by: the
-// checkpoint's proven-ranges model is advisory, a reader that knows nothing
-// about it resumes from the prefix and re-fetches the rest, and CONTRACT.md
-// [JOB-C2] says a reader STRIPS the marking rather than declining to add one.
-// So it leaves `critical` on read, before the subset and unknown checks, and it
-// is not a refusal: an unknown critical name still refuses the record.
-// A writer that marked it was wrong, and that is the writer's diagnostic.
+// `strip_critical` marks the names a reader must not be stopped by. The
+// checkpoint's proven-ranges model and the display step are advisory: a reader
+// that knows nothing about ranges resumes from the prefix and re-fetches the
+// rest, one that knows nothing about steps shows less, and CONTRACT.md's table
+// marks both "never" critical, which [JOB-D10] says a reader STRIPS rather than
+// refuses. So the marking leaves `critical` on read, before the subset and
+// unknown checks, and it is not a refusal: an unknown critical name still
+// refuses the record. A writer that marked it was wrong, and that is the
+// writer's diagnostic.
 //
-// WHAT THIS BLOCK CANNOT SAY, and what therefore stays in each implementation:
-// a term whose presence is not a top-level field of Record. The layer also
-// writes `abstraction.job/step@1` (progress.step), `abstraction.job/recall@1`
-// (lease.recall) and `abstraction.job/terminal@1` (state is one of three
-// words), and none of the three can be declared here.
+// WHAT THIS BLOCK CAN SAY is when a name is present, in three shapes and no
+// fourth: always; a path of required structs ending at an optional field, or
+// one key into an opaque value; a path ending at a string field, with the
+// words that make the name present. That covers every name in CONTRACT.md's
+// table. `terminal@1` is `state` holding one of three words, `recall@1` is
+// `lease.recall`, `step@1` is `progress.step`, and `ranges@1` is a `verified`
+// member of the checkpoint - one key in, and no further into a value this
+// layer does not own [JOB-K1]. Until the three shapes existed this block
+// declared five names, said in this comment that it could not declare the
+// other three, and every generated reader refused a page-conforming terminal
+// record: measured, research/rust161/RESULTS.md §4.
+//
+// WHAT IT STILL CANNOT SAY: that a marking is required. The page makes
+// `terminal@1` and `recall@1` critical whenever present; a record carrying
+// either in `content` alone is accepted here, because the writer owes the
+// marking and no refusal word names its absence. And a reader that recognises
+// `terminal@1` has learned a declaration, not a behaviour: whether a store
+// refuses its own holder's update on a finished job is judged by the
+// conformance scenarios and by nothing generated from this file.
 vocabulary Content {
   1: "abstraction.job/base@1"        (when = "always")
   2: "abstraction.job/intent@1"      (when = "intent")
-  3: "abstraction.download/ranges@1" (when = "checkpoint", strip_critical = "true")
+  3: "abstraction.download/ranges@1" (when = "checkpoint.verified", strip_critical = "true")
   4: "abstraction.job/delegation@1"  (when = "delegation")
   5: "abstraction.job/envelope@1"    (when = "envelope")
+  6: "abstraction.job/terminal@1"    (when = "state", is = "complete,failed,cancelled")
+  7: "abstraction.job/recall@1"      (when = "lease.recall")
+  8: "abstraction.job/step@1"        (when = "progress.step", strip_critical = "true")
 } (of = "Record", names = "content", critical = "critical")
 
 // A phase of a multi-phase job, for display only.

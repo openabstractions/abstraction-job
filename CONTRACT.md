@@ -24,6 +24,41 @@ That is what lets one layer evolve without disturbing the others — and it is t
 answer to the fair objection that an abstraction which changes shape every time a
 new tool shows up is not an abstraction, it is a union of tools.
 
+**[JOB-M1] A lease does not move what the work IS, and every binding refuses a
+write that tries, with `invalid`.** The set is `id`, `kind`, `spec`,
+`created_at` and `envelope`: each is written once, at submit. A lease is the
+right to record what HAPPENED to the work — `state`, `progress`, `checkpoint`,
+`delegation`, `error`, `extensions`, and `requires`, which a holder may widen
+when it hands the work to a system that demands more of a successor. Move the
+spec instead and every checkpoint already written becomes a proof about a
+different job, which a successor then resumes from and is wrong about while
+every command reports success. The comparison of an opaque half is on its
+compact form, because the whitespace inside one belongs to the record format
+[JOB-E1] and not to the payload; every escape and every number is still compared
+exactly [JOB-E7]. This is [JOB-V4] widened past the envelope, and it is stated
+here because it was believed and not held: the in-process bindings ran the
+caller's closure and checked only the envelope afterwards, so a changed spec was
+written and reported as success, while the service binding left these fields out
+of the fields a write copies and so SILENTLY DISCARDED the same change. Two
+bindings answering one call differently is the failure this whole page exists to
+prevent, and neither half of it was reachable by a test that asked one binding
+one question. `TestNoBindingLetsALeaseMoveWhatTheWorkIs` and
+`TestALeaseStillWritesWhatALeaseIsFor` in `job/go` are the pair: one refusal,
+compared across all three bindings, and the write a holder is still owed.
+
+**[JOB-M2] A record handed across an ownership boundary is owned by whoever
+receives it, to every depth.** Submit keeps nothing of the caller's record and
+Load returns nothing of the store's, including the byte slices inside
+`extensions`. An implementation that hands out its own state has an unleased
+write: a caller assigning into what Load returned changes the store with no
+epoch presented, nothing validated and no new `updated_at` — and the same
+aliasing defeats rollback, because a mutation that touches shared data and then
+fails has already landed. The in-memory binding is where this is easy to get
+wrong and where it WAS wrong; the file binding gets it by decoding fresh bytes.
+Not being durable exempts a store from nothing else it promises.
+`TestNoBindingHandsOutItsOwnState` and `TestAFailedUpdateLeavesTheStoreUnchanged`
+in `job/go` are the pair.
+
 ### 2. A successor inherits what its predecessor proved [JOB-C1]
 
 ```json
@@ -365,7 +400,7 @@ the agreement — see *How it is written* below.
 | `kind` | what this job is, and who can read `spec` and `checkpoint` |
 | `envelope` | `schema`, `actions` — which schema the opaque halves follow and what may be asked of a job of this kind. Optional, written once |
 | `state` | `pending` · `running` · `transferred` · `complete` · `failed` · `cancelled` |
-| `spec` | the immutable description of the work. **Opaque here** |
+| `spec` | the immutable description of the work [JOB-M1]. **Opaque here** |
 | `checkpoint` | what a successor needs to resume. **Opaque here**. Omitted until something is proven |
 | `progress` | `done`, `total`, `updated_at`, optional `step` — best-effort, decide nothing on it |
 | `lease` | `owner`, `epoch`, `expires_at`, and `recall` — `reason`, `by`, `at`, `until` — while the issuer wants it back |
@@ -790,7 +825,7 @@ and it is paid per kind rather than per store.
 that the party doing the work converges on in its own time. Argo spells the same
 thing `spec.suspend` and `spec.shutdown`. The three values are BITS' Resume,
 Suspend and Cancel. Ours is a separate field rather than the record's `spec`
-because `spec` here is opaque and immutable — see *What it knows*.
+because `spec` here is opaque and immutable [JOB-M1].
 
 `want` is exactly one of `run`, `pause`, `cancel`; anything else is refused
 rather than treated as `run` [JOB-I1]. **Absent means `run`** [JOB-I2], so a

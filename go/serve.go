@@ -128,20 +128,21 @@ func apply(store Store, req wire.Request) wire.Response {
 			if !same {
 				return fmt.Errorf("%w: %s", ErrConflict, req.Id)
 			}
-			// [JOB-V4], said out loud rather than arranged. Leaving the envelope
-			// out of the enumeration below would have been enough to stop it
-			// moving — and it would have made this binding SILENTLY IGNORE a
-			// change the other two REFUSE, which is the same application on two
-			// bindings behaving differently, the one test that decides whether
-			// this is an abstraction. A guarantee held by the absence of a line
-			// is a guarantee nothing can fail.
-			if err := envelopeUnmoved(rec.Envelope, want.Envelope); err != nil {
+			// [JOB-M1] and [JOB-V4], said out loud rather than arranged.
+			// Leaving these fields out of the enumeration below is enough to
+			// stop them moving — and that is exactly what made this binding
+			// SILENTLY DISCARD a changed spec that the other two SILENTLY
+			// APPLIED, which is the same application on two bindings behaving
+			// differently, the one test that decides whether this is an
+			// abstraction. A guarantee held by the absence of a line is a
+			// guarantee nothing can fail.
+			if err := immutablesOf(rec).unmoved(want); err != nil {
 				return err
 			}
 			// Everything a lease holder is allowed to change. Deliberately
-			// enumerated: id, kind, spec, the envelope and the timestamps are
-			// not the caller's to move, and a wire format that let them would be
-			// a way to rewrite history through a socket.
+			// enumerated, and the refusal above is what the enumeration is
+			// checked against: a wire format that let the rest move would be a
+			// way to rewrite history through a socket.
 			rec.State = want.State
 			rec.Progress = want.Progress
 			rec.Checkpoint = want.Checkpoint

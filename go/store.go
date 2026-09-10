@@ -361,11 +361,11 @@ func (s *FileStore) Update(id string, epoch int64, mutate func(*Record) error) (
 		if !r.Lease.Held(s.now()) {
 			return fmt.Errorf("%w: expired at %s", ErrLeaseExpiry, r.Lease.ExpiresAt.Format(time.RFC3339))
 		}
-		kind := r.Envelope.clone()
+		was := immutablesOf(r)
 		if err := mutate(r); err != nil {
 			return err
 		}
-		if err := envelopeUnmoved(kind, r.Envelope); err != nil {
+		if err := was.unmoved(r); err != nil {
 			return err
 		}
 		r.UpdatedAt = At(s.now())

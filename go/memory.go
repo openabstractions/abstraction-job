@@ -1,6 +1,7 @@
 package job
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -48,17 +49,25 @@ func NewMemoryStore() *MemoryStore {
 // mutations land without an epoch ever being checked. The file binding gets this
 // for free by decoding fresh bytes every time, which is the kind of accident
 // that makes a second implementation worth writing.
+//
+// EVERY reference field, and this is the correction: a shallow struct copy that
+// clones the fields somebody happened to think of leaves the rest aliased, and
+// an alias here is a write to the store with no lease, no epoch, no validation
+// and no new timestamp — the one thing the lease exists to make impossible. It
+// also silently defeats Update's rollback, because a mutation that touches
+// shared data and then returns an error has already landed. Extensions was the
+// field that was missed, and a map of byte slices needs both levels: copying the
+// map alone leaves every value's backing array shared [JOB-M2].
 func copyOf(r *Record) *Record {
 	if r == nil {
 		return nil
 	}
 	c := *r
-	if r.Spec != nil {
-		c.Spec = append([]byte(nil), r.Spec...)
-	}
-	if r.Checkpoint != nil {
-		c.Checkpoint = append([]byte(nil), r.Checkpoint...)
-	}
+	c.Content = cloneStrings(r.Content)
+	c.Critical = cloneStrings(r.Critical)
+	c.Requires = cloneStrings(r.Requires)
+	c.Spec = cloneBytes(r.Spec)
+	c.Checkpoint = cloneBytes(r.Checkpoint)
 	if r.Delegation != nil {
 		d := *r.Delegation
 		c.Delegation = &d
@@ -71,11 +80,32 @@ func copyOf(r *Record) *Record {
 		rc := *r.Lease.Recall
 		c.Lease.Recall = &rc
 	}
-	if r.Requires != nil {
-		c.Requires = append([]string(nil), r.Requires...)
+	if r.Progress.Step != nil {
+		st := *r.Progress.Step
+		c.Progress.Step = &st
+	}
+	if r.Extensions != nil {
+		c.Extensions = make(map[string]json.RawMessage, len(r.Extensions))
+		for name, raw := range r.Extensions {
+			c.Extensions[name] = cloneBytes(raw)
+		}
 	}
 	c.Envelope = r.Envelope.clone()
 	return &c
+}
+
+func cloneBytes(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	return append(make([]byte, 0, len(b)), b...)
+}
+
+func cloneStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(s)), s...)
 }
 
 func (m *MemoryStore) Submit(r Record) (string, error) {
@@ -236,11 +266,11 @@ func (m *MemoryStore) Update(id string, epoch int64, mutate func(*Record) error)
 		return nil, fmt.Errorf("%w: expired", ErrLeaseExpiry)
 	}
 	working := copyOf(stored)
-	kind := stored.Envelope.clone()
+	was := immutablesOf(stored)
 	if err := mutate(working); err != nil {
 		return nil, err
 	}
-	if err := envelopeUnmoved(kind, working.Envelope); err != nil {
+	if err := was.unmoved(working); err != nil {
 		return nil, err
 	}
 	working.UpdatedAt = At(m.now())

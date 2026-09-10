@@ -2291,10 +2291,11 @@ func Decode(in []byte) (*Record, error) {
 	return v, nil
 }
 
-var ContentTerms = []string{"abstraction.job/base@1", "abstraction.job/intent@1", "abstraction.download/ranges@1", "abstraction.job/delegation@1", "abstraction.job/envelope@1"}
+var ContentTerms = []string{"abstraction.job/base@1", "abstraction.job/intent@1", "abstraction.download/ranges@1", "abstraction.job/delegation@1", "abstraction.job/envelope@1", "abstraction.job/terminal@1", "abstraction.job/recall@1", "abstraction.job/step@1"}
 
 var ContentStripCritical = map[string]bool{
 	"abstraction.download/ranges@1": true,
+	"abstraction.job/step@1":        true,
 }
 
 func (r *reader) derive(v *Record) error {
@@ -2325,7 +2326,7 @@ func (r *reader) derive(v *Record) error {
 	if (v.Intent != nil) != in["abstraction.job/intent@1"] {
 		return r.refuse("content_mismatch")
 	}
-	if (v.Checkpoint != "") != in["abstraction.download/ranges@1"] {
+	if (Member(v.Checkpoint, "verified")) != in["abstraction.download/ranges@1"] {
 		return r.refuse("content_mismatch")
 	}
 	if (v.Delegation != nil) != in["abstraction.job/delegation@1"] {
@@ -2334,7 +2335,51 @@ func (r *reader) derive(v *Record) error {
 	if (v.Envelope != nil) != in["abstraction.job/envelope@1"] {
 		return r.refuse("content_mismatch")
 	}
+	if (v.State == "complete" || v.State == "failed" || v.State == "cancelled") != in["abstraction.job/terminal@1"] {
+		return r.refuse("content_mismatch")
+	}
+	if (v.Lease.Recall != nil) != in["abstraction.job/recall@1"] {
+		return r.refuse("content_mismatch")
+	}
+	if (v.Progress.Step != nil) != in["abstraction.job/step@1"] {
+		return r.refuse("content_mismatch")
+	}
 	return nil
+}
+
+// [DEF-A8] Whether an opaque value is an object naming this member with
+// something other than null. The key is decoded, so two spellings of one name
+// are one name; the value is neither decoded nor judged.
+func Member(v Raw, name string) bool {
+	r := &reader{buf: []byte(v)}
+	r.ws()
+	if r.at() != '{' {
+		return false
+	}
+	r.pos++
+	r.ws()
+	for r.at() == '"' {
+		k, err := r.str()
+		if err != nil {
+			return false
+		}
+		r.ws()
+		r.pos++
+		r.ws()
+		if k == name {
+			return r.at() != 'n'
+		}
+		if r.skipValue() != nil {
+			return false
+		}
+		r.ws()
+		if r.at() != ',' {
+			return false
+		}
+		r.pos++
+		r.ws()
+	}
+	return false
 }
 
 // Refusals is in the order two of them are chosen between.

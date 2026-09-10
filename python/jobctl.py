@@ -5,12 +5,17 @@ other exists; both only know the record.
 """
 
 import argparse
+import json
 import os
 import platform
 import sys
 from datetime import datetime, timezone
 
-import json
+try:
+    import abstraction_config
+except ImportError:
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "config", "python"))
+    import abstraction_config
 
 from abstraction_job import (
     CANCEL,
@@ -23,50 +28,21 @@ from abstraction_job import (
 )
 
 
-def _user_config_dir() -> str:
-    if sys.platform == "win32":
-        return os.environ.get("APPDATA", "")
-    if sys.platform == "darwin":
-        home = os.environ.get("HOME", "")
-        return os.path.join(home, "Library", "Application Support") if home else ""
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        return xdg
-    home = os.environ.get("HOME", "")
-    return os.path.join(home, ".config") if home else ""
-
-
 def store_root():
     """Resolve a store root rather than demanding one.
 
-    The same four rungs, in the same order, as the Go and C++ jobctl and as
-    every other tool that shares this store. JOB_STORE keeps the top rung
-    because the conformance harness points three implementations at one
-    directory with it and must not inherit what the machine has configured.
+    JOB_STORE is jobctl's own override and stays here: the conformance harness
+    points three implementations at one directory with it and must not inherit
+    what the machine has configured. Every other rung is the config layer's
+    answer, in one place, for all three languages.
     """
-    for name in ("JOB_STORE", "ABSTRACTION_STORE"):
-        value = os.environ.get(name)
-        if value:
-            return value, name
-
-    config_dir = _user_config_dir()
-    if config_dir:
-        path = os.path.join(config_dir, "abstraction", "config.json")
-        try:
-            with open(path, "rb") as fh:
-                configured = json.load(fh).get("store")
-            if configured:
-                return configured, path
-        except (OSError, ValueError, AttributeError):
-            pass
-
-    home = os.path.expanduser("~")
-    if not home or home == "~":
-        sys.exit(
-            "jobctl: this machine has no home directory, so there is no store to "
-            "default to\n  ABSTRACTION_STORE=…   names one"
-        )
-    return os.path.join(home, ".abstraction"), "the default; nothing is configured"
+    value = os.environ.get("JOB_STORE")
+    if value:
+        return value, "JOB_STORE"
+    try:
+        return abstraction_config.job_store()
+    except OSError as e:
+        sys.exit("jobctl: %s\n  ABSTRACTION_STORE=…   names one" % e)
 
 
 def store() -> FileStore:
