@@ -244,8 +244,10 @@ dies. The lease is the lifetime; nothing here has one of its own.
 It was added because a measurement demanded it: Windows put a laptop into
 Modern Standby with work in flight and the work ran at a third of its speed
 for four minutes, because nothing in the chain had told the platform a job
-was running (`research/power-plan/RESULTS.txt` §4). The abstraction is the
-only party that knows.
+was running. The abstraction is the only party that knows. That the hold is
+taken, follows the lease and no longer, and reports which of the two reasons it
+took nothing, is held by `go/awake_test.go` — `TestHoldFollowsLease` reads the
+platform's own execution state rather than this package's opinion of it.
 
 The assertion is the weakest that answers that: `PowerRequestSystemRequired`
 on Windows, `caffeinate -i` on macOS, `systemd-inhibit --what=idle:sleep` on
@@ -428,9 +430,8 @@ the general form. We refuse, and the download layer one level up ignores
 unknown spec keys on purpose — a record is a contract three languages share, a
 spec is payload the layer above extends.
 
-The measured cost is zero and the measured limit is the point:
-`research/wire-compat/RESULTS.txt`, which is not published, ran
-the published `go/v0.1.0` against the tree over five format changes, the record
+The measured cost is zero and the measured limit is the point. The published
+`go/v0.1.0` was run against this tree over five format changes, the record
 corpus, and 19 records from a real store — **nothing was refused at decode by
 either version**, because the envelope never moved (the same sixteen top-level
 fields throughout). The one change that *did* break an older reader was a rule,
@@ -531,10 +532,10 @@ decode to `x` — while the same name in two *separate* objects is fine,
 permits a repeated name; what it says is that a receiver's behaviour is
 unpredictable, and unpredictable receiver behaviour is the whole damage. Two
 readers handed identical bytes read different documents out of them, one keeping
-the first name and one the last. Measured rather than argued: at
-`abstraction-download/go/v0.2.1` a record whose `spec` names `sources` twice is
-accepted and downloads from the second source, so a first-wins reader in another
-language downloads a different artifact from the same record. [JOB-E7] keeps the
+the first name and one the last. Measured rather than argued:
+`abstraction-download` accepted a record whose `spec` names `sources` twice and
+downloaded from the second source, so a first-wins reader in another language
+downloads a different artifact from the same record. [JOB-E7] keeps the
 bytes intact in transit and can do nothing about disagreement at the moment they
 are interpreted.
 
@@ -590,8 +591,12 @@ any of the three has. Go's stdlib does it, Python's `raw_decode` returns an end
 index you can slice at, and .NET's `JsonElement.GetRawText()` proves a *tree* can
 do it, because a document that indexes offsets over the original buffer is still
 a tree. What separates the readers is not tree against token; it is whether the
-reader can still address a value's byte range in the input. Measured in
-`research/reading/RESULTS.txt`, and all three now carry the bytes: Go held every
+reader can still address a value's byte range in the input. `go/opaque_test.go`
+is where that is held: `TestOpaqueBytesSurvive` submits a spec spelling every
+scalar a way this package would not choose — a redundant solidus escape in a
+value and in a key, `1.50`, `1e2`, `-0.0`, an integer past float64, members in
+an order nothing sorts them into — and fails if any of it comes back re-spelled.
+All three now carry the bytes: Go held every
 token as it received it all along, the C++ reader had already kept a **number**
 as the literal text it arrived as — so `1.50`, `1e2`, `-0.0` and an integer past
 float64 survived it before this rule existed, and the page never said so — and
@@ -691,7 +696,8 @@ is what distinguishes it from every ancestor**, four of which mark only a value
 carried in the document. Naming a rule is deliberate and it is the mechanism's
 missing half: terminal enforcement was added to this format under an unchanged
 `abstraction.job/base@1`, so a reader published before it walks a `complete`
-record back to `pending` — measured, `research/wire-compat/RESULTS.txt` §2.
+record back to `pending` — measured, not argued: a `go/v0.1.0` lease holder did
+exactly that, and the `terminal` conformance scenario is what refuses it now.
 A shape can be ignored; a rule about writes cannot, because the reader that does
 not know it is precisely the reader that breaks it. So a change to what a record
 *means* is declarable here on the same terms as a change to what it carries.
@@ -1129,8 +1135,8 @@ looked novel turned out to be badly named. Where our name and the established
 one differ, this page says so, because the alternative is an adopter learning us
 before they can use us.
 
-Full surveys, with sources: [`research/async/`](https://github.com/openabstractions/research/blob/main/async/) and
-[`research/transfer/`](https://github.com/openabstractions/research/blob/main/transfer/).
+Full surveys, with sources: [`openabstractions/research`, `async/`](https://github.com/openabstractions/research/blob/main/async/) and
+[`transfer/`](https://github.com/openabstractions/research/blob/main/transfer/).
 
 ---
 

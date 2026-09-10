@@ -27,7 +27,11 @@ import (
 // or give up, so an error that arrives as plain text has lost the only part of
 // itself that mattered.
 
-func kindOf(err error) string {
+// Verdict names err in the vocabulary job.thrift declares, and the empty string
+// for nil. It is exported because a conformance driver needs the same answer the
+// service binding gives, and deriving it a second time is how the two would
+// drift.
+func Verdict(err error) string {
 	switch {
 	case err == nil:
 		return ""

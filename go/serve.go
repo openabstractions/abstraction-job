@@ -186,7 +186,7 @@ func unchanged(current *Record, base wire.Raw) (bool, error) {
 }
 
 func fail(err error) wire.Response {
-	return wire.Response{Kind: kindOf(err), Error: err.Error()}
+	return wire.Response{Kind: Verdict(err), Error: err.Error()}
 }
 
 func one(r *Record, err error) wire.Response {

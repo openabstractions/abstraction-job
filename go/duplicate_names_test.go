@@ -22,6 +22,27 @@ func nameDoc(spec string) []byte {
 	return []byte(strings.Replace(nameBase, "SPEC", spec, 1))
 }
 
+// Why [JOB-E9] needs code of its own: the standard library will not refuse a
+// repeated name, so a reader built on it silently keeps the last one while a
+// first-wins reader in another language keeps the first. Two readers, one file,
+// two documents. Run this against any JSON reader to find out which half of that
+// it is.
+func TestEncodingJSONKeepsTheLastOfARepeatedName(t *testing.T) {
+	const twice = `{"artifact":"first","artifact":"last"}`
+	if !json.Valid([]byte(twice)) {
+		t.Fatal("encoding/json refuses a repeated name; refuseDuplicateNames has nothing left to do")
+	}
+	var got struct {
+		Artifact string `json:"artifact"`
+	}
+	if err := json.Unmarshal([]byte(twice), &got); err != nil {
+		t.Fatalf("Unmarshal of a repeated name = %v, want accepted", err)
+	}
+	if got.Artifact != "last" {
+		t.Fatalf("encoding/json kept %q of a repeated name, not the last", got.Artifact)
+	}
+}
+
 func TestDuplicateNameRefusedAtTopLevelOfOpaqueValue(t *testing.T) {
 	if _, err := Decode(nameDoc(escapedDupe)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Decode of a spec spelling one name twice = %v, want ErrInvalid", err)

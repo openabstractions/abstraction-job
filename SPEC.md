@@ -83,8 +83,8 @@ record. — `matrix` 7 is refused for the lease, not the direction. No scenario
 asserts a backward move lands. Whether the store should refuse one is § 11.1.
 
 **2.10 [JOB-M2]** Every state is reachable through the contract: the corpus
-drives all six with `finish` (`matrix`). `VISION.md` § Open 6, *four of six
-states are unreachable from the contract*, is no longer true of the contract.
+drives all six with `finish` (`matrix`). *Four of six states are unreachable
+from the contract* is no longer true of the contract.
 It remains true of C++ product code, which writes `pending` and `running` and
 nothing else; the C++ conformance driver writes all six. See § 12.6.
 
@@ -130,7 +130,7 @@ by no C++ test found, and by no scenario.
 and the epoch rises; it may not while recalled [JOB-R5]. Three implementations
 do this; no page says so; `recall` 7 tests the refusal and nothing tests the
 re-claim. It let one process race itself and report a delivered download as a
-failed install (`feedback/2026-09-06-statefailed.md` § 4). Whether a
+failed install. Whether a
 same-owner re-claim should be a no-op returning the held epoch is § 11.2.
 
 **3.7 [JOB-O3]** A claim needs a non-empty owner. Refused; the verdict class is
@@ -270,7 +270,7 @@ re-claim at one epoch higher [JOB-O2]; if it did not, the retry is the claim.
 offers no way to ask. A retried final write is answered `terminal`, which is
 the one case that tells the caller it landed. A retried checkpoint lands twice
 and moves `updated_at`, which backoff reads (§ 8). There is no request
-identity on the write path; `feedback/2026-09-07-accept.md` § 1. § 11.7.
+identity on the write path. § 11.7.
 
 **5.5 [JOB-I4]** A retried intent is free: idempotent by rule.
 
@@ -311,9 +311,8 @@ one machine. Across a share it is unexamined.
 
 **6.2 [JOB-Q2]** The transcript format cannot express *unknown*: a transcript
 is one process on its own store. The job layer has no sentinel for it either;
-only the download layer does. The socket binding returns `ok` for writes that
-left the record in a different state (`research/skew/RESULTS.txt` § 2).
-§ 11.10.
+only the download layer does. The socket binding was measured returning `ok` for
+writes that left the record in a different state. § 11.10.
 
 **6.3** `refused` remains in the verdict list after `unknown-model` was split
 from it. What it names now is § 11.11.
@@ -323,8 +322,8 @@ fourth shape that neither a value nor an error carries alone. Go's `List` and
 `Orphans` return the records beside an `ErrUnreadable` naming the ids and
 unwrapping to the first reason. **Python and C++ skip an unreadable record
 and return success.** Elasticsearch's `_shards` and Kubernetes'
-`RemainingItemCount` are the shape; `feedback/2026-09-07-paths.md` § 1 the
-case. Live divergence; the cross-language rule is § 11.12.
+`RemainingItemCount` are the shape. Live divergence; the cross-language rule is
+§ 11.12.
 
 ## 7. Release
 
@@ -344,7 +343,7 @@ that never releases costs one ttl of delay, never correctness. — `terminal` 8,
 **7.2 [JOB-T4]** Consequently a holder does not release after its final write:
 the state write ends its epoch. `defer release()` around a run that finishes
 is a call that cannot succeed, and `download/go/runner.go` has discarded that
-error on every successful job (`feedback/2026-09-07-paths.md` § 3). Release on
+error on every successful job. Release on
 every exit that is not a final write. A distinguished *nothing to release*
 answer is § 11.13.
 
@@ -389,10 +388,10 @@ never by re-presenting the epoch.
 ## 9. Declarations and version skew
 
 **9.1 [JOB-V1]** There is no version on the wire and no negotiation. A peer
-may assume nothing about a peer built on a different day. Measured:
-`research/skew/RESULTS.txt` § 0, § 2 — four combinations of a client and a
-service one day apart all connect, none refuses, and two finish the same
-script with the job in a different state.
+may assume nothing about a peer built on a different day. Measured 2026-09-07,
+on that day's build: four combinations of a client and a service one day apart
+all connect, none refuses, and two finish the same script with the job in a
+different state.
 
 **9.2 [JOB-D1] [JOB-D6] [JOB-D9]** The only version-shaped thing is the
 record's `content` and `critical`: JOSE `crit` (RFC 7515 § 4.1.11) for the
@@ -403,7 +402,7 @@ declares, and only when the peer reads through the declaring decoder.
 
 **9.3 [JOB-F1] [JOB-D5] [JOB-D4]** On the file binding, an unknown field is
 refused, an unknown legacy `schema` integer is refused, and 3, 4, 5 are read
-and never written. — `unknown-model`, `research/wire-compat/RESULTS.txt`.
+and never written. — `unknown-model`.
 
 **9.4 [JOB-V2]** On the socket binding an unknown request field is ignored and
 an unknown op is `unknown_op`. The socket ships to nobody (`job.Serve` has one
@@ -415,9 +414,9 @@ caller, a test). Whether a connection must declare what it enforces is § 11.16.
 > refuse it*. **Both were false when written.** Probed against the live server:
 > both fields are present in every response, a record arriving without them is
 > refused `invalid: a record must say what it contains`, and an unknown record
-> field is refused `invalid: json: unknown field`. The clauses were taken from
-> `research/skew/RESULTS.txt`, a measurement of an older build, and read as
-> though a measurement of behaviour stays true. **An instrument's number is a
+> field is refused `invalid: json: unknown field`. The clauses were taken from a
+> measurement of an older build and read as though a measurement of behaviour
+> stays true. **An instrument's number is a
 > series, not a fact — and so is an instrument's *verdict*.** A specification
 > that cites a measurement cites its date, or it is quoting a value.
 
@@ -490,11 +489,10 @@ would settle it. An adopter meets these as surprises.
 4. **Partial enumeration.** Go beside; Python and C++ skip. § 6.4.
 5. **`refused`** survives in the verdict list; README says Go used it for
    what is now `unknown-model`.
-6. **Reachability.** `VISION.md` Open 6 is stale for the contract; still true
-   of C++ product code (`feedback/2026-09-06-statefailed.md` § 7).
-7. **`VISION.md` Open 5 and 12** — *intent absent from the contract*, *no
-   backoff anywhere* — are answered by [JOB-I1..I12] and § 8.2. Not this
-   agent's file to change.
+6. **Reachability.** *Four of six states are unreachable* is stale for the
+   contract; still true of C++ product code. § 2.10.
+7. **Intent absent from the contract** and **no backoff anywhere** are answered
+   by [JOB-I1..I12] and § 8.2.
 8. **Same-owner re-claim.** Three implementations, no page, one measured
    corruption. § 3.6.
 9. **Unsettled delegation as an equality.** Go only; a Python or C++ reader

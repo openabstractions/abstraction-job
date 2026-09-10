@@ -100,18 +100,25 @@ enum Capability {
 // seven `exception` types the sketch that preceded this file declared: a
 // binding that carried them as text lost the only part of an error that
 // mattered, which is the part `errors.Is` reads.
+//
+// `transcript` is how a conformance driver spells the same refusal in the
+// transcript conformance/DRIVER.md defines. It is declared and not derived:
+// four members answer `refused`, the transcript's word for a refusal with no
+// word of its own, and `unknown_schema` answers `unknown-model`, so no rule
+// over a member's spelling could produce this column. Deriving it is how the
+// two vocabularies came to disagree in one member while agreeing in six.
 enum Verdict {
-   1: not_found
-   2: lease_held
-   3: stale_epoch
-   4: conflict
-   5: lease_expired
-   6: terminal
-   7: invalid
-   8: unknown_schema
-   9: unknown_op
-  10: not_supported
-  11: other
+   1: not_found      (transcript = "not-found")
+   2: lease_held     (transcript = "lease-held")
+   3: stale_epoch    (transcript = "stale-epoch")
+   4: conflict       (transcript = "refused")
+   5: lease_expired  (transcript = "lease-expired")
+   6: terminal       (transcript = "terminal")
+   7: invalid        (transcript = "invalid")
+   8: unknown_schema (transcript = "unknown-model")
+   9: unknown_op     (transcript = "refused")
+  10: not_supported  (transcript = "refused")
+  11: other          (transcript = "refused")
 } (unknown = "grant")
 
 // HTTP statuses that mean asking again cannot help. Retry classification, in
@@ -156,7 +163,7 @@ const list<i32> permanent_status = [400, 401, 402, 403, 404, 405, 406, 410, 414,
 // layer does not own [JOB-K1]. Until the three shapes existed this block
 // declared five names, said in this comment that it could not declare the
 // other three, and every generated reader refused a page-conforming terminal
-// record: measured, research/rust161/RESULTS.md §4.
+// record: measured against a generated Rust reader, not argued.
 //
 // WHAT IT STILL CANNOT SAY: that a marking is required. The page makes
 // `terminal@1` and `recall@1` critical whenever present; a record carrying

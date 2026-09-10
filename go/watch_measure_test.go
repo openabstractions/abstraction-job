@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// The instrument behind research/watch/measure.sh. Skipped unless asked for:
-// it takes seconds and its output is a number, not a verdict.
+// An instrument, not a verdict. Skipped unless asked for: it takes seconds and
+// its output is a number.
 func TestMeasureWatch(t *testing.T) {
 	if os.Getenv("WATCH_MEASURE") == "" {
 		t.Skip("set WATCH_MEASURE=1 to measure")

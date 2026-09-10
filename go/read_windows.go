@@ -13,7 +13,7 @@ import (
 // polling every 10 s, indefinitely at 1 s, and a fresh process on the same PC
 // reads through the same handle. Only an open the cached handle cannot serve
 // sends a new CREATE, so consecutive opens of one record ask for different
-// access. Measured in research/smb-freshness/RESULTS.txt.
+// access.
 var lastOpenWasRW sync.Map
 
 func readFile(path string) ([]byte, error) {

@@ -874,8 +874,8 @@ func refuseDeepNesting(b []byte) error {
 // encoding/json does not do this and cannot be made to: json.Valid and
 // json.Unmarshal both accept a repeated name and keep the last one, so the same
 // record read here and by a first-wins reader in another language is two
-// different documents built from one file. Measured, not assumed — see
-// research/dupes75.
+// different documents built from one file. Measured, not assumed, and
+// TestEncodingJSONKeepsTheLastOfARepeatedName is that measurement.
 //
 // The scan reads a copy and returns nothing. Names are decoded because that is
 // what they are compared as; the bytes the record carries are untouched, which
