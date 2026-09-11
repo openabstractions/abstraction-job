@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 try:
     import abstraction_config
 except ImportError:
-    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "config", "python"))
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "abstraction-config", "python"))
     import abstraction_config
 
 from abstraction_job import (

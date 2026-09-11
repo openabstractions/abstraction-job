@@ -43,7 +43,7 @@ of the fields a write copies and so SILENTLY DISCARDED the same change. Two
 bindings answering one call differently is the failure this whole page exists to
 prevent, and neither half of it was reachable by a test that asked one binding
 one question. `TestNoBindingLetsALeaseMoveWhatTheWorkIs` and
-`TestALeaseStillWritesWhatALeaseIsFor` in `job/go` are the pair: one refusal,
+`TestALeaseStillWritesWhatALeaseIsFor` in `abstraction-job/go` are the pair: one refusal,
 compared across all three bindings, and the write a holder is still owed.
 
 **[JOB-M2] A record handed across an ownership boundary is owned by whoever
@@ -57,7 +57,7 @@ fails has already landed. The in-memory binding is where this is easy to get
 wrong and where it WAS wrong; the file binding gets it by decoding fresh bytes.
 Not being durable exempts a store from nothing else it promises.
 `TestNoBindingHandsOutItsOwnState` and `TestAFailedUpdateLeavesTheStoreUnchanged`
-in `job/go` are the pair.
+in `abstraction-job/go` are the pair.
 
 ### 2. A successor inherits what its predecessor proved [JOB-C1]
 
@@ -159,8 +159,8 @@ The **lock is as much of the agreement as the record**, and this is the one
 place where leaving it unwritten fails silently. An implementation that locks a
 different byte, a different file, or through a different API — `fcntl` against
 `flock` on Linux — passes every single-language test and loses updates against
-the others. `cas/README.md` § *What a fourth implementation must do* is the
-contract; `cas/mixed.py --job` is the instrument, and it fails a foreign lock on
+the others. `abstraction-cas/README.md` § *What a fourth implementation must do* is the
+contract; `abstraction-cas/mixed.py --job` is the instrument, and it fails a foreign lock on
 the first run.
 
 And a claim writes the record as it is under the lock, never the claimant's
@@ -186,7 +186,7 @@ Normative for anything sharing a directory with this store:
 
 **The lock is one machine's.** A byte-range lock taken over SMB and a `flock`
 on the server's own volume never meet: writers on two hosts on one record lost
-147–149 of 2150 updates in three runs of three (`cas/README.md`). Several
+147–149 of 2150 updates in three runs of three (`abstraction-cas/README.md`). Several
 processes on one host, in any of the three languages, lose nothing. A record
 written from two hosts needs a protocol this store does not have.
 
@@ -211,7 +211,7 @@ directory has to ask, and `job.Reserved(owner, path)` (`reserved` in Python,
 `abstraction::job::reserved` in C++) is the answer [JOB-W2]. Without it a destination of
 `jobs/<id>.json` overwrites a record and `work/<other>` overwrites another job's
 scratch — both contained, both accepted, until 2026-09-06. See
-[`download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md).
+[`abstraction-download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md).
 
 `work/<id>` is a workspace in the sense `GITHUB_WORKSPACE` and Nomad's alloc dir
 are: a scratch area the runner is given rather than one it picks. `Reserved` is
@@ -302,7 +302,7 @@ and the adopter brings the registration. The rules above are held by
 and `TestAHoldTakenAwayEndsAndDoesNotFallBack` in `go/`, and against the
 running service by `TestAJobAsksBeforeItHolds`,
 `TestNoServiceMeansThePlatformHolds` and
-`TestAStoppedServiceTakesItsHoldsWithIt` in `rights/go`; the conformance
+`TestAStoppedServiceTakesItsHoldsWithIt` in `abstraction-rights/go`; the conformance
 driver has no policy service in its vocabulary, so no scenario file can reach
 them, and the `awake` scenario's every `hold` is the absent case.
 
@@ -447,7 +447,7 @@ undermeasured and it is stated here rather than defended: the *not now* against
 *no* classification, the most load-bearing thing this layer decides, is
 recoverable from a record only through `state`, and the reason is prose no
 machine reads. The classification itself is specified —
-[`download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md#two-endings) — and no field carries
+[`abstraction-download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md#two-endings) — and no field carries
 it.
 
 ### How it is written
@@ -553,7 +553,7 @@ format settles for itself.
 that was retained.** The comparison is over the decoded name; what is written
 back out is what arrived, escape for escape ([JOB-E7]). An implementation that
 decodes to compare and then re-encodes from its own parse satisfies [JOB-E9] and
-breaks [JOB-E7], and `TestOpaqueBytesSurviveNameComparison` in `job/go` is the
+breaks [JOB-E7], and `TestOpaqueBytesSurviveNameComparison` in `abstraction-job/go` is the
 test that separates the two.
 
 [JOB-E9] is stated here in full and not left to be inherited from
@@ -993,7 +993,7 @@ can continue each other's work. It cannot prove they would each have done the
 same thing alone: whoever reaches a branch second inherits the first one's
 answer. So `behaviour-conformance.sh` gives every implementation the same
 scripted operations and its own store, and compares the transcripts byte for
-byte. A scenario lives in `download/testdata/scenarios/`, one operation per
+byte. A scenario lives in `abstraction-download/testdata/scenarios/`, one operation per
 line, and a driver named `replay` runs it.
 
 Each line comes back as `NN <the operation> -> <verdict> <fields>`.
@@ -1076,7 +1076,7 @@ found it was a person reading five stores by hand.
 ### Every invariant carries a name
 
 Every rule on this page and on
-[`download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md) ends with a tag in square
+[`abstraction-download/CONTRACT.md`](https://github.com/openabstractions/abstraction-download/blob/main/CONTRACT.md) ends with a tag in square
 brackets, and a scenario cites that tag on the `# expect` line testing it:
 
 ```
@@ -1130,7 +1130,7 @@ Nothing here is invented where something already worked:
 **Every concept on this page names its ancestor or says it has none.** A name
 with no ancestor is either something nobody has built, which needs defending, or
 a rename by accident, which is the commoner case: of 61 concepts surveyed across
-this page and `download/README.md`, exactly one had no prior art and six that
+this page and `abstraction-download/README.md`, exactly one had no prior art and six that
 looked novel turned out to be badly named. Where our name and the established
 one differ, this page says so, because the alternative is an adopter learning us
 before they can use us.

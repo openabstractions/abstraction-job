@@ -18,7 +18,7 @@ import (
 // <root>/jobs/<id>.json, every write a cas.Change on that file, so writers in
 // any process on this host apply their edit to the truth. <root>/work/<id> is
 // the name job <id> may spend on scratch. The layout is normative for anything
-// sharing the directory and is written in job/README.md; nothing above Store
+// sharing the directory and is written in abstraction-job/README.md; nothing above Store
 // may depend on it.
 type FileStore struct {
 	root string

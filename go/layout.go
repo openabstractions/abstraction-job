@@ -50,8 +50,8 @@ func Reserved(owner, rel string) bool {
 }
 
 // registryFile is the discovery registry, which sits at the root beside jobs/
-// and work/ rather than inside either. See job/cpp/src/discovery_client.cpp and
-// download/python/abstraction_discovery.py, which read it.
+// and work/ rather than inside either. See abstraction-job/cpp/src/discovery_client.cpp and
+// abstraction-download/python/abstraction_discovery.py, which read it.
 const registryFile = "services.json"
 
 // RootName is the name rel takes in the store root, or "" if rel names

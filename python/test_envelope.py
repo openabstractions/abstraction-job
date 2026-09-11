@@ -1,6 +1,6 @@
 """The base envelope, read by the second implementation.
 
-The corpus under ``job/testdata/envelope`` is the point of this file. The rules
+The corpus under ``abstraction-job/testdata/envelope`` is the point of this file. The rules
 the envelope adds -- the schema grammar, and that every action name resolves to
 a schema the record declares -- are reader obligations, which the definition
 cannot state and the generated codec therefore cannot enforce. That is the exact
@@ -15,7 +15,7 @@ import tempfile
 import threading
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cas", "python"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "abstraction-cas", "python"))
 
 from abstraction_job import (  # noqa: E402
     ACTION_CANCEL,

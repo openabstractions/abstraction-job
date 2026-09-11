@@ -105,7 +105,7 @@ func storeRoot() (root, from string) {
 
 // need parses or ends the process. A command line this tool will not act on
 // exits 2 — nothing was attempted, which is a different thing for a script to
-// know than a job that could not be claimed. See download/CONTRACT.md
+// know than a job that could not be claimed. See abstraction-download/CONTRACT.md
 // § What a status byte can carry.
 func need(fs *flag.FlagSet, args []string, want ...string) []string {
 	pos, err := parse(fs, args, want...)

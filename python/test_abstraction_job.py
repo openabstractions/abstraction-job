@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "cas", "python"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "abstraction-cas", "python"))
 
 import abstraction_job
 from abstraction_job import (
@@ -413,7 +413,7 @@ def record_text(content=(BASE,), critical=(BASE,), spec='{"artifact":{"bytes":8}
 class CriticalTest(unittest.TestCase):
     """The rules that read `critical`, in the order [JOB-D10] fixes them in.
 
-    Mirrors job/go/refusals_test.go. Two readers that disagree about which
+    Mirrors abstraction-job/go/refusals_test.go. Two readers that disagree about which
     records are readable are not two implementations of one contract.
     """
 
@@ -593,7 +593,7 @@ class RefusalClassTest(unittest.TestCase):
             Record.from_json(text.encode())
 
     def test_a_timestamp_this_reader_cannot_read_is_invalid(self):
-        """`_parse_time` raised a bare ValueError, and download/python imports
+        """`_parse_time` raised a bare ValueError, and abstraction-download/python imports
         it by name rather than through a record."""
         for stamp in ("2026-08-20t05:07:14.951609z", "2026-08-20T05:07:14.951609+2:00"):
             with self.subTest(stamp=stamp):
@@ -617,7 +617,7 @@ class RefusalClassTest(unittest.TestCase):
 
 class LayoutTest(unittest.TestCase):
     """Which relative paths belong to the store rather than to whoever writes
-    into it. Mirrors job/go/layout_test.go; the two must refuse the same set."""
+    into it. Mirrors abstraction-job/go/layout_test.go; the two must refuse the same set."""
 
     def test_reserved_covers_every_path_a_store_writes(self):
         """Read off a real store, not copied from the documentation. A store

@@ -370,7 +370,7 @@ static bool marked(const Record& r, const std::string& name) {
 }
 
 // The rules that read `critical`, in the order [JOB-D10] fixes them in. These
-// mirror job/python's CriticalTest and job/go's refusals_test.go: three readers
+// mirror abstraction-job/python's CriticalTest and abstraction-job/go's refusals_test.go: three readers
 // that disagree about which records are readable are not three implementations
 // of one contract.
 static void test_critical_rules() {
@@ -788,7 +788,7 @@ static void test_recall() {
 
 // --- the base envelope ------------------------------------------------------
 //
-// The corpus under job/testdata/envelope is the point of these. The rules the
+// The corpus under abstraction-job/testdata/envelope is the point of these. The rules the
 // envelope adds — the schema grammar, and that every action name resolves to a
 // schema the record declares — are reader obligations, which the definition
 // cannot state and the generated codec therefore cannot enforce. That is the

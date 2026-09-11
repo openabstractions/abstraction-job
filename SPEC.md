@@ -5,14 +5,14 @@ else. Fields and their types are the schema's business; files, sockets and
 locks are the binding's; examples are the corpus's. See `METHOD.md` § 11 for
 the four jurisdictions and which artefact holds each.
 
-**Status.** Drawn from `job/README.md`'s tagged rules, `job/job.thrift`,
-`job/go/interface.go`, the three stores, and the scenarios under
-`download/testdata/scenarios/`. Where those disagree the disagreement is
+**Status.** Drawn from `abstraction-job/README.md`'s tagged rules, `abstraction-job/job.thrift`,
+`abstraction-job/go/interface.go`, the three stores, and the scenarios under
+`abstraction-download/testdata/scenarios/`. Where those disagree the disagreement is
 recorded in § 12, not resolved by fiat. Nothing here is invented: a behaviour
 none of them settles is in § 11, *Undecided*, and nowhere else.
 
 **Reading it.** Every rule carries a tag. A `JOB-` tag that already appears on
-`job/README.md` is the same rule, cited by the same scenarios. A tag minted
+`abstraction-job/README.md` is the same rule, cited by the same scenarios. A tag minted
 here is listed in § 13 so the harness can be pointed at this page; until it is,
 those rules are counted UNEXERCISED by `behaviour-conformance.sh` whatever a
 scenario does. Each rule names the scenario that fails it, or says none does.
@@ -113,7 +113,7 @@ mismatch is `stale-epoch`. — `lease` 8.
 refuse unless the epoch is the one the claimant read and no live lease stands
 in its way, write with epoch + 1. — `lease` 3, `recall` 7.
 
-**3.3 [JOB-L3]** The lock file is never deleted. — `cas/mixed.py --job`; no
+**3.3 [JOB-L3]** The lock file is never deleted. — `abstraction-cas/mixed.py --job`; no
 scenario can see it.
 
 **3.4 [JOB-L4]** A claim writes the record as found under the lock, never the
@@ -157,7 +157,7 @@ untested in the corpus.
 successor except what the checkpoint proved. A successor resumes from
 `checkpoint`, never from `progress`, which decides nothing. Temporal's
 activity heartbeat. — `lease` 6–9 (`done` reverts to the last write that
-landed), `download/README.md` [DL-R1].
+landed), `abstraction-download/README.md` [DL-R1].
 
 **3.12 [JOB-O5]** A second claimant after a lapse gets epoch + 1 and the
 record otherwise as the predecessor left it: state, checkpoint, error, intent,
@@ -214,14 +214,14 @@ idempotent; it is refused `terminal` once the job is over. — `matrix` 6, 14,
 **4.2 [JOB-I8] [JOB-I9]** A holder checks intent before it starts and at least
 as often as it checkpoints, and moves toward it. Cancel is honoured by every
 implementation. — `cancel-adoption` 6 (checked on adoption, before any byte);
-mid-run honouring is asserted by `download/go/intent_test.go`
+mid-run honouring is asserted by `abstraction-download/go/intent_test.go`
 (`TestCancelStopsALiveTransfer`) and by no scenario.
 
 **4.3 [JOB-X1]** Cancelling never stops an execution. It records a request;
 the acknowledgement is the holder's own write of `cancelled`. A caller that
 must know the work stopped waits for the state, never for the intent call to
 return — Go's `handle.Cancel` returns success when somebody holds the lease,
-because recording the request *is* the success. Drawn from `job/go/handle.go`;
+because recording the request *is* the success. Drawn from `abstraction-job/go/handle.go`;
 no scenario asserts the return value.
 
 **4.4 [JOB-S4]** When nobody holds the lease, the asker claims for one write
@@ -237,7 +237,7 @@ layer has no rule and no scenario for it. § 11.6.
 
 **4.6 [JOB-I10] [JOB-L6]** Pause: a holder that cannot pause fails the job
 with a reason; one that can releases, so the record reads `pending`. —
-`pause-adoption` 6, `download/README.md` [DL-R27]. Pause on a delegated
+`pause-adoption` 6, `abstraction-download/README.md` [DL-R27]. Pause on a delegated
 record: no rule, § 11.6.
 
 **4.7** Store and handle disagree on a double cancel: the store refuses
@@ -342,7 +342,7 @@ that never releases costs one ttl of delay, never correctness. — `terminal` 8,
 
 **7.2 [JOB-T4]** Consequently a holder does not release after its final write:
 the state write ends its epoch. `defer release()` around a run that finishes
-is a call that cannot succeed, and `download/go/runner.go` has discarded that
+is a call that cannot succeed, and `abstraction-download/go/runner.go` has discarded that
 error on every successful job. Release on
 every exit that is not a final write. A distinguished *nothing to release*
 answer is § 11.13.
@@ -375,7 +375,7 @@ bumps the epoch and moves `updated_at`, so it charges the submitter's backoff
 and stamps this machine's policy onto a record another machine could still
 serve. The download runner therefore declines to claim, during a sweep, a job
 whose sink it cannot write, and refuses out loud only when asked by name. —
-`download/go/installtakesaway_test.go`; no scenario.
+`abstraction-download/go/installtakesaway_test.go`; no scenario.
 
 **8.4 [JOB-B4]** A delegate that vanished without attempting the bytes writes
 no error, so it is not an attempt and does not back off. — `delegator.go`
@@ -505,7 +505,7 @@ would settle it. An adopter meets these as surprises.
 
 ## 13. Tags minted here
 
-Not on `job/README.md`; the harness counts them UNEXERCISED until it reads
+Not on `abstraction-job/README.md`; the harness counts them UNEXERCISED until it reads
 this page.
 
 `JOB-M1` `JOB-M2` · `JOB-O1` `JOB-O2` `JOB-O3` `JOB-O4` `JOB-O5` `JOB-O6` ·

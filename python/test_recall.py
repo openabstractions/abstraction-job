@@ -1,5 +1,5 @@
 """A recall is the issuer asking for the lease back, and the lease lapsing at
-the deadline is what makes it a demand. Mirrors job/go/recall_test.go, run
+the deadline is what makes it a demand. Mirrors abstraction-job/go/recall_test.go, run
 against every binding this implementation has."""
 
 import tempfile
