@@ -209,9 +209,10 @@ public:
 // outside four digits that no peer could read back.
 std::string format_rfc3339(TimePoint t);
 
-// Permissive on the way in, because another implementation may be less careful
-// than this one and refusing to read a job over a timezone suffix would be
-// absurd. Accepts any fractional precision and either Z or a numeric offset.
+// Reads real Gregorian dates with T/t, an optional one-to-nine digit fraction,
+// and a required Z/z or numeric UTC offset. Fractions truncate to microseconds.
+// Empty/whitespace-only values retain the native default TimePoint behavior;
+// nonempty input must match the entire timestamp grammar.
 //
 // Throws Invalid for an instant this build's clock cannot hold. Where the tick
 // is a nanosecond that is everything before 1677 or after 2262, which includes

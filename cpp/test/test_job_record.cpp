@@ -70,6 +70,32 @@ static bool written_or_refused(TimePoint t) {
 }
 
 static void test_timestamp_format() {
+    for (const char* invalid : {
+        "2026-00-01T00:00:00Z", "2026-13-01T00:00:00Z",
+        "2026-01-00T00:00:00Z", "2026-01-32T00:00:00Z",
+        "2026-04-31T00:00:00Z", "2026-02-29T00:00:00Z",
+        "1900-02-29T00:00:00Z", "2100-02-29T00:00:00Z",
+        "2026-01-01T24:00:00Z", "2026-01-01T00:60:00Z",
+        "2026-01-01T00:00:60Z", "2026-01-01T00:00:00+24:00",
+        "2026-01-01T00:00:00-00:60", "2026-01-01T00:00:00+02:00junk",
+        "2026-01-01T00:00:00Zjunk", "2026-01-01T00:00:00",
+        "2026-01-01 00:00:00Z", "2026-01-01T00:00:00.Z",
+        "2026-01-01T00:00:00.1234567890Z", "2026-01-01T00:00:00x",
+        "2026-01-01T00:00:00Z ", " 2026-01-01T00:00:00Z"
+    }) {
+        bool refused = false;
+        try { parse_rfc3339(invalid); }
+        catch (const Invalid& e) { refused = refused_as_bad_timestamp(e); }
+        check((std::string("timestamp: rejects ") + invalid).c_str(), refused);
+    }
+    check("timestamp: empty/default handling retained", parse_rfc3339("") == TimePoint{} &&
+          parse_rfc3339(" \t\r\n") == TimePoint{});
+    check("timestamp: leap-day offset and lowercase separators",
+          format_rfc3339(parse_rfc3339("2000-03-01t00:15:00.1+00:30")) ==
+          "2000-02-29T23:45:00.100000Z");
+    check("timestamp: negative offset moves into next year",
+          format_rfc3339(parse_rfc3339("2025-12-31T23:59:59.123456789-00:01")) ==
+          "2026-01-01T00:00:59.123456Z");
     // Six fractional digits, always, trailing zeros included: Go trimmed them
     // for a while and disagreed with Python about the same instant.
     const TimePoint epoch{};
@@ -173,6 +199,11 @@ static void test_encoding() {
     // the caller's data and not ours to touch.
     check("encode: spec key order preserved",
           encoded.find("\"zebra\"") < encoded.find("\"apple\""));
+
+    Json invalid_time = Json::parse(encoded);
+    invalid_time["updated_at"] = "2026-04-31T00:00:00Z";
+    check("decode: impossible timestamp refused rather than normalized",
+          throws_job_error([&] { Record::decode(invalid_time.dump()); }));
 
     const Record back = Record::decode(encoded);
     check("decode: round trips", back.encode() == encoded);

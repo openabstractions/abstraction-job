@@ -174,13 +174,13 @@ std::string format_rfc3339(TimePoint t) {
 }
 
 TimePoint parse_rfc3339(const std::string& raw) {
-    const std::string s = trim(raw);
-    if (s.empty()) {
+    const std::string& s = raw;
+    if (trim(s).empty()) {
         return TimePoint{};
     }
-    // YYYY-MM-DDTHH:MM:SS is fixed-width; everything after it is optional.
+    // A fractional part is optional; a UTC designator or offset is required.
     if (s.size() < 19 || !all_digits(s, 0, 4) || s[4] != '-' || !all_digits(s, 5, 2) ||
-        s[7] != '-' || !all_digits(s, 8, 2) || (s[10] != 'T' && s[10] != 't' && s[10] != ' ') ||
+        s[7] != '-' || !all_digits(s, 8, 2) || (s[10] != 'T' && s[10] != 't') ||
         !all_digits(s, 11, 2) || s[13] != ':' || !all_digits(s, 14, 2) || s[16] != ':' ||
         !all_digits(s, 17, 2)) {
         throw Invalid("bad_timestamp: \"" + raw + "\" is not RFC 3339");
@@ -193,10 +193,23 @@ TimePoint parse_rfc3339(const std::string& raw) {
     const int minute = digits_to_int(s, 14, 2);
     const int second = digits_to_int(s, 17, 2);
 
+    // days_from_civil converts a valid date; it is not a validator and will
+    // otherwise silently turn an impossible date into a different instant.
+    if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
+        throw Invalid("bad_timestamp: \"" + raw + "\" has an invalid date or time");
+    }
+    constexpr int month_days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    const int days = month_days[month - 1] + (month == 2 && leap ? 1 : 0);
+    if (day < 1 || day > days) {
+        throw Invalid("bad_timestamp: \"" + raw + "\" has an invalid calendar day");
+    }
+
     std::size_t i = 19;
     std::int64_t frac_micros = 0;
     if (i < s.size() && s[i] == '.') {
         ++i;
+        const std::size_t start = i;
         int taken = 0;
         while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
             if (taken < 6) {
@@ -204,6 +217,9 @@ TimePoint parse_rfc3339(const std::string& raw) {
                 ++taken;
             }
             ++i;
+        }
+        if (i - start < 1 || i - start > 9) {
+            throw Invalid("bad_timestamp: \"" + raw + "\" needs one to nine fractional digits");
         }
         // Nanosecond precision from a Go writer is truncated, not rounded: a
         // resume point must never move forward because of a rounding rule.
@@ -213,20 +229,29 @@ TimePoint parse_rfc3339(const std::string& raw) {
     }
 
     std::int64_t offset_seconds = 0;
-    if (i < s.size()) {
-        const char z = s[i];
-        if (z == 'Z' || z == 'z') {
-            ++i;
-        } else if (z == '+' || z == '-') {
-            if (!all_digits(s, i + 1, 2) || i + 3 >= s.size() || s[i + 3] != ':' ||
-                !all_digits(s, i + 4, 2)) {
-                throw Invalid("bad_timestamp: \"" + raw + "\" has a malformed UTC offset");
-            }
-            const std::int64_t oh = digits_to_int(s, i + 1, 2);
-            const std::int64_t om = digits_to_int(s, i + 4, 2);
-            offset_seconds = (oh * 3600 + om * 60) * (z == '-' ? -1 : 1);
-            i += 6;
+    if (i >= s.size()) {
+        throw Invalid("bad_timestamp: \"" + raw + "\" needs a UTC designator or offset");
+    }
+    const char z = s[i];
+    if (z == 'Z' || z == 'z') {
+        ++i;
+    } else if (z == '+' || z == '-') {
+        if (!all_digits(s, i + 1, 2) || i + 3 >= s.size() || s[i + 3] != ':' ||
+            !all_digits(s, i + 4, 2)) {
+            throw Invalid("bad_timestamp: \"" + raw + "\" has a malformed UTC offset");
         }
+        const std::int64_t oh = digits_to_int(s, i + 1, 2);
+        const std::int64_t om = digits_to_int(s, i + 4, 2);
+        if (oh > 23 || om > 59) {
+            throw Invalid("bad_timestamp: \"" + raw + "\" has an invalid UTC offset");
+        }
+        offset_seconds = (oh * 3600 + om * 60) * (z == '-' ? -1 : 1);
+        i += 6;
+    } else {
+        throw Invalid("bad_timestamp: \"" + raw + "\" has a malformed UTC designator");
+    }
+    if (i != s.size()) {
+        throw Invalid("bad_timestamp: \"" + raw + "\" has trailing input");
     }
 
     const std::int64_t secs =
