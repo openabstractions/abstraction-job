@@ -129,23 +129,8 @@ class SchemaIsAName(unittest.TestCase):
     def test_nothing_dereferences_an_identifier(self):
         """A listener nobody is allowed to reach, its own address written into
         the record in every disguise, and a count of what arrived."""
-        ln = socket.socket()
-        ln.bind(("127.0.0.1", 0))
-        ln.listen(5)
-        addr = "%s:%d" % ln.getsockname()
-        reached = []
-
-        def accept():
-            while True:
-                try:
-                    c, _ = ln.accept()
-                except OSError:
-                    return
-                reached.append(1)
-                c.close()
-
-        t = threading.Thread(target=accept)
-        t.start()
+        probe = _ConnectionProbe()
+        addr = "%s:%d" % probe.address
         try:
             for s in ("http://" + addr + "/schema@1", "//" + addr + "/schema@1", addr + "/schema@1"):
                 r = _record(Envelope(schema=s))
@@ -156,9 +141,51 @@ class SchemaIsAName(unittest.TestCase):
             back.supports(VENDOR + "#verify")
             _ask_word(back, VENDOR + "#verify", Supervisor([VENDOR], [VENDOR + "#verify"]))
         finally:
-            ln.close()
-            t.join()
-        self.assertEqual([], reached, "reading a record opened a connection to an address inside it")
+            probe.close()
+        self.assertEqual([], probe.reached, "reading a record opened a connection to an address inside it")
+
+    def test_connection_probe_detects_a_real_connection(self):
+        probe = _ConnectionProbe()
+        try:
+            with socket.create_connection(probe.address, timeout=1):
+                pass
+        finally:
+            probe.close()
+        self.assertEqual([1], probe.reached, "the probe missed an actual connection")
+
+
+class _ConnectionProbe:
+    """Drain queued connections, then stop without closing a blocked accept.
+
+    On Linux, closing a socket in another thread need not wake accept(). Keep
+    ownership until the thread exits; its timeout observes the stop request.
+    """
+    def __init__(self):
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(5)
+        self.listener.settimeout(0.05)
+        self.address = self.listener.getsockname()
+        self.reached = []
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self._accept)
+        self.thread.start()
+
+    def _accept(self):
+        while True:
+            try:
+                connection, _ = self.listener.accept()
+            except socket.timeout:
+                if self.stopped.is_set():
+                    return
+                continue
+            self.reached.append(1)
+            connection.close()
+
+    def close(self):
+        self.stopped.set()
+        self.thread.join()
+        self.listener.close()
 
 
 def _record(envelope):
