@@ -378,7 +378,7 @@ func encProgress(out []byte, v *Progress, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "updated_at")
 	out = append(out, ':', ' ')
-	out = esc(out, v.UpdatedAt)
+	out = esc(out, writeTimestamp(v.UpdatedAt))
 	if v.Step != nil {
 		out = append(out, ',')
 		out = append(out, '\n')
@@ -412,13 +412,13 @@ func encRecall(out []byte, v *Recall, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "at")
 	out = append(out, ':', ' ')
-	out = esc(out, v.At)
+	out = esc(out, writeTimestamp(v.At))
 	out = append(out, ',')
 	out = append(out, '\n')
 	out = pad(out, depth+1)
 	out = esc(out, "until")
 	out = append(out, ':', ' ')
-	out = esc(out, v.Until)
+	out = esc(out, writeTimestamp(v.Until))
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -442,7 +442,7 @@ func encLease(out []byte, v *Lease, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "expires_at")
 	out = append(out, ':', ' ')
-	out = esc(out, v.ExpiresAt)
+	out = esc(out, writeTimestamp(v.ExpiresAt))
 	if v.Recall != nil {
 		out = append(out, ',')
 		out = append(out, '\n')
@@ -507,7 +507,7 @@ func encIntent(out []byte, v *Intent, depth int) []byte {
 		out = pad(out, depth+1)
 		out = esc(out, "at")
 		out = append(out, ':', ' ')
-		out = esc(out, v.At)
+		out = esc(out, writeTimestamp(v.At))
 	}
 	out = append(out, '\n')
 	out = pad(out, depth)
@@ -646,13 +646,13 @@ func encRecord(out []byte, v *Record, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "created_at")
 	out = append(out, ':', ' ')
-	out = esc(out, v.CreatedAt)
+	out = esc(out, writeTimestamp(v.CreatedAt))
 	out = append(out, ',')
 	out = append(out, '\n')
 	out = pad(out, depth+1)
 	out = esc(out, "updated_at")
 	out = append(out, ':', ' ')
-	out = esc(out, v.UpdatedAt)
+	out = esc(out, writeTimestamp(v.UpdatedAt))
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -1160,7 +1160,7 @@ func datePart(s string) bool {
 
 // [DEF-G1] rfc3339-wide: what a reader accepts. Any fraction of one to nine
 // digits or none, either case of the separators, and a numeric offset.
-func WideTimestamp(s string) bool {
+func lexicalTimestamp(s string) bool {
 	if !datePart(s) || (s[10] != 'T' && s[10] != 't') {
 		return false
 	}
@@ -1191,7 +1191,7 @@ func WideTimestamp(s string) bool {
 // [DEF-G2] rfc3339-micros: what a writer emits. Exactly six fractional digits,
 // upper-case separators, UTC.
 func MicrosTimestamp(s string) bool {
-	return len(s) == 27 && datePart(s) && s[10] == 'T' && s[19] == '.' && digits(s, 20, 6) && s[26] == 'Z'
+	return len(s) == 27 && normalizedTimestamp(s) == s
 }
 
 func (r *reader) timestamp() (string, error) {
@@ -1205,6 +1205,109 @@ func (r *reader) timestamp() (string, error) {
 		return "", r.refuse("bad_timestamp")
 	}
 	return s, nil
+}
+
+func timestampNumber(s string, i, n int) int {
+	v := 0
+	for k := 0; k < n; k++ {
+		v = v*10 + int(s[i+k]-'0')
+	}
+	return v
+}
+func timestampDays(y, m int) int {
+	if m == 2 {
+		if y%4 == 0 && (y%100 != 0 || y%400 == 0) {
+			return 29
+		}
+		return 28
+	}
+	if m == 4 || m == 6 || m == 9 || m == 11 {
+		return 30
+	}
+	return 31
+}
+func normalizedTimestamp(s string) string {
+	if !lexicalTimestamp(s) {
+		return ""
+	}
+	y, m, d := timestampNumber(s, 0, 4), timestampNumber(s, 5, 2), timestampNumber(s, 8, 2)
+	h, minute, sec := timestampNumber(s, 11, 2), timestampNumber(s, 14, 2), timestampNumber(s, 17, 2)
+	if m < 1 || m > 12 || d < 1 || d > timestampDays(y, m) || h > 23 || minute > 59 || sec > 59 {
+		return ""
+	}
+	i, fraction := 19, ""
+	if s[i] == '.' {
+		i++
+		start := i
+		for s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		fraction = s[start:i]
+	}
+	total := h*60 + minute
+	if s[i] == '+' || s[i] == '-' {
+		oh, om := timestampNumber(s, i+1, 2), timestampNumber(s, i+4, 2)
+		if oh > 23 || om > 59 {
+			return ""
+		}
+		offset := oh*60 + om
+		if s[i] == '+' {
+			total -= offset
+		} else {
+			total += offset
+		}
+	}
+	if total < 0 {
+		total += 1440
+		d--
+	} else if total >= 1440 {
+		total -= 1440
+		d++
+	}
+	if d == 0 {
+		m--
+		if m == 0 {
+			y--
+			m = 12
+		}
+		d = timestampDays(y, m)
+	}
+	if d > timestampDays(y, m) {
+		d = 1
+		m++
+		if m == 13 {
+			y++
+			m = 1
+		}
+	}
+	if y < 0 || y > 9999 {
+		return ""
+	}
+	out := []byte("0000-00-00T00:00:00.000000Z")
+	put := func(at, width, value int) {
+		for k := width - 1; k >= 0; k-- {
+			out[at+k] = byte(value%10) + '0'
+			value /= 10
+		}
+	}
+	put(0, 4, y)
+	put(5, 2, m)
+	put(8, 2, d)
+	put(11, 2, total/60)
+	put(14, 2, total%60)
+	put(17, 2, sec)
+	for k := 0; k < 6 && k < len(fraction); k++ {
+		out[20+k] = fraction[k]
+	}
+	return string(out)
+}
+func WideTimestamp(s string) bool { return normalizedTimestamp(s) != "" }
+func writeTimestamp(s string) string {
+	result := normalizedTimestamp(s)
+	if result == "" {
+		panic(&Refusal{Word: "bad_timestamp", Offset: 0})
+	}
+	return result
 }
 
 func (r *reader) decodeStep() (*Step, error) {
