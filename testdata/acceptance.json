@@ -1,0 +1,20 @@
+[
+  {"name":"lost-request-unsealed-absence","history":true,"want":"unknown"},
+  {"name":"lost-request-authoritatively-sealed","history":true,"sealed":true,"want":"definitely_not_accepted","fresh":true},
+  {"name":"lost-reply-original-operation","history":true,"receipt":true,"want":"accepted"},
+  {"name":"duplicate-identical-arguments","history":true,"receipt":true,"submit":true,"want":"accepted"},
+  {"name":"duplicate-guarantee-order","history":true,"receipt":true,"submit":true,"reorder":true,"want":"accepted"},
+  {"name":"duplicate-different-spec","history":true,"receipt":true,"submit":true,"changed":"spec","want":"key_conflict"},
+  {"name":"duplicate-different-kind","history":true,"receipt":true,"submit":true,"changed":"kind","want":"key_conflict"},
+  {"name":"duplicate-different-guarantees","history":true,"receipt":true,"submit":true,"changed":"guarantees","want":"key_conflict"},
+  {"name":"expired-accepted-history","history":true,"expired":true,"receipt":true,"want":"unknown"},
+  {"name":"expired-negative-history","history":true,"expired":true,"sealed":true,"want":"unknown"},
+  {"name":"expired-history-resubmit","history":true,"expired":true,"submit":true,"want":"unknown"},
+  {"name":"unavailable-history","want":"unknown"},
+  {"name":"caller-restart-retained-key-no-receipt","history":true,"receipt":true,"want":"accepted"},
+  {"name":"caller-restart-lost-key","history":true,"receipt":true,"changed":"identity","want":"unknown"},
+  {"name":"other-caller-cannot-look-up-key","history":true,"receipt":true,"changed":"caller","want":"forbidden"},
+  {"name":"owner-mismatch","history":true,"receipt":true,"changed":"owner","want":"unknown"},
+  {"name":"cancel-wait-after-acceptance","history":true,"receipt":true,"cancel_wait":true,"want":"accepted"},
+  {"name":"contradictory-acceptance-and-seal","history":true,"receipt":true,"sealed":true,"want":"unknown"}
+]

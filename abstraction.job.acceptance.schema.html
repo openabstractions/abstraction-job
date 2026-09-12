@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open Abstractions — schema</title>
+<link rel="stylesheet" href="style.css">
+
+<main>
+<nav class="site"><a class="name" href="index.html">Open Abstractions</a>
+<a href="index.html">Overview</a> <a href="cases.html">Cases</a> <a href="reference.html">Reference</a> <a href="evidence.html">Evidence</a> <a href="coverage.html">Coverage</a> <a href="adopt.html">Adopt</a>
+<a class="right" href="https://github.com/openabstractions">github.com/openabstractions</a></nav>
+<p class="meta" style="margin-top:10px"><a href="#encoding">Encoding</a> · <a href="#types">Types</a> · <a href="#structs">Structs</a> · <a href="#enums">Enumerations</a> · <a href="#constants">Constants</a> · <a href="#vocabulary">Vocabulary</a> · <a href="#refusals">Refusals</a> · <a href="#protocol">Protocol</a></p>
+
+<h1>Schema</h1>
+<p class="lead">One definition; this page and every encoder are emitted from it. Nothing below is written by hand, and each rule tag links the construct to the profile that admits it.</p>
+<h2 id="encoding">Encoding <span class="tag">[DEF-E1]</span></h2>
+<div class="wrap"><table>
+<thead><tr><th>setting</th><th>value</th><th>rule</th></tr></thead>
+<tbody>
+<tr><td><code>escape</code></td><td><code>minimal</code></td><td><span class="tag">[DEF-E2]</span></td></tr>
+<tr><td><code>indent</code></td><td><code>2</code></td><td><span class="tag">[DEF-E3]</span></td></tr>
+<tr><td><code>map_keys</code></td><td><code>utf8-bytes</code></td><td><span class="tag">[DEF-E4]</span></td></tr>
+<tr><td><code>numbers</code></td><td><code>integer-decimal</code></td><td><span class="tag">[DEF-E5]</span></td></tr>
+<tr><td><code>opaque</code></td><td><code>verbatim</code></td><td><span class="tag">[DEF-E6]</span></td></tr>
+<tr><td><code>terminator</code></td><td><code>newline</code></td><td><span class="tag">[DEF-E7]</span></td></tr>
+<tr><td><code>duplicate_keys</code></td><td><code>refuse</code></td><td><span class="tag">[DEF-E8]</span></td></tr>
+<tr><td><code>depth_limit</code></td><td><code>64</code></td><td><span class="tag">[DEF-E9]</span></td></tr>
+</tbody></table></div>
+<h2 id="types">Types</h2>
+<div class="wrap"><table>
+<thead><tr><th>kind</th><th>types</th></tr></thead>
+<tbody>
+<tr><td>built in</td><td><code>CancellationOutcome</code> <code>Outcome</code> <code>binary</code> <code>i64</code> <code>string</code></td></tr>
+<tr><td>declared below</td><td><code>Receipt</code> <code>RequestIdentity</code></td></tr>
+<tr><td>container <span class="tag">[DEF-T3]</span></td><td><code>list&lt;string&gt;</code></td></tr>
+</tbody></table></div>
+<h2 id="structs">Structs <span class="tag">[DEF-T1]</span></h2>
+<p class="meta">A field is required, or says when it is omitted <span class="tag">[DEF-A4]</span>. Each struct says on its own what it does with a field name it has never heard of <span class="tag">[DEF-A7]</span>. A wire name never moves; where a language must spell it differently the field says so <span class="tag">[DEF-A2]</span>.</p>
+<h3 id="struct-RequestIdentity"><code>RequestIdentity</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>key</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>history_epoch</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h3 id="struct-Submission"><code>Submission</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>identity</code></td><td><code>RequestIdentity</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>kind</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>3</td><td><code>spec</code></td><td><code>binary</code></td><td>required</td><td>—</td></tr>
+<tr><td>4</td><td><code>required_guarantees</code></td><td><code>list&lt;string&gt;</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h3 id="struct-Receipt"><code>Receipt</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>identity</code></td><td><code>RequestIdentity</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>logical_owner</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>3</td><td><code>operation_id</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>4</td><td><code>accepted_guarantees</code></td><td><code>list&lt;string&gt;</code></td><td>required</td><td>—</td></tr>
+<tr><td>5</td><td><code>history_retention_ms</code></td><td><code>i64</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h3 id="struct-AcceptanceResult"><code>AcceptanceResult</code></h3>
+<p class="meta">the document <span class="tag">[DEF-A1]</span> · unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>outcome</code></td><td><code>Outcome</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>receipt</code></td><td><code>Receipt</code></td><td>optional · omitted when absent</td><td>—</td></tr>
+<tr><td>3</td><td><code>reason</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h3 id="struct-HistoryWindow"><code>HistoryWindow</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>logical_owner</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>history_epoch</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
+<tr><td>3</td><td><code>minimum_retention_ms</code></td><td><code>i64</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h3 id="struct-CancellationResult"><code>CancellationResult</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>outcome</code></td><td><code>CancellationOutcome</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
+<h2 id="enums">Enumerations <span class="tag">[DEF-T5]</span></h2>
+<p>Enum fields carry JSON strings containing exact member names, never numeric IDs. Unknown names are preserved with grant and refused as bad_enum with refuse on read and write. Optional absent fields preserve presence separately from an empty string.</p>
+<p class="meta">An enumeration is a closed vocabulary of wire names, and each one says on its own what a reader does with a member it has never heard of <span class="tag">[DEF-A5]</span>.</p>
+<h3 id="enum-Outcome"><code>Outcome</code></h3>
+<p class="meta">a member this reader does not know is <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>member</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>accepted</code></td></tr>
+<tr><td>2</td><td><code>definitely_not_accepted</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td></tr>
+<tr><td>4</td><td><code>key_conflict</code></td></tr>
+<tr><td>5</td><td><code>forbidden</code></td></tr>
+<tr><td>6</td><td><code>invalid</code></td></tr>
+</tbody></table></div>
+<h3 id="enum-CancellationOutcome"><code>CancellationOutcome</code></h3>
+<p class="meta">a member this reader does not know is <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>member</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>requested</code></td></tr>
+<tr><td>2</td><td><code>already_terminal</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td></tr>
+<tr><td>4</td><td><code>forbidden</code></td></tr>
+<tr><td>5</td><td><code>unsupported</code></td></tr>
+</tbody></table></div>
+<h2 id="refusals">Refusal words <span class="tag">[DEF-R1]</span></h2>
+<div class="wrap"><table>
+<thead><tr><th>order</th><th>word</th><th>stage</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>malformed</code></td><td><code>grammar</code></td></tr>
+<tr><td>2</td><td><code>bad_string</code></td><td><code>grammar</code></td></tr>
+<tr><td>3</td><td><code>number_spelling</code></td><td><code>grammar</code></td></tr>
+<tr><td>4</td><td><code>wrong_type</code></td><td><code>grammar</code></td></tr>
+<tr><td>5</td><td><code>depth_exceeded</code></td><td><code>grammar</code></td></tr>
+<tr><td>6</td><td><code>duplicate_key</code></td><td><code>grammar</code></td></tr>
+<tr><td>7</td><td><code>duplicate_field</code></td><td><code>structure</code></td></tr>
+<tr><td>8</td><td><code>unknown_field</code></td><td><code>structure</code></td></tr>
+<tr><td>9</td><td><code>missing_field</code></td><td><code>structure</code></td></tr>
+<tr><td>10</td><td><code>bad_binary</code></td><td><code>structure</code></td></tr>
+<tr><td>11</td><td><code>bad_enum</code></td><td><code>structure</code></td></tr>
+<tr><td>12</td><td><code>trailing_bytes</code></td><td><code>document</code></td></tr>
+</tbody></table></div>
+<h2 id="service-RecoverableAcceptance">Service <code>RecoverableAcceptance</code> <span class="tag">[DEF-S1]</span></h2>
+<p>Version 1 recoverable acceptance vocabulary, local or remote. Providers must implement atomic recovery and downstream deduplication before advertising those guarantees. Legacy Store is not implicitly upgraded.</p>
+<p>Wire identity: <code>abstraction.job/acceptance@1</code></p>
+<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
+<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
+<p>Obtain the logical owner and history epoch before first submission; creates no work.</p>
+<h3><code>GetHistoryWindow</code></h3><p><code>request-response</code> <code>HistoryWindow</code></p><ul>
+</ul>
+<p>Atomically associate authenticated request identity, arguments, operation and guarantees before acknowledging. Duplicate equal arguments recover the original receipt. No weaker provider fallback on unknown.</p>
+<h3><code>Submit</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
+<li>Argument 1: <code>Submission</code> <code>submission</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Authorized lookup at the original logical owner after lost request, lost reply or caller restart. A definite negative seals the identity against delayed submissions. Unavailable evidence gives unknown.</p>
+<h3><code>Reconcile</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Authorized explicit work cancellation. Cancelling a transport wait is never this operation and never relinquishes accepted work ownership.</p>
+<h3><code>CancelWork</code></h3><p><code>request-response</code> <code>CancellationResult</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+</ul>
+
+<footer>
+<p><a href="index.html">Overview</a> · <a href="cases.html">Cases</a> · <a href="reference.html">Reference</a> · <a href="evidence.html">Evidence</a> · <a href="coverage.html">Coverage</a> · <a href="adopt.html">Adopt</a> ·
+<a href="https://github.com/openabstractions">github.com/openabstractions</a></p>
+</footer>
+</main>
+</html>

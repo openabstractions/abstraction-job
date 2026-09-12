@@ -189,3 +189,53 @@ of them has a type for
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Recoverable acceptance service contract
+
+The additive [acceptance.thrift](acceptance.thrift) defines
+`abstraction.job/acceptance@1`: stable scoped request identities, recoverable
+receipts, reconciliation and explicit work cancellation. See the JOB-A rules in
+[CONTRACT.md](CONTRACT.md). The existing Store is unchanged; no legacy provider
+is claimed to implement durable acceptance by this addition.
+
+Generated Go, C++ and Python service vocabulary and codecs live under
+`go/abstraction/job/acceptance`, `cpp/abstraction/job/acceptance` and
+`py/abstraction/job/acceptance`. The Go decision helper validates trusted owner
+evidence without owning storage or initiating work. The generated
+[API reference](abstraction.job.acceptance.schema.html) describes the wire API.
+
+Run the focused checks from the repository's `go` directory with
+`go test ./abstraction/job/acceptance`, and from `python` with
+`py -m unittest test_acceptance`. These exercise the semantic corpus and generated
+protocol/codec behavior, not installed provider persistence. A standalone C++
+codec driver is `cpp/test/test_acceptance_codec.cpp` (C++17, standard library only).
+Set `OA_ACCEPTANCE_CPP` to its compiled executable when running the Python test
+to check the same corpus and unknown-enum refusal against C++ as well.
+
+### Service-owned admission provider
+
+The Go `acceptanceprovider` package implements this interface using the existing
+FileStore and CAS. A service host calls `Open(privateRoot, logicalOwner)`, then
+`Bind(authenticatedCallerScope)` after authenticating and authorizing the caller.
+Applications use the generated service client; they receive no storage path.
+This provider admits records for existing workers and does not execute jobs.
+
+Its versioned guarantees are `abstraction.job/caller-exit@1`,
+`abstraction.job/service-restart@1` and `abstraction.job/reconciliation@1`.
+These cover admission surviving caller/service-process exit and recovering the
+same operation. They do not promise power-loss durability or deduplication of
+external engine effects. State must remain on a supported local filesystem under
+service ownership. The minimum history retention is 24 hours; this implementation
+retains history and negative seals indefinitely, with no epoch rotation or cleanup.
+Published job records must not be removed independently of the admission journal.
+
+Run `go test ./acceptanceprovider` from `go` for focused persistence and protocol
+tests, including abrupt test-process exits at the recovery boundaries. Input
+limits are exported constants; total retained history currently has no quota.
+
+For host composition, `acceptanceprovider.HandleConnection` handles one existing
+`listen.Conn` through the shared Program identity boundary and generated service
+dispatcher. Supply an authorizer that maps proven peer evidence to an authorized,
+restart-stable scope; nil/error authorization refuses without mutation. The host
+retains listener and activation ownership. Configure shared clients with
+`MaxFrameBytes` (2 MiB), which includes base64 expansion of the specification.

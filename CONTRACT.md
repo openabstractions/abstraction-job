@@ -1,5 +1,91 @@
 # Contract
 
+## Recoverable service acceptance, version 1
+
+The additive [acceptance.thrift](acceptance.thrift) service
+`abstraction.job/acceptance@1` defines submission/reconciliation independently
+of the existing Store protocol and tagged Record. Existing Store implementations
+do not acquire these guarantees by compiling generated code. This section is a
+contract for a provider to implement, not evidence of a durable service shipped.
+
+**[JOB-A1] Identity precedes transmission.** The SDK obtains an owner-issued
+history epoch, creates a stable request key, and retains the key, epoch and
+logical owner before sending. Deduplication scope is the receiving boundary's
+authenticated caller identity plus this service contract, epoch and key. A caller
+supplied principal is never accepted as that scope. The identity is stable across
+connections and caller restarts. Reconciliation and cancellation require current
+authorization; possession of a key or receipt confers none. If the caller loses
+its key before receiving a receipt, this version cannot recover by guessing a new
+key. Authorized operation discovery is a future recovery path; report unknown.
+
+**[JOB-A2] Arguments and promises are immutable.** Submission equality compares
+kind, exact opaque specification bytes and the set of required guarantee names.
+Empty or duplicate guarantee names are invalid. Ordering is immaterial. Guarantee
+names identify versioned contracts understood by the provider; an unsupported
+required guarantee cannot be silently ignored. Reusing a retained accepted
+identity with different arguments returns `key_conflict` and starts no work.
+Equal arguments return the original receipt and operation. The receipt binds
+identity, stable logical owner, operation ID, accepted guarantees and minimum
+history retention. Accepted guarantees include every requested guarantee.
+Logical owner is not a PID, endpoint, directory or implicit transfer instruction.
+When retained arguments are available, reconciliation validates their identity,
+shape and required guarantees against the receipt even if the caller supplies
+only a request identity. Contradictory evidence returns `unknown`. A valid
+authorized receipt alone suffices for lookup when argument evidence is absent;
+it cannot independently prove the original required guarantees were met. A
+duplicate Submit needs argument evidence to validate equality and therefore
+returns `unknown` when that evidence is absent.
+
+**[JOB-A3] Acceptance has an atomic recovery boundary.** Before acknowledging
+acceptance or initiating effects, the provider atomically associates request
+identity, immutable arguments, operation and promises with recoverable owner
+evidence. The persistence and downstream recovery needed depend on the promises
+actually accepted. A local record does not by itself prove an external engine
+submitted once. Providers unable to reconcile downstream acceptance refuse that
+guarantee. Reconnection or installing another provider does not transfer work.
+
+**[JOB-A4] A definite negative fences delayed requests.** Reconciliation returns
+`accepted` with a receipt, `definitely_not_accepted`, or `unknown`; identity
+conflict, authorization refusal and invalid input are distinct outcomes.
+`definitely_not_accepted` means the authoritative owner proves this identity was
+never accepted **and atomically seals it against subsequent acceptance**. Delayed
+Submit messages must be refused. This applies also to a refused Submit whose
+negative outcome permits fresh resolution. An empty lookup is insufficient even
+with current history: the first request may still be in flight. Only this sealed
+negative allows fresh provider selection with a new identity. A reused sealed
+identity stays nonaccepted; it cannot be reopened. Failed transport, unavailable
+history, access denial and a lost reply are not definite negatives.
+
+**[JOB-A5] Expiry removes evidence, not effects.** GetHistoryWindow advertises a
+minimum retention duration in milliseconds from original acceptance; receipts
+repeat the accepted duration. Duplicate replies never reset its start. Client
+wall clocks do not decide expiry; the owner decides which history is available.
+At/after expiry a missing receipt returns `unknown`, including after caller or
+owner restart. Closing a history epoch permanently fences new and delayed
+submissions in that epoch before individual identity tombstones may be discarded.
+Epoch closure proves no new acceptance can occur, but does not prove an old
+unknown operation was never accepted. Neither expiry nor closure cancels work or
+permits automatic resubmission. Implementations must retain evidence for the
+promised window or report uncertainty honestly when recovery fails.
+
+**[JOB-A6] Waiting and work have different lifetimes.** Stopping a wait, a waiting
+budget expiring or caller exit leaves accepted work under its owner and promises.
+CancelWork is separately authorized and explicit. `requested` records intent,
+not proof that effects stopped; terminal completion may win the race.
+Repeating CancelWork for the same identity repeats the intent without creating
+new work or reversing a terminal result.
+`already_terminal`, `unknown`, `forbidden` and `unsupported` retain distinct meaning.
+Observe the existing job's terminal result through its capability API; cancellation
+never authorizes creating a replacement operation automatically.
+
+The executable [acceptance corpus](testdata/acceptance.json) and Go
+`abstraction/job/acceptance` decision tests check these semantic distinctions.
+The decision helper consumes trusted owner evidence; its booleans are not wire
+claims, a persistence engine or a substitute for atomic provider transactions.
+Generated codecs validate structure; cross-field receipt validation remains
+required at the receiving boundary. Legacy job records and Store calls retain
+their existing semantics.
+
 Every rule this layer states, each carrying a tag, in the order they were
 decided. A conformance scenario cites the tag it tests on its `# expect` line,
 and a citation that resolves to no rule here is a defect in one of the two.

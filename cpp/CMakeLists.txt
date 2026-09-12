@@ -8,6 +8,31 @@ else()
 endif()
 
 include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+option(ABSTRACTION_JOB_BUILD_LEGACY "Build the legacy embedded job store" ON)
+# Generated acceptance vocabulary is independent of the legacy store and CAS.
+add_library(abstraction_job_acceptance INTERFACE)
+add_library(abstraction::job_acceptance ALIAS abstraction_job_acceptance)
+set_target_properties(abstraction_job_acceptance PROPERTIES EXPORT_NAME job_acceptance)
+target_compile_features(abstraction_job_acceptance INTERFACE cxx_std_17)
+target_include_directories(abstraction_job_acceptance INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+install(TARGETS abstraction_job_acceptance EXPORT abstraction_job_acceptanceTargets)
+install(DIRECTORY abstraction/job/acceptance DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/abstraction/job)
+set(acceptance_config_dir ${CMAKE_INSTALL_LIBDIR}/cmake/abstraction_job_acceptance)
+install(EXPORT abstraction_job_acceptanceTargets NAMESPACE abstraction:: DESTINATION ${acceptance_config_dir})
+configure_package_config_file(cmake/abstraction_job_acceptanceConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfig.cmake
+    INSTALL_DESTINATION ${acceptance_config_dir})
+write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfigVersion.cmake
+    VERSION 0.1.0 COMPATIBILITY SameMinorVersion)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfigVersion.cmake DESTINATION ${acceptance_config_dir})
+if(NOT ABSTRACTION_JOB_BUILD_LEGACY)
+    return()
+endif()
+
 find_package(Threads REQUIRED)
 
 option(ABSTRACTION_BUILD_TESTS "Build the abstraction's own tests"

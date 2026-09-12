@@ -1,4 +1,8 @@
 github.com/openabstractions/abstraction-cas/go v0.2.0 h1:p9oKcdfO2ogoWh59G+gUivIzsi/zuhhGobZjkqIrbaE=
 github.com/openabstractions/abstraction-cas/go v0.2.0/go.mod h1:pR8sRTbXF3k7fiXNjNiBqqc7i0Wu9RQvctH3q/wKUYo=
+github.com/openabstractions/abstraction-identity v0.2.1-0.20260911225957-3aa75da4cda3 h1:UVTRY5BNU58aGM7rrcZSZBuk6i6Gie05Zk77gQOZiTc=
+github.com/openabstractions/abstraction-identity v0.2.1-0.20260911225957-3aa75da4cda3/go.mod h1:gv5sDQuTQqv/UY+fXY5Q74i1junNIEvf/5UsZxMxwKY=
 github.com/openabstractions/abstraction-watch/go v0.2.0 h1:+iVl7EYugkQwyGtHBCFKGAfbFlngxS5CIbBk7ilXdWM=
 github.com/openabstractions/abstraction-watch/go v0.2.0/go.mod h1:kufwl+bMSixuEwA5r1rftuCLm+JTrXr1NiJ2d0VI9K8=
+golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
