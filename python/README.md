@@ -1,5 +1,17 @@
 # abstraction-job, in Python
 
+## Application service path
+
+Normal applications use resolved durable jobs and generated download requests
+through [the facade](https://github.com/openabstractions/abstraction-facade).
+The service owns execution and shared stores. Preserve caller request identity
+and binding for recovery; waiting cancellation leaves accepted work alone.
+
+The file-store examples below are explicitly selected native provider APIs with
+separate lifecycle guarantees. Their historical conformance describes that
+provider profile. It does not qualify current service packages or every platform.
+
+
 A record on disk describing work somebody asked for, and rules for who is allowed
 to be doing it right now. Any process, in any of three languages, can pick up work
 another one left. No daemon, no database: one directory of files. Standard library
