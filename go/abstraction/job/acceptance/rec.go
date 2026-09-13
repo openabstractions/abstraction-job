@@ -187,6 +187,23 @@ func esc(out []byte, s string) []byte {
 	return append(out, '"')
 }
 
+func encList[T any](out []byte, v []T, depth int, enc func([]byte, *T, int) []byte) []byte {
+	if len(v) == 0 {
+		return append(out, '[', ']')
+	}
+	out = append(out, '[', '\n')
+	for i := range v {
+		out = pad(out, depth+1)
+		out = enc(out, &v[i], depth+1)
+		if i+1 < len(v) {
+			out = append(out, ',')
+		}
+		out = append(out, '\n')
+	}
+	out = pad(out, depth)
+	return append(out, ']')
+}
+
 var OutcomeNames = []string{"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"}
 
 const OutcomeAccepted = "accepted"
@@ -216,6 +233,80 @@ const CancellationOutcomeForbidden = "forbidden"
 const CancellationOutcomeUnsupported = "unsupported"
 
 const CancellationOutcomeUnknownPolicy = "refuse"
+
+var WorkStateNames = []string{"pending", "running", "transferred", "complete", "failed", "cancelled"}
+
+const WorkStatePending = "pending"
+
+const WorkStateRunning = "running"
+
+const WorkStateTransferred = "transferred"
+
+const WorkStateComplete = "complete"
+
+const WorkStateFailed = "failed"
+
+const WorkStateCancelled = "cancelled"
+
+const WorkStateUnknown = "refuse"
+
+var FailureClassNames = []string{"retryable", "permanent", "unknown"}
+
+const FailureClassRetryable = "retryable"
+
+const FailureClassPermanent = "permanent"
+
+const FailureClassUnknown = "unknown"
+
+const FailureClassUnknownPolicy = "refuse"
+
+var ObservationOutcomeNames = []string{"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"}
+
+const ObservationOutcomeObserved = "observed"
+
+const ObservationOutcomeUnknown = "unknown"
+
+const ObservationOutcomeForbidden = "forbidden"
+
+const ObservationOutcomeInvalid = "invalid"
+
+const ObservationOutcomeDefinitelyNotAccepted = "definitely_not_accepted"
+
+const ObservationOutcomeUnknownPolicy = "refuse"
+
+var ResultOutcomeNames = []string{"data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"}
+
+const ResultOutcomeData = "data"
+
+const ResultOutcomeNotReady = "not_ready"
+
+const ResultOutcomeUnavailable = "unavailable"
+
+const ResultOutcomeUnsupported = "unsupported"
+
+const ResultOutcomeUnknown = "unknown"
+
+const ResultOutcomeForbidden = "forbidden"
+
+const ResultOutcomeInvalid = "invalid"
+
+const ResultOutcomeUnknownPolicy = "refuse"
+
+var InventoryOutcomeNames = []string{"page", "gap", "forbidden", "invalid", "unavailable"}
+
+const InventoryOutcomePage = "page"
+
+const InventoryOutcomeGap = "gap"
+
+const InventoryOutcomeForbidden = "forbidden"
+
+const InventoryOutcomeInvalid = "invalid"
+
+const InventoryOutcomeUnavailable = "unavailable"
+
+const InventoryOutcomeUnknown = "refuse"
+
+var AdmissionGuarantees = []string{"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"}
 
 type RequestIdentity struct {
 	Key          string
@@ -253,6 +344,49 @@ type CancellationResult struct {
 	Outcome string
 }
 
+type WorkProgress struct {
+	Done  int64
+	Total int64
+}
+
+type WorkFailure struct {
+	Classification string
+	Message        string
+}
+
+type OperationSnapshot struct {
+	Receipt               Receipt
+	State                 string
+	Progress              WorkProgress
+	CancellationRequested bool
+	Failure               *WorkFailure
+}
+
+type ObservationResult struct {
+	Outcome  string
+	Snapshot *OperationSnapshot
+}
+
+type ResultChunk struct {
+	Receipt Receipt
+	Offset  int64
+	Total   int64
+	Data    []byte
+	Eof     bool
+}
+
+type ResultRead struct {
+	Outcome string
+	Chunk   *ResultChunk
+}
+
+type InventoryPage struct {
+	Outcome   string
+	Snapshots []OperationSnapshot
+	Next      string
+	Complete  bool
+}
+
 type OARecoverableAcceptanceGetHistoryWindowArguments struct {
 }
 
@@ -266,6 +400,21 @@ type OARecoverableAcceptanceReconcileArguments struct {
 
 type OARecoverableAcceptanceCancelWorkArguments struct {
 	Identity RequestIdentity
+}
+
+type OAOperationControlObserveWorkArguments struct {
+	Identity RequestIdentity
+}
+
+type OAOperationControlReadResultArguments struct {
+	Identity RequestIdentity
+	Offset   int64
+	MaxBytes int64
+}
+
+type OAJobInventoryListWorkArguments struct {
+	Cursor string
+	Limit  int64
 }
 
 type OAServiceFrame struct {
@@ -302,6 +451,18 @@ type OARecoverableAcceptanceReconcileResult struct {
 
 type OARecoverableAcceptanceCancelWorkResult struct {
 	Value CancellationResult
+}
+
+type OAOperationControlObserveWorkResult struct {
+	Value ObservationResult
+}
+
+type OAOperationControlReadResultResult struct {
+	Value ResultRead
+}
+
+type OAJobInventoryListWorkResult struct {
+	Value InventoryPage
 }
 
 func encRequestIdentity(out []byte, v *RequestIdentity, depth int) []byte {
@@ -456,6 +617,213 @@ func encCancellationResult(out []byte, v *CancellationResult, depth int) []byte 
 	return append(out, '}')
 }
 
+func encWorkProgress(out []byte, v *WorkProgress, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "done")
+	out = append(out, ':', ' ')
+	out = num(out, v.Done)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "total")
+	out = append(out, ':', ' ')
+	out = num(out, v.Total)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encWorkFailure(out []byte, v *WorkFailure, depth int) []byte {
+	if v.Classification != "retryable" && v.Classification != "permanent" && v.Classification != "unknown" {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "classification")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Classification)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "message")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Message)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOperationSnapshot(out []byte, v *OperationSnapshot, depth int) []byte {
+	if v.State != "pending" && v.State != "running" && v.State != "transferred" && v.State != "complete" && v.State != "failed" && v.State != "cancelled" {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "receipt")
+	out = append(out, ':', ' ')
+	out = encReceipt(out, &v.Receipt, depth+1)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "state")
+	out = append(out, ':', ' ')
+	out = esc(out, v.State)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "progress")
+	out = append(out, ':', ' ')
+	out = encWorkProgress(out, &v.Progress, depth+1)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "cancellation_requested")
+	out = append(out, ':', ' ')
+	if v.CancellationRequested {
+		out = append(out, 't', 'r', 'u', 'e')
+	} else {
+		out = append(out, 'f', 'a', 'l', 's', 'e')
+	}
+	if v.Failure != nil {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "failure")
+		out = append(out, ':', ' ')
+		out = encWorkFailure(out, v.Failure, depth+1)
+	}
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encObservationResult(out []byte, v *ObservationResult, depth int) []byte {
+	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "outcome")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Outcome)
+	if v.Snapshot != nil {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "snapshot")
+		out = append(out, ':', ' ')
+		out = encOperationSnapshot(out, v.Snapshot, depth+1)
+	}
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encResultChunk(out []byte, v *ResultChunk, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "receipt")
+	out = append(out, ':', ' ')
+	out = encReceipt(out, &v.Receipt, depth+1)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "offset")
+	out = append(out, ':', ' ')
+	out = num(out, v.Offset)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "total")
+	out = append(out, ':', ' ')
+	out = num(out, v.Total)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "data")
+	out = append(out, ':', ' ')
+	out = esc(out, encodeBinary(v.Data))
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "eof")
+	out = append(out, ':', ' ')
+	if v.Eof {
+		out = append(out, 't', 'r', 'u', 'e')
+	} else {
+		out = append(out, 'f', 'a', 'l', 's', 'e')
+	}
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encResultRead(out []byte, v *ResultRead, depth int) []byte {
+	if v.Outcome != "data" && v.Outcome != "not_ready" && v.Outcome != "unavailable" && v.Outcome != "unsupported" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "outcome")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Outcome)
+	if v.Chunk != nil {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "chunk")
+		out = append(out, ':', ' ')
+		out = encResultChunk(out, v.Chunk, depth+1)
+	}
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encInventoryPage(out []byte, v *InventoryPage, depth int) []byte {
+	if v.Outcome != "page" && v.Outcome != "gap" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "unavailable" {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "outcome")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Outcome)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "snapshots")
+	out = append(out, ':', ' ')
+	out = encList(out, v.Snapshots, depth+1, encOperationSnapshot)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "next")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Next)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "complete")
+	out = append(out, ':', ' ')
+	if v.Complete {
+		out = append(out, 't', 'r', 'u', 'e')
+	} else {
+		out = append(out, 'f', 'a', 'l', 's', 'e')
+	}
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
 func encOARecoverableAcceptanceGetHistoryWindowArguments(out []byte, v *OARecoverableAcceptanceGetHistoryWindowArguments, depth int) []byte {
 	out = append(out, '{')
 	return append(out, '}')
@@ -492,6 +860,60 @@ func encOARecoverableAcceptanceCancelWorkArguments(out []byte, v *OARecoverableA
 	out = esc(out, "identity")
 	out = append(out, ':', ' ')
 	out = encRequestIdentity(out, &v.Identity, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlObserveWorkArguments(out []byte, v *OAOperationControlObserveWorkArguments, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "identity")
+	out = append(out, ':', ' ')
+	out = encRequestIdentity(out, &v.Identity, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlReadResultArguments(out []byte, v *OAOperationControlReadResultArguments, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "identity")
+	out = append(out, ':', ' ')
+	out = encRequestIdentity(out, &v.Identity, depth+1)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "offset")
+	out = append(out, ':', ' ')
+	out = num(out, v.Offset)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "max_bytes")
+	out = append(out, ':', ' ')
+	out = num(out, v.MaxBytes)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAJobInventoryListWorkArguments(out []byte, v *OAJobInventoryListWorkArguments, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "cursor")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Cursor)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "limit")
+	out = append(out, ':', ' ')
+	out = num(out, v.Limit)
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -628,6 +1050,42 @@ func encOARecoverableAcceptanceCancelWorkResult(out []byte, v *OARecoverableAcce
 	out = esc(out, "value")
 	out = append(out, ':', ' ')
 	out = encCancellationResult(out, &v.Value, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlObserveWorkResult(out []byte, v *OAOperationControlObserveWorkResult, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "value")
+	out = append(out, ':', ' ')
+	out = encObservationResult(out, &v.Value, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlReadResultResult(out []byte, v *OAOperationControlReadResultResult, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "value")
+	out = append(out, ':', ' ')
+	out = encResultRead(out, &v.Value, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAJobInventoryListWorkResult(out []byte, v *OAJobInventoryListWorkResult, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "value")
+	out = append(out, ':', ' ')
+	out = encInventoryPage(out, &v.Value, depth+1)
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -1116,6 +1574,39 @@ func (r *reader) skipContainer() error {
 	return nil
 }
 
+func decodeList[T any](r *reader, elem func(*reader) (*T, error)) ([]T, error) {
+	if r.at() != '[' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	out := []T{}
+	r.ws()
+	if r.at() != ']' {
+		for {
+			r.ws()
+			v, err := elem(r)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, *v)
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != ']' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	return out, nil
+}
+
 func (r *reader) decodeRequestIdentity() (*RequestIdentity, error) {
 	if r.at() != '{' {
 		return nil, r.refuse("wrong_type")
@@ -1596,6 +2087,584 @@ func (r *reader) decodeCancellationResult() (*CancellationResult, error) {
 	return v, nil
 }
 
+func (r *reader) decodeWorkProgress() (*WorkProgress, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &WorkProgress{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "done":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Done = x
+			case "total":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Total = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&3 != 3 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeWorkFailure() (*WorkFailure, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &WorkFailure{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "classification":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Classification = x
+			case "message":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Message = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&3 != 3 {
+		return nil, r.refuse("missing_field")
+	}
+	if v.Classification != "retryable" && v.Classification != "permanent" && v.Classification != "unknown" {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOperationSnapshot() (*OperationSnapshot, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OperationSnapshot{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "receipt":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeReceipt()
+				if err != nil {
+					return nil, err
+				}
+				v.Receipt = *x
+			case "state":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.State = x
+			case "progress":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.decodeWorkProgress()
+				if err != nil {
+					return nil, err
+				}
+				v.Progress = *x
+			case "cancellation_requested":
+				if seen&8 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 8
+				x, err := r.boolean()
+				if err != nil {
+					return nil, err
+				}
+				v.CancellationRequested = x
+			case "failure":
+				if seen&16 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 16
+				x, err := r.decodeWorkFailure()
+				if err != nil {
+					return nil, err
+				}
+				v.Failure = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&15 != 15 {
+		return nil, r.refuse("missing_field")
+	}
+	if v.State != "pending" && v.State != "running" && v.State != "transferred" && v.State != "complete" && v.State != "failed" && v.State != "cancelled" {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeObservationResult() (*ObservationResult, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &ObservationResult{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "outcome":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Outcome = x
+			case "snapshot":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.decodeOperationSnapshot()
+				if err != nil {
+					return nil, err
+				}
+				v.Snapshot = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeResultChunk() (*ResultChunk, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &ResultChunk{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "receipt":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeReceipt()
+				if err != nil {
+					return nil, err
+				}
+				v.Receipt = *x
+			case "offset":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Offset = x
+			case "total":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Total = x
+			case "data":
+				if seen&8 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 8
+				x, err := r.binary()
+				if err != nil {
+					return nil, err
+				}
+				v.Data = x
+			case "eof":
+				if seen&16 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 16
+				x, err := r.boolean()
+				if err != nil {
+					return nil, err
+				}
+				v.Eof = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&31 != 31 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeResultRead() (*ResultRead, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &ResultRead{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "outcome":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Outcome = x
+			case "chunk":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.decodeResultChunk()
+				if err != nil {
+					return nil, err
+				}
+				v.Chunk = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	if v.Outcome != "data" && v.Outcome != "not_ready" && v.Outcome != "unavailable" && v.Outcome != "unsupported" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeInventoryPage() (*InventoryPage, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &InventoryPage{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "outcome":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Outcome = x
+			case "snapshots":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := decodeList(r, (*reader).decodeOperationSnapshot)
+				if err != nil {
+					return nil, err
+				}
+				v.Snapshots = x
+			case "next":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Next = x
+			case "complete":
+				if seen&8 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 8
+				x, err := r.boolean()
+				if err != nil {
+					return nil, err
+				}
+				v.Complete = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&15 != 15 {
+		return nil, r.refuse("missing_field")
+	}
+	if v.Outcome != "page" && v.Outcome != "gap" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "unavailable" {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
 func (r *reader) decodeOARecoverableAcceptanceGetHistoryWindowArguments() (*OARecoverableAcceptanceGetHistoryWindowArguments, error) {
 	if r.at() != '{' {
 		return nil, r.refuse("wrong_type")
@@ -1813,6 +2882,213 @@ func (r *reader) decodeOARecoverableAcceptanceCancelWorkArguments() (*OARecovera
 	r.pos++
 	r.depth--
 	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAOperationControlObserveWorkArguments() (*OAOperationControlObserveWorkArguments, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAOperationControlObserveWorkArguments{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "identity":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeRequestIdentity()
+				if err != nil {
+					return nil, err
+				}
+				v.Identity = *x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAOperationControlReadResultArguments() (*OAOperationControlReadResultArguments, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAOperationControlReadResultArguments{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "identity":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeRequestIdentity()
+				if err != nil {
+					return nil, err
+				}
+				v.Identity = *x
+			case "offset":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Offset = x
+			case "max_bytes":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.MaxBytes = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&7 != 7 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAJobInventoryListWorkArguments() (*OAJobInventoryListWorkArguments, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAJobInventoryListWorkArguments{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "cursor":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Cursor = x
+			case "limit":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Limit = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&3 != 3 {
 		return nil, r.refuse("missing_field")
 	}
 	return v, nil
@@ -2311,6 +3587,183 @@ func (r *reader) decodeOARecoverableAcceptanceCancelWorkResult() (*OARecoverable
 	return v, nil
 }
 
+func (r *reader) decodeOAOperationControlObserveWorkResult() (*OAOperationControlObserveWorkResult, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAOperationControlObserveWorkResult{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "value":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeObservationResult()
+				if err != nil {
+					return nil, err
+				}
+				v.Value = *x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAOperationControlReadResultResult() (*OAOperationControlReadResultResult, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAOperationControlReadResultResult{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "value":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeResultRead()
+				if err != nil {
+					return nil, err
+				}
+				v.Value = *x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAJobInventoryListWorkResult() (*OAJobInventoryListWorkResult, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &OAJobInventoryListWorkResult{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "value":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeInventoryPage()
+				if err != nil {
+					return nil, err
+				}
+				v.Value = *x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
 func Decode(in []byte) (*AcceptanceResult, error) {
 	r := &reader{buf: in}
 	r.ws()
@@ -2436,6 +3889,16 @@ func servicePayload(frame []byte) (*OAServiceFrame, error) {
 		return nil, DispatchError("unknown_version")
 	}
 	return v, nil
+}
+
+// ServiceName validates the request envelope and version for routing. The chosen
+// generated dispatcher validates service, method and typed arguments before use.
+func ServiceName(frame []byte) (string, error) {
+	v, err := servicePayload(frame)
+	if err != nil {
+		return "", err
+	}
+	return v.Service, nil
 }
 
 // ExchangeFrame returns the response associated with this call. Correlation,
@@ -2916,6 +4379,356 @@ func (d *RecoverableAcceptanceDispatcher) invokeCancelWork(args *OARecoverableAc
 	r := &reader{buf: []byte(payload), depth: 1}
 	r.ws()
 	if _, e := r.decodeOARecoverableAcceptanceCancelWorkResult(); e != nil {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+		return
+	}
+	r.ws()
+	if r.pos != len(r.buf) {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+	}
+	return
+}
+
+type OperationControl interface {
+	ObserveWork(RequestIdentity) (ObservationResult, error)
+	ReadResult(RequestIdentity, int64, int64) (ResultRead, error)
+}
+type OperationControlTransport interface {
+	FrameExchanger
+}
+type OperationControlClient struct{ transport OperationControlTransport }
+
+func NewOperationControlClient(t OperationControlTransport) *OperationControlClient {
+	return &OperationControlClient{transport: t}
+}
+
+type OperationControlDispatcher struct{ Handler OperationControl }
+
+func (c *OperationControlClient) ObserveWork(arg0 RequestIdentity) (result ObservationResult, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				err = e
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	args := OAOperationControlObserveWorkArguments{Identity: arg0}
+	v := OAServiceFrame{Version: 1, Service: "abstraction.job/operations@1", Method: "ObserveWork", Arguments: Raw(encOAOperationControlObserveWorkArguments(nil, &args, 1))}
+	frame := encOAServiceFrame(nil, &v, 0)
+	if _, err = servicePayload(frame); err != nil {
+		return
+	}
+	var response []byte
+	response, err = c.transport.ExchangeFrame(frame)
+	if err != nil {
+		return
+	}
+	var payload Raw
+	payload, err = serviceResponse(response, v.Service, v.Method)
+	if err != nil {
+		return
+	}
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	var decoded *OAOperationControlObserveWorkResult
+	decoded, err = r.decodeOAOperationControlObserveWorkResult()
+	if err != nil {
+		return
+	}
+	_ = decoded
+	r.ws()
+	if r.pos != len(r.buf) {
+		err = r.refuse("trailing_bytes")
+		return
+	}
+	result = decoded.Value
+	return
+}
+func (c *OperationControlClient) ReadResult(arg0 RequestIdentity, arg1 int64, arg2 int64) (result ResultRead, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				err = e
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	args := OAOperationControlReadResultArguments{Identity: arg0, Offset: arg1, MaxBytes: arg2}
+	v := OAServiceFrame{Version: 1, Service: "abstraction.job/operations@1", Method: "ReadResult", Arguments: Raw(encOAOperationControlReadResultArguments(nil, &args, 1))}
+	frame := encOAServiceFrame(nil, &v, 0)
+	if _, err = servicePayload(frame); err != nil {
+		return
+	}
+	var response []byte
+	response, err = c.transport.ExchangeFrame(frame)
+	if err != nil {
+		return
+	}
+	var payload Raw
+	payload, err = serviceResponse(response, v.Service, v.Method)
+	if err != nil {
+		return
+	}
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	var decoded *OAOperationControlReadResultResult
+	decoded, err = r.decodeOAOperationControlReadResultResult()
+	if err != nil {
+		return
+	}
+	_ = decoded
+	r.ws()
+	if r.pos != len(r.buf) {
+		err = r.refuse("trailing_bytes")
+		return
+	}
+	result = decoded.Value
+	return
+}
+func (d *OperationControlDispatcher) WriteFrame(frame []byte) error {
+	v, err := servicePayload(frame)
+	if err != nil {
+		return err
+	}
+	if v.Service != "abstraction.job/operations@1" {
+		return DispatchError("unknown_service")
+	}
+	switch v.Method {
+	case "ObserveWork":
+		return DispatchError("wrong_mode")
+	case "ReadResult":
+		return DispatchError("wrong_mode")
+	default:
+		return DispatchError("unknown_method")
+	}
+}
+func (d *OperationControlDispatcher) ExchangeFrame(frame []byte) ([]byte, error) {
+	v, err := servicePayload(frame)
+	if err != nil {
+		return nil, err
+	}
+	if v.Service != "abstraction.job/operations@1" {
+		return serviceReply(v, "", DispatchError("unknown_service"))
+	}
+	switch v.Method {
+	case "ObserveWork":
+		r := &reader{buf: []byte(v.Arguments), depth: 1}
+		r.ws()
+		args, err := r.decodeOAOperationControlObserveWorkArguments()
+		if err != nil {
+			return serviceReply(v, "", err)
+		}
+		r.ws()
+		if r.pos != len(r.buf) {
+			return serviceReply(v, "", r.refuse("trailing_bytes"))
+		}
+		payload, err := d.invokeObserveWork(args)
+		return serviceReply(v, payload, err)
+	case "ReadResult":
+		r := &reader{buf: []byte(v.Arguments), depth: 1}
+		r.ws()
+		args, err := r.decodeOAOperationControlReadResultArguments()
+		if err != nil {
+			return serviceReply(v, "", err)
+		}
+		r.ws()
+		if r.pos != len(r.buf) {
+			return serviceReply(v, "", r.refuse("trailing_bytes"))
+		}
+		payload, err := d.invokeReadResult(args)
+		return serviceReply(v, payload, err)
+	default:
+		return serviceReply(v, "", DispatchError("unknown_method"))
+	}
+}
+func (d *OperationControlDispatcher) invokeObserveWork(args *OAOperationControlObserveWorkArguments) (payload Raw, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			payload = ""
+			if _, ok := p.(*Refusal); ok {
+				err = &ServiceError{Code: "invalid_result"}
+			} else {
+				err = &ServiceError{Code: "handler_error", Message: "handler failed"}
+			}
+		}
+	}()
+	var result ObservationResult
+	result, err = d.Handler.ObserveWork(args.Identity)
+	if err != nil {
+		return
+	}
+	value := OAOperationControlObserveWorkResult{Value: result}
+	payload = Raw(encOAOperationControlObserveWorkResult(nil, &value, 1))
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	if _, e := r.decodeOAOperationControlObserveWorkResult(); e != nil {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+		return
+	}
+	r.ws()
+	if r.pos != len(r.buf) {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+	}
+	return
+}
+func (d *OperationControlDispatcher) invokeReadResult(args *OAOperationControlReadResultArguments) (payload Raw, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			payload = ""
+			if _, ok := p.(*Refusal); ok {
+				err = &ServiceError{Code: "invalid_result"}
+			} else {
+				err = &ServiceError{Code: "handler_error", Message: "handler failed"}
+			}
+		}
+	}()
+	var result ResultRead
+	result, err = d.Handler.ReadResult(args.Identity, args.Offset, args.MaxBytes)
+	if err != nil {
+		return
+	}
+	value := OAOperationControlReadResultResult{Value: result}
+	payload = Raw(encOAOperationControlReadResultResult(nil, &value, 1))
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	if _, e := r.decodeOAOperationControlReadResultResult(); e != nil {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+		return
+	}
+	r.ws()
+	if r.pos != len(r.buf) {
+		payload = ""
+		err = &ServiceError{Code: "invalid_result"}
+	}
+	return
+}
+
+type JobInventory interface {
+	ListWork(string, int64) (InventoryPage, error)
+}
+type JobInventoryTransport interface {
+	FrameExchanger
+}
+type JobInventoryClient struct{ transport JobInventoryTransport }
+
+func NewJobInventoryClient(t JobInventoryTransport) *JobInventoryClient {
+	return &JobInventoryClient{transport: t}
+}
+
+type JobInventoryDispatcher struct{ Handler JobInventory }
+
+func (c *JobInventoryClient) ListWork(arg0 string, arg1 int64) (result InventoryPage, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				err = e
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	args := OAJobInventoryListWorkArguments{Cursor: arg0, Limit: arg1}
+	v := OAServiceFrame{Version: 1, Service: "abstraction.job/inventory@1", Method: "ListWork", Arguments: Raw(encOAJobInventoryListWorkArguments(nil, &args, 1))}
+	frame := encOAServiceFrame(nil, &v, 0)
+	if _, err = servicePayload(frame); err != nil {
+		return
+	}
+	var response []byte
+	response, err = c.transport.ExchangeFrame(frame)
+	if err != nil {
+		return
+	}
+	var payload Raw
+	payload, err = serviceResponse(response, v.Service, v.Method)
+	if err != nil {
+		return
+	}
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	var decoded *OAJobInventoryListWorkResult
+	decoded, err = r.decodeOAJobInventoryListWorkResult()
+	if err != nil {
+		return
+	}
+	_ = decoded
+	r.ws()
+	if r.pos != len(r.buf) {
+		err = r.refuse("trailing_bytes")
+		return
+	}
+	result = decoded.Value
+	return
+}
+func (d *JobInventoryDispatcher) WriteFrame(frame []byte) error {
+	v, err := servicePayload(frame)
+	if err != nil {
+		return err
+	}
+	if v.Service != "abstraction.job/inventory@1" {
+		return DispatchError("unknown_service")
+	}
+	switch v.Method {
+	case "ListWork":
+		return DispatchError("wrong_mode")
+	default:
+		return DispatchError("unknown_method")
+	}
+}
+func (d *JobInventoryDispatcher) ExchangeFrame(frame []byte) ([]byte, error) {
+	v, err := servicePayload(frame)
+	if err != nil {
+		return nil, err
+	}
+	if v.Service != "abstraction.job/inventory@1" {
+		return serviceReply(v, "", DispatchError("unknown_service"))
+	}
+	switch v.Method {
+	case "ListWork":
+		r := &reader{buf: []byte(v.Arguments), depth: 1}
+		r.ws()
+		args, err := r.decodeOAJobInventoryListWorkArguments()
+		if err != nil {
+			return serviceReply(v, "", err)
+		}
+		r.ws()
+		if r.pos != len(r.buf) {
+			return serviceReply(v, "", r.refuse("trailing_bytes"))
+		}
+		payload, err := d.invokeListWork(args)
+		return serviceReply(v, payload, err)
+	default:
+		return serviceReply(v, "", DispatchError("unknown_method"))
+	}
+}
+func (d *JobInventoryDispatcher) invokeListWork(args *OAJobInventoryListWorkArguments) (payload Raw, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			payload = ""
+			if _, ok := p.(*Refusal); ok {
+				err = &ServiceError{Code: "invalid_result"}
+			} else {
+				err = &ServiceError{Code: "handler_error", Message: "handler failed"}
+			}
+		}
+	}()
+	var result InventoryPage
+	result, err = d.Handler.ListWork(args.Cursor, args.Limit)
+	if err != nil {
+		return
+	}
+	value := OAJobInventoryListWorkResult{Value: result}
+	payload = Raw(encOAJobInventoryListWorkResult(nil, &value, 1))
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	if _, e := r.decodeOAJobInventoryListWorkResult(); e != nil {
 		payload = ""
 		err = &ServiceError{Code: "invalid_result"}
 		return

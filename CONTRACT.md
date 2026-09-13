@@ -86,6 +86,30 @@ Generated codecs validate structure; cross-field receipt validation remains
 required at the receiving boundary. Legacy job records and Store calls retain
 their existing semantics.
 
+## Legacy records and managed service ownership
+
+Existing FileStore records remain available through an explicitly selected
+legacy provider. Managed service setup does not infer their submitting caller,
+request key/epoch, acceptance receipt or execution profile from an operation ID,
+lease, terminal state or external delegation handle.
+
+The Go service configuration checks CheckManaged and OpenManaged, and
+OpenWithExecutor with an execution profile, reject an unowned nonempty jobs
+directory with ErrLegacyOwnership (also matching ErrIncompatibleStorage).
+They leave record/checkpoint/work bytes and existing ownership unchanged before
+creating managed metadata or preparing execution. This refusal identifies the
+missing ownership transition; it does not certify the contents of that directory.
+Existing explicit admission-only Open behavior remains compatible and creates
+no acceptance mapping for unjournaled records.
+
+An installation may keep the explicitly selected legacy provider available while
+new submissions use a separate managed service root. Conversion of existing
+work requires an authoritative caller mapping and a fenced transfer preserving
+immutable work and delegate ownership. Current managed setup offers no such
+conversion, including for terminal records. Applications receive no private path
+from the service API. The focused Go legacy_migration_test.go covers valid
+records in every state, active lease/delegation retention and nonmutating refusal.
+
 Every rule this layer states, each carrying a tag, in the order they were
 decided. A conformance scenario cites the tag it tests on its `# expect` line,
 and a citation that resolves to no rule here is a defect in one of the two.

@@ -113,12 +113,50 @@ def esc(out, s):
     out += b'"'
 
 
+def enc_list(out, v, depth, enc):
+    if not v:
+        out += b"[]"
+        return
+    out += b"[\n"
+    for i, x in enumerate(v):
+        pad(out, depth + 1)
+        enc(out, x, depth + 1)
+        if i + 1 < len(v):
+            out += b","
+        out += b"\n"
+    pad(out, depth)
+    out += b"]"
+
+
 OUTCOME_NAMES = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"]
 OUTCOME_UNKNOWN = "refuse"
 
 
 CANCELLATIONOUTCOME_NAMES = ["requested", "already_terminal", "unknown", "forbidden", "unsupported"]
 CANCELLATIONOUTCOME_UNKNOWN = "refuse"
+
+
+WORKSTATE_NAMES = ["pending", "running", "transferred", "complete", "failed", "cancelled"]
+WORKSTATE_UNKNOWN = "refuse"
+
+
+FAILURECLASS_NAMES = ["retryable", "permanent", "unknown"]
+FAILURECLASS_UNKNOWN = "refuse"
+
+
+OBSERVATIONOUTCOME_NAMES = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"]
+OBSERVATIONOUTCOME_UNKNOWN = "refuse"
+
+
+RESULTOUTCOME_NAMES = ["data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"]
+RESULTOUTCOME_UNKNOWN = "refuse"
+
+
+INVENTORYOUTCOME_NAMES = ["page", "gap", "forbidden", "invalid", "unavailable"]
+INVENTORYOUTCOME_UNKNOWN = "refuse"
+
+
+ADMISSION_GUARANTEES = ["abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"]
 
 
 class RequestIdentity:
@@ -163,6 +201,56 @@ class CancellationResult:
         self.outcome = kw.get("outcome", "")
 
 
+class WorkProgress:
+    def __init__(self, **kw):
+        self.done = kw.get("done", 0)
+        self.total = kw.get("total", 0)
+
+
+class WorkFailure:
+    def __init__(self, **kw):
+        self.classification = kw.get("classification", "")
+        self.message = kw.get("message", "")
+
+
+class OperationSnapshot:
+    def __init__(self, **kw):
+        self.receipt = kw.get("receipt", Receipt())
+        self.state = kw.get("state", "")
+        self.progress = kw.get("progress", WorkProgress())
+        self.cancellation_requested = kw.get("cancellation_requested", False)
+        self.failure = kw.get("failure", None)
+
+
+class ObservationResult:
+    def __init__(self, **kw):
+        self.outcome = kw.get("outcome", "")
+        self.snapshot = kw.get("snapshot", None)
+
+
+class ResultChunk:
+    def __init__(self, **kw):
+        self.receipt = kw.get("receipt", Receipt())
+        self.offset = kw.get("offset", 0)
+        self.total = kw.get("total", 0)
+        self.data = kw.get("data", b"")
+        self.eof = kw.get("eof", False)
+
+
+class ResultRead:
+    def __init__(self, **kw):
+        self.outcome = kw.get("outcome", "")
+        self.chunk = kw.get("chunk", None)
+
+
+class InventoryPage:
+    def __init__(self, **kw):
+        self.outcome = kw.get("outcome", "")
+        self.snapshots = kw.get("snapshots", [])
+        self.next = kw.get("next", "")
+        self.complete = kw.get("complete", False)
+
+
 class OARecoverableAcceptanceGetHistoryWindowArguments:
     def __init__(self, **kw):
         pass
@@ -181,6 +269,24 @@ class OARecoverableAcceptanceReconcileArguments:
 class OARecoverableAcceptanceCancelWorkArguments:
     def __init__(self, **kw):
         self.identity = kw.get("identity", RequestIdentity())
+
+
+class OAOperationControlObserveWorkArguments:
+    def __init__(self, **kw):
+        self.identity = kw.get("identity", RequestIdentity())
+
+
+class OAOperationControlReadResultArguments:
+    def __init__(self, **kw):
+        self.identity = kw.get("identity", RequestIdentity())
+        self.offset = kw.get("offset", 0)
+        self.max_bytes = kw.get("max_bytes", 0)
+
+
+class OAJobInventoryListWorkArguments:
+    def __init__(self, **kw):
+        self.cursor = kw.get("cursor", "")
+        self.limit = kw.get("limit", 0)
 
 
 class OAServiceFrame:
@@ -224,6 +330,21 @@ class OARecoverableAcceptanceReconcileResult:
 class OARecoverableAcceptanceCancelWorkResult:
     def __init__(self, **kw):
         self.value = kw.get("value", CancellationResult())
+
+
+class OAOperationControlObserveWorkResult:
+    def __init__(self, **kw):
+        self.value = kw.get("value", ObservationResult())
+
+
+class OAOperationControlReadResultResult:
+    def __init__(self, **kw):
+        self.value = kw.get("value", ResultRead())
+
+
+class OAJobInventoryListWorkResult:
+    def __init__(self, **kw):
+        self.value = kw.get("value", InventoryPage())
 
 
 def enc_requestidentity(out, v, depth):
@@ -375,6 +496,193 @@ def enc_cancellationresult(out, v, depth):
     out += b"}"
 
 
+def enc_workprogress(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "done")
+    out += b": "
+    num(out, v.done)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "total")
+    out += b": "
+    num(out, v.total)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_workfailure(out, v, depth):
+    if type(v.classification) is not str: raise Refusal("wrong_type",0)
+    if v.classification != "retryable" and v.classification != "permanent" and v.classification != "unknown": raise Refusal("bad_enum",0)
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "classification")
+    out += b": "
+    esc(out, v.classification)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "message")
+    out += b": "
+    esc(out, v.message)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_operationsnapshot(out, v, depth):
+    if type(v.state) is not str: raise Refusal("wrong_type",0)
+    if v.state != "pending" and v.state != "running" and v.state != "transferred" and v.state != "complete" and v.state != "failed" and v.state != "cancelled": raise Refusal("bad_enum",0)
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "receipt")
+    out += b": "
+    enc_receipt(out, v.receipt, depth + 1)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "state")
+    out += b": "
+    esc(out, v.state)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "progress")
+    out += b": "
+    enc_workprogress(out, v.progress, depth + 1)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "cancellation_requested")
+    out += b": "
+    out += b"true" if v.cancellation_requested else b"false"
+    if v.failure is not None:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "failure")
+        out += b": "
+        enc_workfailure(out, v.failure, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_observationresult(out, v, depth):
+    if type(v.outcome) is not str: raise Refusal("wrong_type",0)
+    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted": raise Refusal("bad_enum",0)
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "outcome")
+    out += b": "
+    esc(out, v.outcome)
+    if v.snapshot is not None:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "snapshot")
+        out += b": "
+        enc_operationsnapshot(out, v.snapshot, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_resultchunk(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "receipt")
+    out += b": "
+    enc_receipt(out, v.receipt, depth + 1)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "offset")
+    out += b": "
+    num(out, v.offset)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "total")
+    out += b": "
+    num(out, v.total)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "data")
+    out += b": "
+    esc(out, _encode_binary(v.data))
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "eof")
+    out += b": "
+    out += b"true" if v.eof else b"false"
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_resultread(out, v, depth):
+    if type(v.outcome) is not str: raise Refusal("wrong_type",0)
+    if v.outcome != "data" and v.outcome != "not_ready" and v.outcome != "unavailable" and v.outcome != "unsupported" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid": raise Refusal("bad_enum",0)
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "outcome")
+    out += b": "
+    esc(out, v.outcome)
+    if v.chunk is not None:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "chunk")
+        out += b": "
+        enc_resultchunk(out, v.chunk, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_inventorypage(out, v, depth):
+    if type(v.outcome) is not str: raise Refusal("wrong_type",0)
+    if v.outcome != "page" and v.outcome != "gap" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "unavailable": raise Refusal("bad_enum",0)
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "outcome")
+    out += b": "
+    esc(out, v.outcome)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "snapshots")
+    out += b": "
+    enc_list(out, v.snapshots, depth + 1, enc_operationsnapshot)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "next")
+    out += b": "
+    esc(out, v.next)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "complete")
+    out += b": "
+    out += b"true" if v.complete else b"false"
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
 def enc_oarecoverableacceptancegethistorywindowarguments(out, v, depth):
     out += b"{"
     out += b"}"
@@ -411,6 +719,60 @@ def enc_oarecoverableacceptancecancelworkarguments(out, v, depth):
     esc(out, "identity")
     out += b": "
     enc_requestidentity(out, v.identity, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oaoperationcontrolobserveworkarguments(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "identity")
+    out += b": "
+    enc_requestidentity(out, v.identity, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oaoperationcontrolreadresultarguments(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "identity")
+    out += b": "
+    enc_requestidentity(out, v.identity, depth + 1)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "offset")
+    out += b": "
+    num(out, v.offset)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "max_bytes")
+    out += b": "
+    num(out, v.max_bytes)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oajobinventorylistworkarguments(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "cursor")
+    out += b": "
+    esc(out, v.cursor)
+    out += b","
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "limit")
+    out += b": "
+    num(out, v.limit)
     out += b"\n"
     pad(out, depth)
     out += b"}"
@@ -543,6 +905,42 @@ def enc_oarecoverableacceptancecancelworkresult(out, v, depth):
     esc(out, "value")
     out += b": "
     enc_cancellationresult(out, v.value, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oaoperationcontrolobserveworkresult(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "value")
+    out += b": "
+    enc_observationresult(out, v.value, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oaoperationcontrolreadresultresult(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "value")
+    out += b": "
+    enc_resultread(out, v.value, depth + 1)
+    out += b"\n"
+    pad(out, depth)
+    out += b"}"
+
+
+def enc_oajobinventorylistworkresult(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    pad(out, depth + 1)
+    esc(out, "value")
+    out += b": "
+    enc_inventorypage(out, v.value, depth + 1)
     out += b"\n"
     pad(out, depth)
     out += b"}"
@@ -849,6 +1247,28 @@ class _Reader:
         self.depth -= 1
 
 
+def _decode_list(r, elem):
+    if r.at() != _LBRACK:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    out = []
+    r.ws()
+    if r.at() != _RBRACK:
+        while True:
+            r.ws()
+            out.append(elem(r))
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACK:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    return out
+
+
 def _decode_requestidentity(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -1145,6 +1565,359 @@ def _decode_cancellationresult(r):
     return v
 
 
+def _decode_workprogress(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = WorkProgress()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "done":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.done = r.integer(-9223372036854775808, 9223372036854775807)
+            elif key == "total":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.total = r.integer(-9223372036854775808, 9223372036854775807)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 3 != 3:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_workfailure(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = WorkFailure()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "classification":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.classification = r.string()
+            elif key == "message":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.message = r.string()
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 3 != 3:
+        raise r.refuse("missing_field")
+    if v.classification != "retryable" and v.classification != "permanent" and v.classification != "unknown": raise r.refuse("bad_enum")
+    return v
+
+
+def _decode_operationsnapshot(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OperationSnapshot()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "receipt":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.receipt = _decode_receipt(r)
+            elif key == "state":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.state = r.string()
+            elif key == "progress":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.progress = _decode_workprogress(r)
+            elif key == "cancellation_requested":
+                if seen & 8:
+                    raise r.refuse("duplicate_field")
+                seen |= 8
+                v.cancellation_requested = r.boolean()
+            elif key == "failure":
+                if seen & 16:
+                    raise r.refuse("duplicate_field")
+                seen |= 16
+                v.failure = _decode_workfailure(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 15 != 15:
+        raise r.refuse("missing_field")
+    if v.state != "pending" and v.state != "running" and v.state != "transferred" and v.state != "complete" and v.state != "failed" and v.state != "cancelled": raise r.refuse("bad_enum")
+    return v
+
+
+def _decode_observationresult(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = ObservationResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "outcome":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.outcome = r.string()
+            elif key == "snapshot":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.snapshot = _decode_operationsnapshot(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted": raise r.refuse("bad_enum")
+    return v
+
+
+def _decode_resultchunk(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = ResultChunk()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "receipt":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.receipt = _decode_receipt(r)
+            elif key == "offset":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.offset = r.integer(-9223372036854775808, 9223372036854775807)
+            elif key == "total":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.total = r.integer(-9223372036854775808, 9223372036854775807)
+            elif key == "data":
+                if seen & 8:
+                    raise r.refuse("duplicate_field")
+                seen |= 8
+                v.data = _decode_binary(r.string())
+            elif key == "eof":
+                if seen & 16:
+                    raise r.refuse("duplicate_field")
+                seen |= 16
+                v.eof = r.boolean()
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 31 != 31:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_resultread(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = ResultRead()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "outcome":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.outcome = r.string()
+            elif key == "chunk":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.chunk = _decode_resultchunk(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    if v.outcome != "data" and v.outcome != "not_ready" and v.outcome != "unavailable" and v.outcome != "unsupported" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid": raise r.refuse("bad_enum")
+    return v
+
+
+def _decode_inventorypage(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = InventoryPage()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "outcome":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.outcome = r.string()
+            elif key == "snapshots":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.snapshots = _decode_list(r, _decode_operationsnapshot)
+            elif key == "next":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.next = r.string()
+            elif key == "complete":
+                if seen & 8:
+                    raise r.refuse("duplicate_field")
+                seen |= 8
+                v.complete = r.boolean()
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 15 != 15:
+        raise r.refuse("missing_field")
+    if v.outcome != "page" and v.outcome != "gap" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "unavailable": raise r.refuse("bad_enum")
+    return v
+
+
 def _decode_oarecoverableacceptancegethistorywindowarguments(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -1292,6 +2065,138 @@ def _decode_oarecoverableacceptancecancelworkarguments(r):
     r.pos += 1
     r.depth -= 1
     if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_oaoperationcontrolobserveworkarguments(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAOperationControlObserveWorkArguments()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "identity":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.identity = _decode_requestidentity(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_oaoperationcontrolreadresultarguments(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAOperationControlReadResultArguments()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "identity":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.identity = _decode_requestidentity(r)
+            elif key == "offset":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.offset = r.integer(-9223372036854775808, 9223372036854775807)
+            elif key == "max_bytes":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.max_bytes = r.integer(-9223372036854775808, 9223372036854775807)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 7 != 7:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_oajobinventorylistworkarguments(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAJobInventoryListWorkArguments()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "cursor":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.cursor = r.string()
+            elif key == "limit":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.limit = r.integer(-9223372036854775808, 9223372036854775807)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 3 != 3:
         raise r.refuse("missing_field")
     return v
 
@@ -1609,6 +2514,123 @@ def _decode_oarecoverableacceptancecancelworkresult(r):
     return v
 
 
+def _decode_oaoperationcontrolobserveworkresult(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAOperationControlObserveWorkResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "value":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.value = _decode_observationresult(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_oaoperationcontrolreadresultresult(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAOperationControlReadResultResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "value":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.value = _decode_resultread(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _decode_oajobinventorylistworkresult(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = OAJobInventoryListWorkResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "value":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.value = _decode_inventorypage(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
 def decode(data):
     r = _Reader(bytes(data))
     r.ws()
@@ -1742,6 +2764,14 @@ def _service_check(kind, value, depth=0):
     if not valid:
         raise Refusal("wrong_type", 0)
 
+def service_name(frame):
+    """Validate envelope/version for routing; dispatchers validate typed arguments."""
+    value = _service_decode(_decode_oaserviceframe, frame)
+    if value.version != 1:
+        raise DispatchError("unknown_version")
+    return value.service
+
+
 
 class ServiceError(Exception):
     def __init__(self, code, message=""):
@@ -1770,10 +2800,20 @@ _SERVICE_RECORDS = {
     "AcceptanceResult": (AcceptanceResult, [("outcome","string","never"),("receipt","Receipt","absent"),("reason","string","never"),]),
     "HistoryWindow": (HistoryWindow, [("logical_owner","string","never"),("history_epoch","string","never"),("minimum_retention_ms","i64","never"),]),
     "CancellationResult": (CancellationResult, [("outcome","string","never"),]),
+    "WorkProgress": (WorkProgress, [("done","i64","never"),("total","i64","never"),]),
+    "WorkFailure": (WorkFailure, [("classification","string","never"),("message","string","never"),]),
+    "OperationSnapshot": (OperationSnapshot, [("receipt","Receipt","never"),("state","string","never"),("progress","WorkProgress","never"),("cancellation_requested","bool","never"),("failure","WorkFailure","absent"),]),
+    "ObservationResult": (ObservationResult, [("outcome","string","never"),("snapshot","OperationSnapshot","absent"),]),
+    "ResultChunk": (ResultChunk, [("receipt","Receipt","never"),("offset","i64","never"),("total","i64","never"),("data","binary","never"),("eof","bool","never"),]),
+    "ResultRead": (ResultRead, [("outcome","string","never"),("chunk","ResultChunk","absent"),]),
+    "InventoryPage": (InventoryPage, [("outcome","string","never"),("snapshots","list<OperationSnapshot>","never"),("next","string","never"),("complete","bool","never"),]),
     "OARecoverableAcceptanceGetHistoryWindowArguments": (OARecoverableAcceptanceGetHistoryWindowArguments, []),
     "OARecoverableAcceptanceSubmitArguments": (OARecoverableAcceptanceSubmitArguments, [("submission","Submission","never"),]),
     "OARecoverableAcceptanceReconcileArguments": (OARecoverableAcceptanceReconcileArguments, [("identity","RequestIdentity","never"),]),
     "OARecoverableAcceptanceCancelWorkArguments": (OARecoverableAcceptanceCancelWorkArguments, [("identity","RequestIdentity","never"),]),
+    "OAOperationControlObserveWorkArguments": (OAOperationControlObserveWorkArguments, [("identity","RequestIdentity","never"),]),
+    "OAOperationControlReadResultArguments": (OAOperationControlReadResultArguments, [("identity","RequestIdentity","never"),("offset","i64","never"),("max_bytes","i64","never"),]),
+    "OAJobInventoryListWorkArguments": (OAJobInventoryListWorkArguments, [("cursor","string","never"),("limit","i64","never"),]),
     "OAServiceFrame": (OAServiceFrame, [("version","i32","never"),("service","string","never"),("method","string","never"),("arguments","json","never"),]),
     "OAServiceReply": (OAServiceReply, [("version","i32","never"),("service","string","never"),("method","string","never"),("ok","bool","never"),("payload","json","never"),]),
     "OAServiceError": (OAServiceError, [("code","string","never"),("message","string","never"),]),
@@ -1781,6 +2821,9 @@ _SERVICE_RECORDS = {
     "OARecoverableAcceptanceSubmitResult": (OARecoverableAcceptanceSubmitResult, [("value","AcceptanceResult","never"),]),
     "OARecoverableAcceptanceReconcileResult": (OARecoverableAcceptanceReconcileResult, [("value","AcceptanceResult","never"),]),
     "OARecoverableAcceptanceCancelWorkResult": (OARecoverableAcceptanceCancelWorkResult, [("value","CancellationResult","never"),]),
+    "OAOperationControlObserveWorkResult": (OAOperationControlObserveWorkResult, [("value","ObservationResult","never"),]),
+    "OAOperationControlReadResultResult": (OAOperationControlReadResultResult, [("value","ResultRead","never"),]),
+    "OAJobInventoryListWorkResult": (OAJobInventoryListWorkResult, [("value","InventoryPage","never"),]),
 }
 
 
@@ -1840,4 +2883,67 @@ class RecoverableAcceptanceClient(RecoverableAcceptance):
         _oa_request = _service_request("abstraction.job/acceptance@1", "CancelWork", _oa_arguments)
         _oa_payload = _service_response(self._transport.exchange_frame(_oa_request), "abstraction.job/acceptance@1", "CancelWork")
         _oa_result = _service_decode(_decode_oarecoverableacceptancecancelworkresult, _oa_payload, 1)
+        return _oa_result.value
+
+
+class OperationControl:
+    __doc__ = "Observation and result access use the same authenticated caller scope and request identity as RecoverableAcceptance despite their separate service wire identity. Existing acceptance methods and wire contract remain unchanged."
+    def ObserveWork(self, identity: "RequestIdentity") -> "ObservationResult":
+        raise NotImplementedError
+    def ReadResult(self, identity: "RequestIdentity", offset: "int", max_bytes: "int") -> "ResultRead":
+        raise NotImplementedError
+
+
+class OperationControlClient(OperationControl):
+    def __init__(self, transport):
+        self._transport = transport
+
+    def ObserveWork(self, identity: "RequestIdentity") -> "ObservationResult":
+        _service_check("RequestIdentity", identity)
+        _oa_args = OAOperationControlObserveWorkArguments()
+        _oa_args.identity = identity
+        _oa_arguments = _service_encode(enc_oaoperationcontrolobserveworkarguments, _oa_args, 1)
+        _service_decode(_decode_oaoperationcontrolobserveworkarguments, _oa_arguments, 1)
+        _oa_request = _service_request("abstraction.job/operations@1", "ObserveWork", _oa_arguments)
+        _oa_payload = _service_response(self._transport.exchange_frame(_oa_request), "abstraction.job/operations@1", "ObserveWork")
+        _oa_result = _service_decode(_decode_oaoperationcontrolobserveworkresult, _oa_payload, 1)
+        return _oa_result.value
+
+    def ReadResult(self, identity: "RequestIdentity", offset: "int", max_bytes: "int") -> "ResultRead":
+        _service_check("RequestIdentity", identity)
+        _service_check("i64", offset)
+        _service_check("i64", max_bytes)
+        _oa_args = OAOperationControlReadResultArguments()
+        _oa_args.identity = identity
+        _oa_args.offset = offset
+        _oa_args.max_bytes = max_bytes
+        _oa_arguments = _service_encode(enc_oaoperationcontrolreadresultarguments, _oa_args, 1)
+        _service_decode(_decode_oaoperationcontrolreadresultarguments, _oa_arguments, 1)
+        _oa_request = _service_request("abstraction.job/operations@1", "ReadResult", _oa_arguments)
+        _oa_payload = _service_response(self._transport.exchange_frame(_oa_request), "abstraction.job/operations@1", "ReadResult")
+        _oa_result = _service_decode(_decode_oaoperationcontrolreadresultresult, _oa_payload, 1)
+        return _oa_result.value
+
+
+class JobInventory:
+    __doc__ = "Bounded own-scope inventory on the acceptance provider endpoint. Authorization is independent of cursor text and uses the existing native caller scope. Listing does not authorize cross-scope Observe/Cancel or expose private provider paths."
+    def ListWork(self, cursor: "str", limit: "int") -> "InventoryPage":
+        raise NotImplementedError
+
+
+class JobInventoryClient(JobInventory):
+    def __init__(self, transport):
+        self._transport = transport
+
+    def ListWork(self, cursor: "str", limit: "int") -> "InventoryPage":
+        _service_check("string", cursor)
+        _service_check("i64", limit)
+        _oa_args = OAJobInventoryListWorkArguments()
+        _oa_args.cursor = cursor
+        _oa_args.limit = limit
+        _oa_arguments = _service_encode(enc_oajobinventorylistworkarguments, _oa_args, 1)
+        _service_decode(_decode_oajobinventorylistworkarguments, _oa_arguments, 1)
+        _oa_request = _service_request("abstraction.job/inventory@1", "ListWork", _oa_arguments)
+        _oa_payload = _service_response(self._transport.exchange_frame(_oa_request), "abstraction.job/inventory@1", "ListWork")
+        _oa_result = _service_decode(_decode_oajobinventorylistworkresult, _oa_payload, 1)
         return _oa_result.value

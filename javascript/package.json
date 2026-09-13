@@ -1,0 +1,12 @@
+{
+  "name": "@openabstractions/job-acceptance",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": "./js/abstraction/job/acceptance/rec.mjs",
+  "files": [
+    "js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
