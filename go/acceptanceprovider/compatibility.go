@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"unicode/utf8"
 
@@ -20,6 +21,7 @@ var ErrIncompatibleStorage = errors.New("acceptance: incompatible storage")
 // format and submitting authority have not been established. Managed/execution
 // opens refuse before writes; selecting an explicit legacy provider preserves
 // existing access. No caller mapping or work transfer is implied by this error.
+// MigrateLegacy is the explicit, operator-mapped conversion path.
 // It also matches ErrIncompatibleStorage through errors.Is.
 var ErrLegacyOwnership = fmt.Errorf("%w: unowned legacy jobs require an explicit ownership transfer", ErrIncompatibleStorage)
 
@@ -52,7 +54,28 @@ func storageProfile(executor Executor) (int, string, error) {
 	return 2, profile, nil
 }
 
+// Storage features name journal encodings an older provider cannot honour. The
+// owner header lists every feature the store has used; a validator refuses any
+// feature it does not support, by name, before it opens journals.
+const (
+	// StorageFeatureAttempts marks journals for retry attempts [JOB-A7].
+	StorageFeatureAttempts = "abstraction.job/journal-attempts@1"
+	// StorageFeatureResultLost marks journals that record a lost result [JOB-A10].
+	StorageFeatureResultLost = "abstraction.job/journal-result-lost@1"
+)
+
+// SupportedStorageFeatures is the feature roster this provider reads.
+func SupportedStorageFeatures() []string {
+	return []string{StorageFeatureAttempts, StorageFeatureResultLost}
+}
+
 func validateConfiguration(data []byte, owner string, version int, profile string, managed bool) (configuration, error) {
+	return validateConfigurationFeatures(data, owner, version, profile, managed, SupportedStorageFeatures())
+}
+
+// validateConfigurationFeatures validates owner metadata against a feature
+// roster; an older validator is this function with a smaller roster.
+func validateConfigurationFeatures(data []byte, owner string, version int, profile string, managed bool, supported []string) (configuration, error) {
 	var c configuration
 	if !validConfigurationStrings(data) {
 		return c, errors.New("acceptance: invalid owner configuration strings")
@@ -76,7 +99,7 @@ func validateConfiguration(data []byte, owner string, version int, profile strin
 		}
 		seen[key] = true
 		switch key {
-		case "Version", "Owner", "Epoch", "RetentionMs", "Execution":
+		case "Version", "Owner", "Epoch", "RetentionMs", "Execution", "Features":
 		default:
 			return c, fmt.Errorf("%w: unsupported owner field %q", ErrIncompatibleStorage, key)
 		}
@@ -88,10 +111,57 @@ func validateConfiguration(data []byte, owner string, version int, profile strin
 	if err = strict(data, &c); err != nil {
 		return c, err
 	}
+	if seen["Features"] && len(c.Features) == 0 {
+		return c, fmt.Errorf("%w: empty storage feature list", ErrIncompatibleStorage)
+	}
+	for i, feature := range c.Features {
+		if !slices.Contains(supported, feature) {
+			return c, fmt.Errorf("%w: unsupported storage feature %q", ErrIncompatibleStorage, feature)
+		}
+		if slices.Contains(c.Features[:i], feature) {
+			return c, fmt.Errorf("%w: duplicate storage feature %q", ErrIncompatibleStorage, feature)
+		}
+	}
 	if c.Version != version || c.Execution != profile || (!managed && c.Owner != owner) || c.Owner == "" || len(c.Owner) > 1024 || !utf8.ValidString(c.Owner) || c.Epoch == "" || c.RetentionMs != MinimumRetentionMs {
 		return c, fmt.Errorf("%w: owner/version/execution profile mismatch", ErrIncompatibleStorage)
 	}
 	return c, nil
+}
+
+// ensureFeature records a storage feature in the owner header, atomically and
+// durably, before any journal that needs it is written. A crash after the
+// marker leaves a store an older provider refuses without a journal that
+// needed the refusal, which is safe. The marker is never removed.
+func (p *Provider) ensureFeature(feature string) error {
+	if _, ok := p.features.Load(feature); ok {
+		return nil
+	}
+	path := filepath.Join(p.root, "acceptance", "owner.json")
+	if err := regularFile(path); err != nil {
+		return err
+	}
+	err := cas.Change(path, func(cur []byte) ([]byte, error) {
+		if cur == nil {
+			return nil, fmt.Errorf("%w: owner configuration missing", ErrIncompatibleStorage)
+		}
+		c, err := validateConfiguration(cur, p.config.Owner, p.config.Version, p.config.Execution, true)
+		if err != nil {
+			return nil, err
+		}
+		if c.Owner != p.config.Owner || c.Epoch != p.config.Epoch {
+			return nil, fmt.Errorf("%w: owner changed while open", ErrIncompatibleStorage)
+		}
+		if slices.Contains(c.Features, feature) {
+			return cur, nil
+		}
+		c.Features = append(c.Features, feature)
+		return json.Marshal(c)
+	})
+	if err != nil {
+		return err
+	}
+	p.features.Store(feature, true)
+	return nil
 }
 
 // encoding/json replaces malformed Unicode. Check original strings before that

@@ -165,10 +165,10 @@ export function encList(out, v, depth, enc) {
   out.byte(0x5d);
 }
 
-export const OutcomeNames = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"];
+export const OutcomeNames = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"];
 export const OutcomeUnknown = "refuse";
 
-export const CancellationOutcomeNames = ["requested", "already_terminal", "unknown", "forbidden", "unsupported"];
+export const CancellationOutcomeNames = ["requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"];
 export const CancellationOutcomeUnknown = "refuse";
 
 export const WorkStateNames = ["pending", "running", "transferred", "complete", "failed", "cancelled"];
@@ -177,7 +177,10 @@ export const WorkStateUnknown = "refuse";
 export const FailureClassNames = ["retryable", "permanent", "unknown"];
 export const FailureClassUnknown = "refuse";
 
-export const ObservationOutcomeNames = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"];
+export const FailureCauseNames = ["other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"];
+export const FailureCauseUnknown = "grant";
+
+export const ObservationOutcomeNames = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"];
 export const ObservationOutcomeUnknown = "refuse";
 
 export const ResultOutcomeNames = ["data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"];
@@ -201,6 +204,14 @@ export function enc_requestidentity(out, v, depth) {
   esc(out, "history_epoch");
   out.ascii(": ");
   esc(out, v.history_epoch);
+  if (v.attempt !== 0n) {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "attempt");
+    out.ascii(": ");
+    num(out, v.attempt);
+  }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -274,7 +285,7 @@ export function enc_receipt(out, v, depth) {
 
 export function enc_acceptanceresult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
-    if (v.outcome !== "accepted" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unknown" && v.outcome !== "key_conflict" && v.outcome !== "forbidden" && v.outcome !== "invalid") { throw new Refusal("bad_enum",0); }
+    if (v.outcome !== "accepted" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unknown" && v.outcome !== "key_conflict" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -319,6 +330,14 @@ export function enc_historywindow(out, v, depth) {
   esc(out, "minimum_retention_ms");
   out.ascii(": ");
   num(out, v.minimum_retention_ms);
+  if (v.result_retention_ms !== 0n) {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "result_retention_ms");
+    out.ascii(": ");
+    num(out, v.result_retention_ms);
+  }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -326,7 +345,7 @@ export function enc_historywindow(out, v, depth) {
 
 export function enc_cancellationresult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
-    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "unsupported") { throw new Refusal("bad_enum",0); }
+    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "unsupported" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -359,6 +378,9 @@ export function enc_workprogress(out, v, depth) {
 export function enc_workfailure(out, v, depth) {
     if (typeof v.classification !== "string") throw new Refusal("wrong_type",0);
     if (v.classification !== "retryable" && v.classification !== "permanent" && v.classification !== "unknown") { throw new Refusal("bad_enum",0); }
+    if (v.cause !== "") {
+    if (typeof v.cause !== "string") throw new Refusal("wrong_type",0);
+    }
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -371,6 +393,14 @@ export function enc_workfailure(out, v, depth) {
   esc(out, "message");
   out.ascii(": ");
   esc(out, v.message);
+  if (v.cause !== "") {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "cause");
+    out.ascii(": ");
+    esc(out, v.cause);
+  }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -418,7 +448,7 @@ export function enc_operationsnapshot(out, v, depth) {
 
 export function enc_observationresult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
-    if (v.outcome !== "observed" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "definitely_not_accepted") { throw new Refusal("bad_enum",0); }
+    if (v.outcome !== "observed" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -1095,54 +1125,113 @@ function decodeList(r, elem) {
   return out;
 }
 
+// Stable SDK key in an owner-issued history epoch. Scope is authenticated
+// caller plus this service contract, never a caller-provided principal. Persist
+// before send for restart recovery. Attempt is a nonnegative explicit retry
+// number for the same key and epoch; zero is the original request. Attempt N+1
+// is eligible only after attempt N failed terminally or was sealed (JOB-A7).
 export function newRequestIdentity() {
-  return { key: "", history_epoch: "" };
+  return { key: "", history_epoch: "", attempt: 0n };
 }
 
+// Opaque kind-specific specification bytes, not a second tagged job Record.
+// Equality includes kind, exact spec bytes and the set of required guarantees.
+// Credentials are supplied at the authorized service boundary.
 export function newSubmission() {
   return { identity: newRequestIdentity(), kind: "", spec: new Uint8Array(0), required_guarantees: [] };
 }
 
+// Recoverable acceptance evidence. Retention is a minimum duration from
+// original acceptance, never renewed by replay. Expiry does not end work,
+// transfer ownership or authorize duplicate execution. IDs confer no authority.
 export function newReceipt() {
   return { identity: newRequestIdentity(), logical_owner: "", operation_id: "", accepted_guarantees: [], history_retention_ms: 0n };
 }
 
+// Accepted requires a receipt; other outcomes forbid one. Definite
+// nonacceptance requires authoritative sealed evidence preventing any delayed
+// acceptance of this identity. Absence, timeout, expired history and access
+// denial are insufficient. Unavailable means a required policy decision could
+// not be obtained: no admission effect and no seal were recorded, and the same
+// identity may be presented again (JOB-A9).
 export function newAcceptanceResult() {
   return { outcome: "", receipt: null, reason: "" };
 }
 
+// Owner-issued acceptance epoch and minimum reconciliation retention. After
+// closing an epoch the owner fences all its submissions, including delayed
+// ones. This does not assert that old unknown work was never accepted. Result
+// retention is the provider's declared minimum time, in milliseconds after
+// completion, that complete result bytes stay readable; zero declares none
+// (JOB-A11).
 export function newHistoryWindow() {
-  return { logical_owner: "", history_epoch: "", minimum_retention_ms: 0n };
+  return { logical_owner: "", history_epoch: "", minimum_retention_ms: 0n, result_retention_ms: 0n };
 }
 
+// Requested acknowledges cancellation intent, not stopped effects. Completion
+// may win the race; observe the existing operation for its terminal result.
+// Unavailable records no intent because a required policy decision could not be
+// obtained; the request may be repeated.
 export function newCancellationResult() {
   return { outcome: "" };
 }
 
+// Advisory nonnegative progress. Zero total means unknown. Progress does not
+// authorize delivery or imply completion.
 export function newWorkProgress() {
   return { done: 0n, total: 0n };
 }
 
+// Last-attempt failure. Unknown classification remains unknown; do not infer it
+// from message text. Retryable failure can coexist with pending work. Permanent
+// classification means the provider will not try this operation again and its
+// state is failed. Cause is the provider's typed reason when known; empty means
+// unreported, and an unrecognized cause is treated as other.
 export function newWorkFailure() {
-  return { classification: "", message: "" };
+  return { classification: "", message: "", cause: "" };
 }
 
+// Receipt binds original request and logical owner. Cancellation requested is
+// intent, not stopped effects. Progress and last-attempt failure are advisory;
+// no provider paths are exposed.
 export function newOperationSnapshot() {
   return { receipt: newReceipt(), state: "", progress: newWorkProgress(), cancellation_requested: false, failure: null };
 }
 
+// Exactly observed carries a snapshot; all other outcomes forbid it. Absent
+// identities are unknown and observation never seals them. Definite
+// nonacceptance requires an existing authoritative seal. Already accepted
+// journals may be recovered. Unavailable means a required policy decision could
+// not be obtained and no state was read or changed (JOB-A9).
 export function newObservationResult() {
   return { outcome: "", snapshot: null };
 }
 
+// Complete immutable result bytes bound to the original receipt. Offset equals
+// requested nonnegative offset and is at most nonnegative total. Data length is
+// at most requested max_bytes and total-offset. EOF is true exactly when offset
+// plus data length equals total, including an empty complete result. Data is
+// nonempty unless offset equals total and EOF is true. Missing data and errors
+// never imply EOF.
 export function newResultChunk() {
   return { receipt: newReceipt(), offset: 0n, total: 0n, data: new Uint8Array(0), eof: false };
 }
 
+// Exactly data carries a chunk; other outcomes forbid it. Only complete
+// immutable results produce data. Incomplete work is not_ready; missing
+// completed bytes are unavailable. Unsupported access, unknown identity,
+// forbidden access and invalid bounds remain distinct.
 export function newResultRead() {
   return { outcome: "", chunk: null };
 }
 
+// Caller-scoped accepted-operation observations without paths. Only page
+// carries snapshots. A noncomplete page always has a next cursor, even when no
+// own operations were scanned. Complete pages have empty next. Refusals carry
+// no snapshots, empty next and complete=false. Directory traversal is a weak
+// live view: concurrent insertions/removals can be omitted or repeated, not a
+// stable transaction snapshot. An unchanged tree is fully traversable. Large
+// failure diagnostics may be replaced by a bounded generic message.
 export function newInventoryPage() {
   return { outcome: "", snapshots: [], next: "", complete: false };
 }
@@ -1239,6 +1328,10 @@ function decode_requestidentity(r) {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
         v.history_epoch = r.string();
+      } else if (key === "attempt") {
+        if (seen & 4) throw r.refuse("duplicate_field");
+        seen |= 4;
+        v.attempt = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1392,7 +1485,7 @@ function decode_acceptanceresult(r) {
   r.pos++;
   r.depth--;
   if (((seen & 5) >>> 0) !== 5) throw r.refuse("missing_field");
-    if (v.outcome !== "accepted" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unknown" && v.outcome !== "key_conflict" && v.outcome !== "forbidden" && v.outcome !== "invalid") { throw r.refuse("bad_enum"); }
+    if (v.outcome !== "accepted" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unknown" && v.outcome !== "key_conflict" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw r.refuse("bad_enum"); }
   return v;
 }
 
@@ -1424,6 +1517,10 @@ function decode_historywindow(r) {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
         v.minimum_retention_ms = r.integer(-9223372036854775808n, 9223372036854775807n);
+      } else if (key === "result_retention_ms") {
+        if (seen & 8) throw r.refuse("duplicate_field");
+        seen |= 8;
+        v.result_retention_ms = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1471,7 +1568,7 @@ function decode_cancellationresult(r) {
   r.pos++;
   r.depth--;
   if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
-    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "unsupported") { throw r.refuse("bad_enum"); }
+    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "unsupported" && v.outcome !== "unavailable") { throw r.refuse("bad_enum"); }
   return v;
 }
 
@@ -1538,6 +1635,10 @@ function decode_workfailure(r) {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
         v.message = r.string();
+      } else if (key === "cause") {
+        if (seen & 4) throw r.refuse("duplicate_field");
+        seen |= 4;
+        v.cause = r.string();
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1642,7 +1743,7 @@ function decode_observationresult(r) {
   r.pos++;
   r.depth--;
   if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
-    if (v.outcome !== "observed" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "definitely_not_accepted") { throw r.refuse("bad_enum"); }
+    if (v.outcome !== "observed" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unavailable") { throw r.refuse("bad_enum"); }
   return v;
 }
 
@@ -2490,14 +2591,14 @@ function _serviceCheck(kind, value, depth = 0) {
 }
 
 const _serviceRecords = Object.create(null);
-_serviceRecords["RequestIdentity"] = [["key","string","never"],["history_epoch","string","never"],];
+_serviceRecords["RequestIdentity"] = [["key","string","never"],["history_epoch","string","never"],["attempt","i64","zero"],];
 _serviceRecords["Submission"] = [["identity","RequestIdentity","never"],["kind","string","never"],["spec","binary","never"],["required_guarantees","list<string>","never"],];
 _serviceRecords["Receipt"] = [["identity","RequestIdentity","never"],["logical_owner","string","never"],["operation_id","string","never"],["accepted_guarantees","list<string>","never"],["history_retention_ms","i64","never"],];
 _serviceRecords["AcceptanceResult"] = [["outcome","string","never"],["receipt","Receipt","absent"],["reason","string","never"],];
-_serviceRecords["HistoryWindow"] = [["logical_owner","string","never"],["history_epoch","string","never"],["minimum_retention_ms","i64","never"],];
+_serviceRecords["HistoryWindow"] = [["logical_owner","string","never"],["history_epoch","string","never"],["minimum_retention_ms","i64","never"],["result_retention_ms","i64","zero"],];
 _serviceRecords["CancellationResult"] = [["outcome","string","never"],];
 _serviceRecords["WorkProgress"] = [["done","i64","never"],["total","i64","never"],];
-_serviceRecords["WorkFailure"] = [["classification","string","never"],["message","string","never"],];
+_serviceRecords["WorkFailure"] = [["classification","string","never"],["message","string","never"],["cause","string","zero"],];
 _serviceRecords["OperationSnapshot"] = [["receipt","Receipt","never"],["state","string","never"],["progress","WorkProgress","never"],["cancellation_requested","bool","never"],["failure","WorkFailure","absent"],];
 _serviceRecords["ObservationResult"] = [["outcome","string","never"],["snapshot","OperationSnapshot","absent"],];
 _serviceRecords["ResultChunk"] = [["receipt","Receipt","never"],["offset","i64","never"],["total","i64","never"],["data","binary","never"],["eof","bool","never"],];

@@ -165,10 +165,10 @@ pub fn enc_list<T>(out: &mut Vec<u8>, v: &[T], depth: i32, enc: fn(&mut Vec<u8>,
     out.push(b']');
 }
 
-pub const OUTCOME_NAMES: [&str; 6] = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"];
+pub const OUTCOME_NAMES: [&str; 7] = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"];
 pub const OUTCOME_UNKNOWN: &str = "refuse";
 
-pub const CANCELLATIONOUTCOME_NAMES: [&str; 5] = ["requested", "already_terminal", "unknown", "forbidden", "unsupported"];
+pub const CANCELLATIONOUTCOME_NAMES: [&str; 6] = ["requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"];
 pub const CANCELLATIONOUTCOME_UNKNOWN: &str = "refuse";
 
 pub const WORKSTATE_NAMES: [&str; 6] = ["pending", "running", "transferred", "complete", "failed", "cancelled"];
@@ -177,7 +177,10 @@ pub const WORKSTATE_UNKNOWN: &str = "refuse";
 pub const FAILURECLASS_NAMES: [&str; 3] = ["retryable", "permanent", "unknown"];
 pub const FAILURECLASS_UNKNOWN: &str = "refuse";
 
-pub const OBSERVATIONOUTCOME_NAMES: [&str; 5] = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"];
+pub const FAILURECAUSE_NAMES: [&str; 10] = ["other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"];
+pub const FAILURECAUSE_UNKNOWN: &str = "grant";
+
+pub const OBSERVATIONOUTCOME_NAMES: [&str; 6] = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"];
 pub const OBSERVATIONOUTCOME_UNKNOWN: &str = "refuse";
 
 pub const RESULTOUTCOME_NAMES: [&str; 7] = ["data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"];
@@ -192,6 +195,7 @@ pub const ADMISSION_GUARANTEES: [&str; 3] = ["abstraction.job/caller-exit@1", "a
 pub struct RequestIdentity {
     pub key: String,
     pub history_epoch: String,
+    pub attempt: i64,
 }
 
 #[derive(Default)]
@@ -223,6 +227,7 @@ pub struct HistoryWindow {
     pub logical_owner: String,
     pub history_epoch: String,
     pub minimum_retention_ms: i64,
+    pub result_retention_ms: i64,
 }
 
 #[derive(Default)]
@@ -240,6 +245,7 @@ pub struct WorkProgress {
 pub struct WorkFailure {
     pub classification: String,
     pub message: String,
+    pub cause: String,
 }
 
 #[derive(Default)]
@@ -388,6 +394,14 @@ pub fn enc_requestidentity(out: &mut Vec<u8>, v: &RequestIdentity, depth: i32) {
     esc(out, "history_epoch");
     out.extend_from_slice(b": ");
     esc(out, &v.history_epoch);
+    if v.attempt != 0 {
+        out.push(b',');
+        out.push(b'\n');
+        pad(out, depth + 1);
+        esc(out, "attempt");
+        out.extend_from_slice(b": ");
+        num(out, v.attempt);
+    }
     out.push(b'\n');
     pad(out, depth);
     out.push(b'}');
@@ -460,7 +474,7 @@ pub fn enc_receipt(out: &mut Vec<u8>, v: &Receipt, depth: i32) {
 }
 
 pub fn enc_acceptanceresult(out: &mut Vec<u8>, v: &AcceptanceResult, depth: i32) {
-    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
+    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
     out.push(b'{');
     out.push(b'\n');
     pad(out, depth + 1);
@@ -505,13 +519,21 @@ pub fn enc_historywindow(out: &mut Vec<u8>, v: &HistoryWindow, depth: i32) {
     esc(out, "minimum_retention_ms");
     out.extend_from_slice(b": ");
     num(out, v.minimum_retention_ms);
+    if v.result_retention_ms != 0 {
+        out.push(b',');
+        out.push(b'\n');
+        pad(out, depth + 1);
+        esc(out, "result_retention_ms");
+        out.extend_from_slice(b": ");
+        num(out, v.result_retention_ms);
+    }
     out.push(b'\n');
     pad(out, depth);
     out.push(b'}');
 }
 
 pub fn enc_cancellationresult(out: &mut Vec<u8>, v: &CancellationResult, depth: i32) {
-    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
+    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
     out.push(b'{');
     out.push(b'\n');
     pad(out, depth + 1);
@@ -555,6 +577,14 @@ pub fn enc_workfailure(out: &mut Vec<u8>, v: &WorkFailure, depth: i32) {
     esc(out, "message");
     out.extend_from_slice(b": ");
     esc(out, &v.message);
+    if !v.cause.is_empty() {
+        out.push(b',');
+        out.push(b'\n');
+        pad(out, depth + 1);
+        esc(out, "cause");
+        out.extend_from_slice(b": ");
+        esc(out, &v.cause);
+    }
     out.push(b'\n');
     pad(out, depth);
     out.push(b'}');
@@ -600,7 +630,7 @@ pub fn enc_operationsnapshot(out: &mut Vec<u8>, v: &OperationSnapshot, depth: i3
 }
 
 pub fn enc_observationresult(out: &mut Vec<u8>, v: &ObservationResult, depth: i32) {
-    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
+    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable" { std::panic::panic_any(Refusal{word:"bad_enum",offset:0}); }
     out.push(b'{');
     out.push(b'\n');
     pad(out, depth + 1);
@@ -1495,6 +1525,13 @@ fn decode_requestidentity(r: &mut Reader) -> Result<RequestIdentity, Refusal> {
                     seen |= 2;
                     v.history_epoch = r.string()?;
                 }
+                "attempt" => {
+                    if seen & 4 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 4;
+                    v.attempt = r.integer(i64::MIN, i64::MAX)?;
+                }
                 _ => {
                     return r.refuse("unknown_field");
                 }
@@ -1733,7 +1770,7 @@ fn decode_acceptanceresult(r: &mut Reader) -> Result<AcceptanceResult, Refusal> 
     if seen & 5 != 5 {
         return r.refuse("missing_field");
     }
-    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" { return r.refuse("bad_enum"); }
+    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     Ok(v)
 }
 
@@ -1780,6 +1817,13 @@ fn decode_historywindow(r: &mut Reader) -> Result<HistoryWindow, Refusal> {
                     }
                     seen |= 4;
                     v.minimum_retention_ms = r.integer(i64::MIN, i64::MAX)?;
+                }
+                "result_retention_ms" => {
+                    if seen & 8 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 8;
+                    v.result_retention_ms = r.integer(i64::MIN, i64::MAX)?;
                 }
                 _ => {
                     return r.refuse("unknown_field");
@@ -1852,7 +1896,7 @@ fn decode_cancellationresult(r: &mut Reader) -> Result<CancellationResult, Refus
     if seen & 1 != 1 {
         return r.refuse("missing_field");
     }
-    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" { return r.refuse("bad_enum"); }
+    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     Ok(v)
 }
 
@@ -1951,6 +1995,13 @@ fn decode_workfailure(r: &mut Reader) -> Result<WorkFailure, Refusal> {
                     }
                     seen |= 2;
                     v.message = r.string()?;
+                }
+                "cause" => {
+                    if seen & 4 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 4;
+                    v.cause = r.string()?;
                 }
                 _ => {
                     return r.refuse("unknown_field");
@@ -2112,7 +2163,7 @@ fn decode_observationresult(r: &mut Reader) -> Result<ObservationResult, Refusal
     if seen & 1 != 1 {
         return r.refuse("missing_field");
     }
-    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" { return r.refuse("bad_enum"); }
+    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     Ok(v)
 }
 
@@ -3325,7 +3376,7 @@ fn service_check_receipt(v: &Receipt) -> Result<(), Refusal> {
 #[allow(unused_variables)]
 fn service_check_acceptanceresult(v: &AcceptanceResult) -> Result<(), Refusal> {
     let r = Reader { buf: &[], pos: 0, depth: 0 };
-    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" { return r.refuse("bad_enum"); }
+    if v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     if let Some(value) = &v.receipt { service_check_receipt(value)?; }
     Ok(())
 }
@@ -3339,7 +3390,7 @@ fn service_check_historywindow(v: &HistoryWindow) -> Result<(), Refusal> {
 #[allow(unused_variables)]
 fn service_check_cancellationresult(v: &CancellationResult) -> Result<(), Refusal> {
     let r = Reader { buf: &[], pos: 0, depth: 0 };
-    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" { return r.refuse("bad_enum"); }
+    if v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     Ok(())
 }
 
@@ -3369,7 +3420,7 @@ fn service_check_operationsnapshot(v: &OperationSnapshot) -> Result<(), Refusal>
 #[allow(unused_variables)]
 fn service_check_observationresult(v: &ObservationResult) -> Result<(), Refusal> {
     let r = Reader { buf: &[], pos: 0, depth: 0 };
-    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" { return r.refuse("bad_enum"); }
+    if v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable" { return r.refuse("bad_enum"); }
     if let Some(value) = &v.snapshot { service_check_operationsnapshot(value)?; }
     Ok(())
 }

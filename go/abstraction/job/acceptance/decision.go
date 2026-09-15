@@ -19,9 +19,71 @@ type Evidence struct {
 	// SealedNonAcceptance means no acceptance occurred AND every delayed request
 	// for this identity is fenced. Empty lookup alone must never set this bit.
 	SealedNonAcceptance bool
+	// DecisionUnavailable means a required service-owned policy decision could
+	// not be obtained, so no evidence was consulted or written [JOB-A9].
+	DecisionUnavailable bool
 }
 
-func validIdentity(v RequestIdentity) bool { return v.Key != "" && v.HistoryEpoch != "" }
+func validIdentity(v RequestIdentity) bool {
+	return v.Key != "" && v.HistoryEpoch != "" && v.Attempt >= 0
+}
+
+// AttemptEvidence is trusted owner evidence for the attempt immediately before
+// a requested attempt, under the same authenticated scope, key and epoch
+// [JOB-A7]. It is consulted only when the requested attempt has no journal.
+type AttemptEvidence struct {
+	// Previous is "absent", "sealed" or "accepted". Other values are contradictory.
+	Previous string
+	// State is the accepted previous attempt's operation state, empty when unavailable.
+	State string
+	// LatestAccepted holds the arguments of the latest accepted earlier attempt.
+	LatestAccepted *Submission
+}
+
+// AttemptEligibility decides whether id may be accepted or sealed. An empty
+// outcome means eligible. A nonempty outcome must be returned without writing
+// acceptance or seal evidence for id, so a later presentation can succeed.
+func AttemptEligibility(id RequestIdentity, submitted *Submission, e AttemptEvidence) AcceptanceResult {
+	refuse := func(outcome, reason string) AcceptanceResult {
+		return AcceptanceResult{Outcome: outcome, Reason: reason}
+	}
+	if id.Attempt < 0 {
+		return refuse("invalid", "attempt must be nonnegative")
+	}
+	if id.Attempt == 0 {
+		return AcceptanceResult{}
+	}
+	switch e.Previous {
+	case "absent":
+		return refuse("invalid", "previous attempt absent")
+	case "sealed":
+	case "accepted":
+		switch e.State {
+		case "failed":
+		case "":
+			return refuse("unknown", "previous attempt state unavailable")
+		case "pending", "running", "transferred", "complete", "cancelled":
+			return refuse("invalid", "previous attempt has not failed terminally")
+		default:
+			return refuse("unknown", "contradictory previous attempt state")
+		}
+	default:
+		return refuse("unknown", "contradictory previous attempt evidence")
+	}
+	if submitted == nil {
+		return AcceptanceResult{}
+	}
+	if e.LatestAccepted == nil {
+		if e.Previous == "accepted" {
+			return refuse("unknown", "previous attempt arguments unavailable")
+		}
+		return AcceptanceResult{}
+	}
+	if !sameArguments(*submitted, *e.LatestAccepted) {
+		return refuse("key_conflict", "retry arguments differ from the accepted attempt")
+	}
+	return AcceptanceResult{}
+}
 
 func guaranteeSet(v []string) ([]string, error) {
 	out := slices.Clone(v)
@@ -60,7 +122,7 @@ func ValidateResult(v AcceptanceResult, id RequestIdentity, owner string) error 
 			return fmt.Errorf("receipt on nonaccepted outcome")
 		}
 		switch v.Outcome {
-		case "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid":
+		case "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable":
 			return nil
 		default:
 			return fmt.Errorf("unknown acceptance outcome")
@@ -83,6 +145,9 @@ func ReconcileEvidence(callerScope, owner string, id RequestIdentity, submitted 
 	}
 	if callerScope == "" || callerScope != e.CallerScope {
 		return result("forbidden", "authenticated scope unavailable or not authorized")
+	}
+	if e.DecisionUnavailable {
+		return result("unavailable", "policy decision unavailable; the same identity may be presented again")
 	}
 	if !validIdentity(id) || owner == "" {
 		return result("invalid", "identity and owner required")

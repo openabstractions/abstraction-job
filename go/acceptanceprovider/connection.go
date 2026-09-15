@@ -23,6 +23,20 @@ type Authorizer func(*identity.Peer) (scope string, err error)
 // Nil retains the host Authorizer's explicitly configured access policy.
 type MethodPolicy func(context.Context, *identity.Peer, string, string) error
 
+// ErrPolicyUnavailable marks a MethodPolicy error meaning the decision could not
+// be obtained. Submit, Reconcile, CancelWork, ObserveWork, ReadResult and
+// ListWork then return unavailable with no state read or change [JOB-A9].
+// GetHistoryWindow refuses. Any other error is an evaluated refusal.
+var ErrPolicyUnavailable = errors.New("acceptance: policy decision unavailable")
+
+type access int
+
+const (
+	accessDenied access = iota
+	accessAllowed
+	accessUnavailable
+)
+
 // HandleConnection owns one connection and serves one generated exchange after
 // the shared Program identity binding. The host supplies listener lifecycle,
 // authorization policy and provider configuration; this creates no daemon.
@@ -57,14 +71,23 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 	if err := call.Recheck(); err != nil {
 		return err
 	}
-	permit := func(service, method string) bool {
+	permit := func(service, method string) access {
 		if scope == "" || ctx.Err() != nil {
-			return false
+			return accessDenied
 		}
-		if policy != nil && policy(ctx, peer, service, method) != nil {
-			return false
+		granted := accessAllowed
+		if policy != nil {
+			if err := policy(ctx, peer, service, method); err != nil {
+				if !errors.Is(err, ErrPolicyUnavailable) {
+					return accessDenied
+				}
+				granted = accessUnavailable
+			}
 		}
-		return ctx.Err() == nil && call.Recheck() == nil
+		if ctx.Err() != nil || call.Recheck() != nil {
+			return accessDenied
+		}
+		return granted
 	}
 	reply, err := provider.dispatchFrame(call.Frame, scope, permit)
 	if err != nil {
@@ -73,7 +96,7 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 	return call.Reply(reply)
 }
 
-func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) bool) ([]byte, error) {
+func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) access) ([]byte, error) {
 	service, err := api.ServiceName(frame)
 	if err != nil {
 		return nil, err
@@ -94,54 +117,80 @@ func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(
 
 type methodAcceptance struct {
 	allowed, denied api.RecoverableAcceptance
-	permit          func(string, string) bool
+	permit          func(string, string) access
 }
 
-func (h methodAcceptance) handler(method string) api.RecoverableAcceptance {
-	if h.permit("abstraction.job/acceptance@1", method) {
-		return h.allowed
+func (h methodAcceptance) handler(method string) (api.RecoverableAcceptance, access) {
+	granted := h.permit("abstraction.job/acceptance@1", method)
+	if granted == accessAllowed {
+		return h.allowed, granted
 	}
-	return h.denied
+	return h.denied, granted
 }
+
+const policyUnavailableReason = "policy decision unavailable; the same identity may be presented again"
+
 func (h methodAcceptance) GetHistoryWindow() (api.HistoryWindow, error) {
-	return h.handler("GetHistoryWindow").GetHistoryWindow()
+	handler, _ := h.handler("GetHistoryWindow")
+	return handler.GetHistoryWindow()
 }
 func (h methodAcceptance) Submit(s api.Submission) (api.AcceptanceResult, error) {
-	return h.handler("Submit").Submit(s)
+	handler, granted := h.handler("Submit")
+	if granted == accessUnavailable {
+		return outcome("unavailable", policyUnavailableReason), nil
+	}
+	return handler.Submit(s)
 }
 func (h methodAcceptance) Reconcile(id api.RequestIdentity) (api.AcceptanceResult, error) {
-	return h.handler("Reconcile").Reconcile(id)
+	handler, granted := h.handler("Reconcile")
+	if granted == accessUnavailable {
+		return outcome("unavailable", policyUnavailableReason), nil
+	}
+	return handler.Reconcile(id)
 }
 func (h methodAcceptance) CancelWork(id api.RequestIdentity) (api.CancellationResult, error) {
-	return h.handler("CancelWork").CancelWork(id)
+	handler, granted := h.handler("CancelWork")
+	if granted == accessUnavailable {
+		return api.CancellationResult{Outcome: "unavailable"}, nil
+	}
+	return handler.CancelWork(id)
 }
 
 type methodOperations struct {
 	allowed, denied api.OperationControl
-	permit          func(string, string) bool
+	permit          func(string, string) access
 }
 
-func (h methodOperations) handler(method string) api.OperationControl {
-	if h.permit("abstraction.job/operations@1", method) {
-		return h.allowed
-	}
-	return h.denied
-}
 func (h methodOperations) ObserveWork(id api.RequestIdentity) (api.ObservationResult, error) {
-	return h.handler("ObserveWork").ObserveWork(id)
+	switch h.permit("abstraction.job/operations@1", "ObserveWork") {
+	case accessAllowed:
+		return h.allowed.ObserveWork(id)
+	case accessUnavailable:
+		return api.ObservationResult{Outcome: "unavailable"}, nil
+	}
+	return h.denied.ObserveWork(id)
 }
 func (h methodOperations) ReadResult(id api.RequestIdentity, offset, max int64) (api.ResultRead, error) {
-	return h.handler("ReadResult").ReadResult(id, offset, max)
+	switch h.permit("abstraction.job/operations@1", "ReadResult") {
+	case accessAllowed:
+		return h.allowed.ReadResult(id, offset, max)
+	case accessUnavailable:
+		return api.ResultRead{Outcome: "unavailable"}, nil
+	}
+	return h.denied.ReadResult(id, offset, max)
 }
 
 type methodInventory struct {
 	allowed, denied api.JobInventory
-	permit          func(string, string) bool
+	permit          func(string, string) access
 }
 
 func (h methodInventory) ListWork(cursor string, limit int64) (api.InventoryPage, error) {
-	if h.permit("abstraction.job/inventory@1", "ListWork") {
+	switch h.permit("abstraction.job/inventory@1", "ListWork") {
+	case accessAllowed:
 		return h.allowed.ListWork(cursor, limit)
+	case accessUnavailable:
+		return inventoryRefusal("unavailable"), nil
 	}
 	return h.denied.ListWork(cursor, limit)
 }

@@ -629,12 +629,18 @@ def _parse_time(s: str) -> datetime:
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s)
+        t = datetime.fromisoformat(s)
+        # A record is written in UTC, so a time whose UTC instant falls outside
+        # years 1..9999 cannot be written back: 9999-12-31T23:59:00-00:01 read
+        # fine and left to_json as a bare OverflowError. Refused here instead.
+        if t.tzinfo is not None:
+            t.astimezone(timezone.utc)
+        return t
     # `invalid` is a verdict this layer offers and ValueError is not, so a
     # caller catching this layer's refusals catches nothing here. Two of the
     # corpus timestamps left this function as a bare ValueError, and
     # abstraction-download/python imports it by name.
-    except ValueError:
+    except (ValueError, OverflowError):
         raise Invalid(f"timestamp {s!r} is not one this reader can read") from None
 
 
@@ -1789,9 +1795,6 @@ class Scratch(Protocol):
         ...
 
 
-REGISTRY_FILE = "services.json"
-
-
 def _store_segments(rel: str) -> List[str]:
     """A relative path reduced to the segments a store would see, in the one
     spelling two of them can be compared in.
@@ -1861,7 +1864,7 @@ def reserved(owner: str, rel: str) -> bool:
         return True
     if segs[0] == "work":
         return len(segs) < 2 or segs[1] != _fold_segment(owner or "")
-    return segs[0] == REGISTRY_FILE and len(segs) == 1
+    return False
 
 
 def root_name(rel: str) -> str:

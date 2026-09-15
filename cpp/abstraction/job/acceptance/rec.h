@@ -160,10 +160,10 @@ inline void enc_list(std::string& out, const std::vector<T>& v, int depth,
 inline std::string encode_binary(const std::vector<std::uint8_t>&);
 inline std::vector<std::uint8_t> decode_binary(const std::string&);
 
-inline const std::vector<std::string> kOutcomeNames = {"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"};
+inline const std::vector<std::string> kOutcomeNames = {"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"};
 inline const std::string kOutcomeUnknown = "refuse";
 
-inline const std::vector<std::string> kCancellationOutcomeNames = {"requested", "already_terminal", "unknown", "forbidden", "unsupported"};
+inline const std::vector<std::string> kCancellationOutcomeNames = {"requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"};
 inline const std::string kCancellationOutcomeUnknown = "refuse";
 
 inline const std::vector<std::string> kWorkStateNames = {"pending", "running", "transferred", "complete", "failed", "cancelled"};
@@ -172,7 +172,10 @@ inline const std::string kWorkStateUnknown = "refuse";
 inline const std::vector<std::string> kFailureClassNames = {"retryable", "permanent", "unknown"};
 inline const std::string kFailureClassUnknown = "refuse";
 
-inline const std::vector<std::string> kObservationOutcomeNames = {"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"};
+inline const std::vector<std::string> kFailureCauseNames = {"other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"};
+inline const std::string kFailureCauseUnknown = "grant";
+
+inline const std::vector<std::string> kObservationOutcomeNames = {"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"};
 inline const std::string kObservationOutcomeUnknown = "refuse";
 
 inline const std::vector<std::string> kResultOutcomeNames = {"data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"};
@@ -183,11 +186,20 @@ inline const std::string kInventoryOutcomeUnknown = "refuse";
 
 inline const std::vector<std::string> kAdmissionGuarantees = {"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"};
 
+// Stable SDK key in an owner-issued history epoch. Scope is authenticated
+// caller plus this service contract, never a caller-provided principal. Persist
+// before send for restart recovery. Attempt is a nonnegative explicit retry
+// number for the same key and epoch; zero is the original request. Attempt N+1
+// is eligible only after attempt N failed terminally or was sealed (JOB-A7).
 struct RequestIdentity {
     std::string key;
     std::string history_epoch;
+    std::int64_t attempt = 0;
 };
 
+// Opaque kind-specific specification bytes, not a second tagged job Record.
+// Equality includes kind, exact spec bytes and the set of required guarantees.
+// Credentials are supplied at the authorized service boundary.
 struct Submission {
     RequestIdentity identity;
     std::string kind;
@@ -195,6 +207,9 @@ struct Submission {
     std::vector<std::string> required_guarantees;
 };
 
+// Recoverable acceptance evidence. Retention is a minimum duration from
+// original acceptance, never renewed by replay. Expiry does not end work,
+// transfer ownership or authorize duplicate execution. IDs confer no authority.
 struct Receipt {
     RequestIdentity identity;
     std::string logical_owner;
@@ -203,32 +218,60 @@ struct Receipt {
     std::int64_t history_retention_ms = 0;
 };
 
+// Accepted requires a receipt; other outcomes forbid one. Definite
+// nonacceptance requires authoritative sealed evidence preventing any delayed
+// acceptance of this identity. Absence, timeout, expired history and access
+// denial are insufficient. Unavailable means a required policy decision could
+// not be obtained: no admission effect and no seal were recorded, and the same
+// identity may be presented again (JOB-A9).
 struct AcceptanceResult {
     std::string outcome;
     std::optional<Receipt> receipt;
     std::string reason;
 };
 
+// Owner-issued acceptance epoch and minimum reconciliation retention. After
+// closing an epoch the owner fences all its submissions, including delayed
+// ones. This does not assert that old unknown work was never accepted. Result
+// retention is the provider's declared minimum time, in milliseconds after
+// completion, that complete result bytes stay readable; zero declares none
+// (JOB-A11).
 struct HistoryWindow {
     std::string logical_owner;
     std::string history_epoch;
     std::int64_t minimum_retention_ms = 0;
+    std::int64_t result_retention_ms = 0;
 };
 
+// Requested acknowledges cancellation intent, not stopped effects. Completion
+// may win the race; observe the existing operation for its terminal result.
+// Unavailable records no intent because a required policy decision could not be
+// obtained; the request may be repeated.
 struct CancellationResult {
     std::string outcome;
 };
 
+// Advisory nonnegative progress. Zero total means unknown. Progress does not
+// authorize delivery or imply completion.
 struct WorkProgress {
     std::int64_t done = 0;
     std::int64_t total = 0;
 };
 
+// Last-attempt failure. Unknown classification remains unknown; do not infer it
+// from message text. Retryable failure can coexist with pending work. Permanent
+// classification means the provider will not try this operation again and its
+// state is failed. Cause is the provider's typed reason when known; empty means
+// unreported, and an unrecognized cause is treated as other.
 struct WorkFailure {
     std::string classification;
     std::string message;
+    std::string cause;
 };
 
+// Receipt binds original request and logical owner. Cancellation requested is
+// intent, not stopped effects. Progress and last-attempt failure are advisory;
+// no provider paths are exposed.
 struct OperationSnapshot {
     Receipt receipt;
     std::string state;
@@ -237,11 +280,22 @@ struct OperationSnapshot {
     std::optional<WorkFailure> failure;
 };
 
+// Exactly observed carries a snapshot; all other outcomes forbid it. Absent
+// identities are unknown and observation never seals them. Definite
+// nonacceptance requires an existing authoritative seal. Already accepted
+// journals may be recovered. Unavailable means a required policy decision could
+// not be obtained and no state was read or changed (JOB-A9).
 struct ObservationResult {
     std::string outcome;
     std::optional<OperationSnapshot> snapshot;
 };
 
+// Complete immutable result bytes bound to the original receipt. Offset equals
+// requested nonnegative offset and is at most nonnegative total. Data length is
+// at most requested max_bytes and total-offset. EOF is true exactly when offset
+// plus data length equals total, including an empty complete result. Data is
+// nonempty unless offset equals total and EOF is true. Missing data and errors
+// never imply EOF.
 struct ResultChunk {
     Receipt receipt;
     std::int64_t offset = 0;
@@ -250,11 +304,22 @@ struct ResultChunk {
     bool eof = false;
 };
 
+// Exactly data carries a chunk; other outcomes forbid it. Only complete
+// immutable results produce data. Incomplete work is not_ready; missing
+// completed bytes are unavailable. Unsupported access, unknown identity,
+// forbidden access and invalid bounds remain distinct.
 struct ResultRead {
     std::string outcome;
     std::optional<ResultChunk> chunk;
 };
 
+// Caller-scoped accepted-operation observations without paths. Only page
+// carries snapshots. A noncomplete page always has a next cursor, even when no
+// own operations were scanned. Complete pages have empty next. Refusals carry
+// no snapshots, empty next and complete=false. Directory traversal is a weak
+// live view: concurrent insertions/removals can be omitted or repeated, not a
+// stable transaction snapshot. An unchanged tree is fully traversable. Large
+// failure diagnostics may be replaced by a bounded generic message.
 struct InventoryPage {
     std::string outcome;
     std::vector<OperationSnapshot> snapshots;
@@ -353,6 +418,14 @@ inline void enc_requestidentity(std::string& out, const RequestIdentity& v, int 
     esc(out, "history_epoch");
     out += ": ";
     esc(out, v.history_epoch);
+    if (v.attempt != 0) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "attempt");
+        out += ": ";
+        num(out, v.attempt);
+    }
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -425,7 +498,7 @@ inline void enc_receipt(std::string& out, const Receipt& v, int depth) {
 }
 
 inline void enc_acceptanceresult(std::string& out, const AcceptanceResult& v, int depth) {
-    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid") { throw Refusal("bad_enum",0); }
+    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -470,13 +543,21 @@ inline void enc_historywindow(std::string& out, const HistoryWindow& v, int dept
     esc(out, "minimum_retention_ms");
     out += ": ";
     num(out, v.minimum_retention_ms);
+    if (v.result_retention_ms != 0) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "result_retention_ms");
+        out += ": ";
+        num(out, v.result_retention_ms);
+    }
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
 inline void enc_cancellationresult(std::string& out, const CancellationResult& v, int depth) {
-    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported") { throw Refusal("bad_enum",0); }
+    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -520,6 +601,14 @@ inline void enc_workfailure(std::string& out, const WorkFailure& v, int depth) {
     esc(out, "message");
     out += ": ";
     esc(out, v.message);
+    if (!v.cause.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "cause");
+        out += ": ";
+        esc(out, v.cause);
+    }
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -565,7 +654,7 @@ inline void enc_operationsnapshot(std::string& out, const OperationSnapshot& v, 
 }
 
 inline void enc_observationresult(std::string& out, const ObservationResult& v, int depth) {
-    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted") { throw Refusal("bad_enum",0); }
+    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -1317,6 +1406,10 @@ inline RequestIdentity decode_requestidentity(Reader& r) {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
                 v.history_epoch = r.str();
+            } else if (key == "attempt") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.attempt = r.integer(INT64_MIN, INT64_MAX);
             } else {
                 r.refuse("unknown_field");
             }
@@ -1470,7 +1563,7 @@ inline AcceptanceResult decode_acceptanceresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 5u) != 5u) r.refuse("missing_field");
-    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid") { r.refuse("bad_enum"); }
+    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
     return v;
 }
 
@@ -1502,6 +1595,10 @@ inline HistoryWindow decode_historywindow(Reader& r) {
                 if (seen & 4u) r.refuse("duplicate_field");
                 seen |= 4u;
                 v.minimum_retention_ms = r.integer(INT64_MIN, INT64_MAX);
+            } else if (key == "result_retention_ms") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                v.result_retention_ms = r.integer(INT64_MIN, INT64_MAX);
             } else {
                 r.refuse("unknown_field");
             }
@@ -1549,7 +1646,7 @@ inline CancellationResult decode_cancellationresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
-    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported") { r.refuse("bad_enum"); }
+    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
     return v;
 }
 
@@ -1616,6 +1713,10 @@ inline WorkFailure decode_workfailure(Reader& r) {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
                 v.message = r.str();
+            } else if (key == "cause") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.cause = r.str();
             } else {
                 r.refuse("unknown_field");
             }
@@ -1720,7 +1821,7 @@ inline ObservationResult decode_observationresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
-    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted") { r.refuse("bad_enum"); }
+    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
     return v;
 }
 

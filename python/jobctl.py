@@ -40,7 +40,7 @@ def store_root():
     if value:
         return value, "JOB_STORE"
     try:
-        return abstraction_config.job_store()
+        return abstraction_config.legacy_job_store()
     except OSError as e:
         sys.exit("jobctl: %s\n  ABSTRACTION_STORE=…   names one" % e)
 

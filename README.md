@@ -7,6 +7,55 @@ through [the facade](https://github.com/openabstractions/abstraction-facade).
 The service owns execution and shared stores. Preserve caller request identity
 and binding for recovery; waiting cancellation leaves accepted work alone.
 
+The [acceptance rules](CONTRACT.md) define retries, failures and recovery. The
+contract declares each rule; this page names them without restating them:
+
+- **Retry** by submitting the next numbered attempt of the same key (contract
+  rule JOB-A7). Attempt N+1 is accepted only after attempt N `failed` or was
+  sealed as not accepted, and it must carry the same arguments.
+- **Failures** carry a classification and a typed cause (JOB-A8). `permanent`
+  means the provider will not try that operation again. Treat an unrecognized
+  cause as `other`.
+- **`unavailable`** reports a policy decision the provider could not obtain
+  (JOB-A9). The call made no admission, seal or cancellation, and the same
+  identity may be presented again.
+- **`result_lost`** is the permanent cause recorded when a completed operation's
+  result bytes are gone (JOB-A10). It makes the next attempt eligible.
+- **Restore** a saved binding after a restart with Go `Machine.RestoreJobs`,
+  Python `Jobs.restore_installed` or `Jobs.restore`. Restoration authenticates the
+  saved endpoint and refuses a different logical owner.
+
+```go
+// Retry a failed operation as the next attempt of the same request.
+observed, err := jobs.ObserveWork(ctx, id)
+if err == nil && observed.Outcome == acceptance.ObservationOutcomeObserved &&
+	observed.Snapshot.State == acceptance.WorkStateFailed {
+	next := id
+	next.Attempt++
+	result, err := jobs.Submit(ctx, acceptance.Submission{Identity: next, Kind: kind, Spec: spec})
+	if err == nil && result.Outcome == acceptance.OutcomeUnavailable {
+		// No decision was reached; present the same attempt again later.
+	}
+}
+
+// Before submitting, persist the binding with the request identity.
+saved := jobs.Binding()
+// After a restart, rebind and reconcile the same identity.
+restored, err := facade.Discover().RestoreJobs(ctx, saved)
+if err != nil {
+	return err
+}
+reply, err := restored.Reconcile(ctx, id)
+if err != nil {
+	return err
+}
+fmt.Println(reply.Outcome)
+```
+
+Request identities are scoped to the calling account and program. The
+[Python job client](py/README.md) documents that scope and the retained
+recovery information.
+
 The file-store examples below are explicitly selected native provider APIs with
 separate lifecycle guarantees. Their historical conformance describes that
 provider profile. It does not qualify current service packages or every platform.
@@ -187,9 +236,8 @@ files:
 That is this layer's own test, so running it is how you check that your compiler
 agrees with ours. Measured 2026-09-09 with g++ 15.2 and with MSVC 19.51, which
 takes the same file list under `/std:c++17` and `/I`. Replace the test with your
-own translation unit to get a program. `cpp/src/discovery.cpp` and
-`cpp/src/discovery_client.cpp` are outside that list; they are needed only to
-talk to a running `jobd`.
+own translation unit to get a program. `cpp/src/discovery.cpp` is outside that
+list; it is needed only to talk to a running `jobd`.
 
 The timestamps a C++ record may carry are limited by the build's
 `std::chrono::system_clock` — 1677 to 2262 on libstdc++, wider on MSVC — and an
@@ -251,3 +299,19 @@ dispatcher. Supply an authorizer that maps proven peer evidence to an authorized
 restart-stable scope; nil/error authorization refuses without mutation. The host
 retains listener and activation ownership. Configure shared clients with
 `MaxFrameBytes` (2 MiB), which includes base64 expansion of the specification.
+
+### Converting legacy job records
+
+`openabstractions jobs migrate-legacy` converts legacy records in the managed
+runtime job root into service-owned records. Run it with no arguments for its
+help, the mapping file format and exit codes.
+
+    openabstractions jobs migrate-legacy inspect --template > mapping.json
+    # fill in caller and request_key for every record
+    openabstractions jobs migrate-legacy apply --mapping mapping.json
+
+Every record must be terminal, mapped and unchanged since inspection, or nothing
+is written. The command refuses while a runtime job host runs on that root.
+Drain active legacy work through jobd first. `inspect` also reports jobd's
+separate store; those records stay with jobd and are finished through it.
+`abandon` withdraws an interrupted apply.

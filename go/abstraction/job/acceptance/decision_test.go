@@ -67,6 +67,74 @@ func TestLostReplyThroughGeneratedService(t *testing.T) {
 	}
 }
 
+func TestAttemptCorpus(t *testing.T) {
+	data, err := os.ReadFile("../../../../testdata/attempts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name, Previous, State, Changed, Want string
+		LatestAccepted                       string `json:"latest_accepted"`
+		Attempt                              int64
+		Submit                               bool
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("empty attempt corpus")
+	}
+	for _, c := range cases {
+		t.Run(c.Name, func(t *testing.T) {
+			id := RequestIdentity{Key: "stable-key", HistoryEpoch: "owner-epoch-1", Attempt: c.Attempt}
+			earlier := Submission{Identity: RequestIdentity{Key: "stable-key", HistoryEpoch: "owner-epoch-1"}, Kind: "download", Spec: []byte(`{"source":"artifact"}`), RequiredGuarantees: []string{"caller-exit@1", "reconcile@1"}}
+			e := AttemptEvidence{Previous: c.Previous, State: c.State}
+			if c.Previous == "accepted" || c.LatestAccepted != "" {
+				e.LatestAccepted = &earlier
+			}
+			submission := earlier
+			submission.Identity = id
+			switch c.Changed {
+			case "spec":
+				submission.Spec = []byte(`{"source":"other"}`)
+			case "kind":
+				submission.Kind = "other"
+			case "guarantees":
+				submission.RequiredGuarantees = []string{"reconcile@1"}
+			case "evidence":
+				e.LatestAccepted = nil
+			}
+			var submitted *Submission
+			if c.Submit {
+				submitted = &submission
+			}
+			got := AttemptEligibility(id, submitted, e)
+			want := c.Want
+			if want == "eligible" {
+				want = ""
+			}
+			if got.Outcome != want || got.Receipt != nil {
+				t.Fatalf("got %+v; want %s", got, c.Want)
+			}
+			if got.Outcome != "" && c.Attempt >= 0 {
+				if err := ValidateResult(got, id, "owner-1"); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	// A retried identity is distinct from its earlier attempt in receipts.
+	first := RequestIdentity{Key: "k", HistoryEpoch: "e"}
+	retry := RequestIdentity{Key: "k", HistoryEpoch: "e", Attempt: 1}
+	receipt := AcceptanceResult{Outcome: "accepted", Receipt: &Receipt{Identity: first, LogicalOwner: "o", OperationId: "op", HistoryRetentionMs: 1}}
+	if ValidateResult(receipt, retry, "o") == nil {
+		t.Fatal("earlier attempt receipt validated for a retry")
+	}
+	if ValidateSubmission(Submission{Identity: RequestIdentity{Key: "k", HistoryEpoch: "e", Attempt: -1}, Kind: "download"}) == nil {
+		t.Fatal("negative attempt accepted")
+	}
+}
+
 func TestAcceptanceCorpus(t *testing.T) {
 	data, err := os.ReadFile("../../../../testdata/acceptance.json")
 	if err != nil {
@@ -76,6 +144,7 @@ func TestAcceptanceCorpus(t *testing.T) {
 		Name, Want, Changed                                       string
 		History, Expired, Receipt, Sealed, Submit, Reorder, Fresh bool
 		CancelWait                                                bool `json:"cancel_wait"`
+		DecisionUnavailable                                       bool `json:"decision_unavailable"`
 	}
 	if err := json.Unmarshal(data, &cases); err != nil {
 		t.Fatal(err)
@@ -84,7 +153,7 @@ func TestAcceptanceCorpus(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			id := RequestIdentity{Key: "stable-key", HistoryEpoch: "owner-epoch-1"}
 			args := Submission{Identity: id, Kind: "download", Spec: []byte(`{"source":"artifact"}`), RequiredGuarantees: []string{"caller-exit@1", "reconcile@1"}}
-			e := Evidence{CallerScope: "authenticated-alice", Identity: id, Arguments: &args, HistoryAvailable: c.History, HistoryExpired: c.Expired, SealedNonAcceptance: c.Sealed}
+			e := Evidence{CallerScope: "authenticated-alice", Identity: id, Arguments: &args, HistoryAvailable: c.History, HistoryExpired: c.Expired, SealedNonAcceptance: c.Sealed, DecisionUnavailable: c.DecisionUnavailable}
 			if c.Receipt {
 				e.Receipt = &Receipt{Identity: id, LogicalOwner: "owner-1", OperationId: "operation-1", AcceptedGuarantees: []string{"caller-exit@1", "reconcile@1"}, HistoryRetentionMs: 60000}
 			}

@@ -24,10 +24,6 @@
 namespace abstraction {
 namespace job {
 
-// kRegistryFileName is the discovery registry, which sits at the root beside
-// jobs/ and work/ rather than inside either. See discovery_client.cpp.
-inline const char* registry_file_name() { return "services.json"; }
-
 // One segment in the spelling a filesystem would give it.
 //
 // Windows drops a trailing dot or space from a name, so `jobs.` opens `jobs`.
@@ -116,7 +112,7 @@ inline bool reserved(const std::string& owner, const std::string& rel) {
     if (segs[0] == "work") {
         return segs.size() < 2 || segs[1] != fold_segment(owner);
     }
-    return segs[0] == registry_file_name() && segs.size() == 1;
+    return false;
 }
 
 // The name rel takes in the store root, or "" if it names something deeper,

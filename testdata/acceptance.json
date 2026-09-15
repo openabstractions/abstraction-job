@@ -16,5 +16,9 @@
   {"name":"other-caller-cannot-look-up-key","history":true,"receipt":true,"changed":"caller","want":"forbidden"},
   {"name":"owner-mismatch","history":true,"receipt":true,"changed":"owner","want":"unknown"},
   {"name":"cancel-wait-after-acceptance","history":true,"receipt":true,"cancel_wait":true,"want":"accepted"},
-  {"name":"contradictory-acceptance-and-seal","history":true,"receipt":true,"sealed":true,"want":"unknown"}
+  {"name":"contradictory-acceptance-and-seal","history":true,"receipt":true,"sealed":true,"want":"unknown"},
+  {"name":"policy-decision-unavailable-submit","history":true,"submit":true,"decision_unavailable":true,"want":"unavailable"},
+  {"name":"policy-decision-unavailable-before-receipt-lookup","history":true,"receipt":true,"decision_unavailable":true,"want":"unavailable"},
+  {"name":"policy-decision-unavailable-does-not-seal","history":true,"sealed":false,"decision_unavailable":true,"want":"unavailable"},
+  {"name":"policy-decision-unavailable-other-caller-still-forbidden","history":true,"receipt":true,"changed":"caller","decision_unavailable":true,"want":"forbidden"}
 ]

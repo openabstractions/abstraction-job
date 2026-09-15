@@ -664,14 +664,12 @@ class LayoutTest(unittest.TestCase):
             "work",
             "work/" + other,
             "work/%s/part" % other,
-            "services.json",
             # The spellings a filesystem folds into the ones above.
             "Jobs/x.json",
             "JOBS/x.json",
             "jobs\\x.json",
             "jobs./x.json",
             "WORK/" + other,
-            "Services.json",
             "models/../jobs/x.json",
             "./jobs/x.json",
         ):
@@ -686,8 +684,8 @@ class LayoutTest(unittest.TestCase):
             "jobsy/x.json",
             "myjobs/x.json",
             "a/jobs/x.json",
-            "a/services.json",
-            "services.json.bak",
+            # the removed discovery registry's name is free
+            "services.json",
             "jobs/../models/x.gguf",
             # download's, not this layer's -- see download.reserved_sink.
             "supervisor.json",

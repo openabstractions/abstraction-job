@@ -1,6 +1,17 @@
 {
   "name": "@openabstractions/job-acceptance",
   "version": "0.0.0",
+  "description": "Generated JavaScript clients and codecs for recoverable job acceptance, operation control and job inventory.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openabstractions/abstraction-job.git",
+    "directory": "javascript"
+  },
+  "homepage": "https://github.com/openabstractions/abstraction-job#readme",
+  "bugs": {
+    "url": "https://github.com/openabstractions/abstraction-job/issues"
+  },
   "type": "module",
   "exports": "./js/abstraction/job/acceptance/rec.mjs",
   "files": [

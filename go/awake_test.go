@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -55,69 +57,56 @@ func TestKeepAwakeSaysWhyItHeldNothing(t *testing.T) {
 	}
 }
 
-func TestHoldFollowsLease(t *testing.T) {
-	needsAnInhibitor(t)
-	if inhibited() {
-		t.Skip("something else already holds the machine awake; the observer cannot tell ours apart")
-	}
-	s := NewMemoryStore()
+// lockHolder holds by locking a file. The kernel ends that lock with the
+// process that took it, as it ends the platform's power request, and a parent
+// can watch this one lock where the platform inhibitor is machine-wide and
+// shared with every other program keeping the machine awake.
+type lockHolder struct{ path string }
 
-	r := claimed(t, s, time.Minute)
-	h := KeepAwake(s, r)
-	if !h.Held() || !inhibited() {
-		t.Fatal("claimed and running: not held")
-	}
-	h.Release()
-	if h.Held() || inhibited() {
-		t.Fatal("released by the holder: still held")
-	}
+type lockHeld struct{ f *os.File }
 
-	r = claimed(t, s, time.Minute)
-	h = KeepAwake(s, r)
-	s.Release(r.ID, r.Lease.Epoch)
-	if !settles(h) {
-		t.Fatal("lease released in the store: still held")
+func (l lockHolder) Hold(who, why string) (Held, error) {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
 	}
-
-	r = claimed(t, s, time.Minute)
-	h = KeepAwake(s, r)
-	s.Update(r.ID, r.Lease.Epoch, func(rr *Record) error { rr.State = StateFailed; return nil })
-	if !settles(h) {
-		t.Fatal("job terminal: still held")
+	got, err := holdLock(f)
+	if !got {
+		f.Close()
+		return nil, errors.Join(errors.New("hold lock already taken"), err)
 	}
-
-	r = claimed(t, s, 300*time.Millisecond)
-	h = KeepAwake(s, r)
-	if !settles(h) {
-		t.Fatal("lease lapsed: still held")
-	}
-
-	r = claimed(t, s, time.Minute)
-	s.Release(r.ID, r.Lease.Epoch)
-	r, _ = s.Load(r.ID)
-	if h = KeepAwake(s, r); h.Held() {
-		t.Fatal("no live lease: held")
-	}
-	if inhibited() {
-		t.Fatal("a hold outlived its test")
-	}
+	return lockHeld{f}, nil
 }
 
-func settles(h *Hold) bool {
-	deadline := time.Now().Add(5 * time.Second)
-	for h.Held() && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
+func (lockHeld) Done() <-chan struct{} { return nil }
+
+func (h lockHeld) Release() error { return errors.Join(holdUnlock(h.f), h.f.Close()) }
+
+// lockFree takes the lock at path and lets go, and reports whether it could. A
+// lock nobody ever created is free.
+func lockFree(t *testing.T, path string) bool {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return !h.Held() && !inhibited()
+	defer f.Close()
+	got, err := holdLock(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		if err := holdUnlock(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return got
 }
 
 func TestHoldDiesWithHolder(t *testing.T) {
-	needsAnInhibitor(t)
-	if inhibited() {
-		t.Skip("something else already holds the machine awake; the observer cannot tell ours apart")
-	}
-	child := exec.Command(os.Args[0], "-test.run=TestHoldHelper")
-	child.Env = append(os.Environ(), "JOB_HOLD_HELPER=1")
+	path := filepath.Join(t.TempDir(), "hold.lock")
+	child := exec.Command(os.Args[0], "-test.run=^TestHoldHelper$")
+	child.Env = append(os.Environ(), "JOB_HOLD_HELPER="+path)
 	out, err := child.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -125,27 +114,49 @@ func TestHoldDiesWithHolder(t *testing.T) {
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "held\n" {
-		child.Process.Kill()
-		t.Fatalf("helper said %q", line)
+	waited := false
+	defer func() {
+		if !waited {
+			child.Process.Kill()
+			child.Wait()
+		}
+	}()
+	said := make(chan string, 1)
+	go func() { line, _ := bufio.NewReader(out).ReadString('\n'); said <- line }()
+	select {
+	case line := <-said:
+		if line != "held\n" {
+			t.Fatalf("helper said %q", line)
+		}
+	case <-time.After(leaseEvent):
+		t.Fatal("helper never reported its hold")
 	}
-	if !inhibited() {
-		child.Process.Kill()
-		t.Fatal("helper holds, machine not inhibited")
+	if lockFree(t, path) {
+		t.Fatal("helper reports a hold, its lock is free")
 	}
-	child.Process.Kill()
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
 	child.Wait()
-	if inhibited() {
-		t.Fatal("holder killed: still inhibited")
+	waited = true
+	for deadline := time.Now().Add(leaseEvent); !lockFree(t, path); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("holder killed: its hold outlived it")
+		}
 	}
 }
 
 func TestHoldHelper(t *testing.T) {
-	if os.Getenv("JOB_HOLD_HELPER") == "" {
+	path := os.Getenv("JOB_HOLD_HELPER")
+	if path == "" {
 		t.Skip()
 	}
 	s := NewMemoryStore()
-	KeepAwake(s, claimed(t, s, time.Hour))
+	h := KeepAwakeVia(lockHolder{path}, s, claimed(t, s, time.Hour))
+	if !h.Held() {
+		fmt.Printf("not held: %v\n", h.Why())
+		os.Exit(1)
+	}
 	os.Stdout.WriteString("held\n")
 	select {}
 }

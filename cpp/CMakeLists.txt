@@ -76,8 +76,8 @@ abstraction_need(cas)
 abstraction_need(watch)
 
 # The document format the record is written in. Its own target rather than a
-# source file inside abstraction_job, because abstraction_discovery in the
-# download layer must not link abstraction_job and both need to read JSON.
+# source file inside abstraction_job, because layers that must not link
+# abstraction_job also need to read JSON.
 add_library(abstraction_json STATIC src/json.cpp)
 target_include_directories(abstraction_json PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

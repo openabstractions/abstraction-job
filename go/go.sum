@@ -1,8 +1,8 @@
-github.com/openabstractions/abstraction-cas/go v0.3.1-0.20260913090841-c64b42cc8460 h1:SBxt9Plm32SODCadmcy6HbCvOFcczkrJUC3nyrXaRl4=
-github.com/openabstractions/abstraction-cas/go v0.3.1-0.20260913090841-c64b42cc8460/go.mod h1:pR8sRTbXF3k7fiXNjNiBqqc7i0Wu9RQvctH3q/wKUYo=
-github.com/openabstractions/abstraction-identity v0.2.1-0.20260913090829-6916ad75b439 h1:9PqB++JMmCtBi5B02yJzvei4lTMbmYPp11/nn7AJMD0=
-github.com/openabstractions/abstraction-identity v0.2.1-0.20260913090829-6916ad75b439/go.mod h1:gv5sDQuTQqv/UY+fXY5Q74i1junNIEvf/5UsZxMxwKY=
-github.com/openabstractions/abstraction-watch/go v0.2.1-0.20260913090853-0286faef3daa h1:FemEqfj7jHfNSHYrS5OPE38tFt0qmW2JLLYgZe9eh20=
-github.com/openabstractions/abstraction-watch/go v0.2.1-0.20260913090853-0286faef3daa/go.mod h1:kufwl+bMSixuEwA5r1rftuCLm+JTrXr1NiJ2d0VI9K8=
+github.com/openabstractions/abstraction-cas/go v0.3.1 h1:l6eA7Yu+xOQZciv9sh5t+aGT2d/GmTGy+qMSgto6+98=
+github.com/openabstractions/abstraction-cas/go v0.3.1/go.mod h1:pR8sRTbXF3k7fiXNjNiBqqc7i0Wu9RQvctH3q/wKUYo=
+github.com/openabstractions/abstraction-identity v0.2.2 h1:x8mcco2z0ca//vmsNxFEl+p4UQBWYLVb2GSJsBsg82M=
+github.com/openabstractions/abstraction-identity v0.2.2/go.mod h1:gv5sDQuTQqv/UY+fXY5Q74i1junNIEvf/5UsZxMxwKY=
+github.com/openabstractions/abstraction-watch/go v0.2.1 h1:4rU/jml3flCyh3FrDycgcwWi4/zE0qx4WURdmSUYcBA=
+github.com/openabstractions/abstraction-watch/go v0.2.1/go.mod h1:kufwl+bMSixuEwA5r1rftuCLm+JTrXr1NiJ2d0VI9K8=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

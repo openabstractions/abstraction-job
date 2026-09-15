@@ -205,7 +205,7 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 			if record.ID != j.Receipt.OperationId {
 				return fail()
 			}
-			snapshot = operationSnapshot(j.Receipt, record, p.executor)
+			snapshot = operationSnapshot(j.Receipt, record, p.executor, j.ResultLost)
 			if snapshot.Failure != nil && len(snapshot.Failure.Message) > 4096 {
 				failure := *snapshot.Failure
 				failure.Message = "operation failure diagnostic exceeds inventory limit"

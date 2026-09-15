@@ -204,7 +204,7 @@ func encList[T any](out []byte, v []T, depth int, enc func([]byte, *T, int) []by
 	return append(out, ']')
 }
 
-var OutcomeNames = []string{"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"}
+var OutcomeNames = []string{"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"}
 
 const OutcomeAccepted = "accepted"
 
@@ -218,9 +218,11 @@ const OutcomeForbidden = "forbidden"
 
 const OutcomeInvalid = "invalid"
 
+const OutcomeUnavailable = "unavailable"
+
 const OutcomeUnknownPolicy = "refuse"
 
-var CancellationOutcomeNames = []string{"requested", "already_terminal", "unknown", "forbidden", "unsupported"}
+var CancellationOutcomeNames = []string{"requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"}
 
 const CancellationOutcomeRequested = "requested"
 
@@ -231,6 +233,8 @@ const CancellationOutcomeUnknown = "unknown"
 const CancellationOutcomeForbidden = "forbidden"
 
 const CancellationOutcomeUnsupported = "unsupported"
+
+const CancellationOutcomeUnavailable = "unavailable"
 
 const CancellationOutcomeUnknownPolicy = "refuse"
 
@@ -260,7 +264,31 @@ const FailureClassUnknown = "unknown"
 
 const FailureClassUnknownPolicy = "refuse"
 
-var ObservationOutcomeNames = []string{"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"}
+var FailureCauseNames = []string{"other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"}
+
+const FailureCauseOther = "other"
+
+const FailureCauseDigestMismatch = "digest_mismatch"
+
+const FailureCauseOversize = "oversize"
+
+const FailureCauseShortTransfer = "short_transfer"
+
+const FailureCauseUnauthorized = "unauthorized"
+
+const FailureCauseNotFound = "not_found"
+
+const FailureCauseRefused = "refused"
+
+const FailureCauseServerError = "server_error"
+
+const FailureCauseTransport = "transport"
+
+const FailureCauseResultLost = "result_lost"
+
+const FailureCauseUnknown = "grant"
+
+var ObservationOutcomeNames = []string{"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"}
 
 const ObservationOutcomeObserved = "observed"
 
@@ -271,6 +299,8 @@ const ObservationOutcomeForbidden = "forbidden"
 const ObservationOutcomeInvalid = "invalid"
 
 const ObservationOutcomeDefinitelyNotAccepted = "definitely_not_accepted"
+
+const ObservationOutcomeUnavailable = "unavailable"
 
 const ObservationOutcomeUnknownPolicy = "refuse"
 
@@ -308,11 +338,20 @@ const InventoryOutcomeUnknown = "refuse"
 
 var AdmissionGuarantees = []string{"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"}
 
+// Stable SDK key in an owner-issued history epoch. Scope is authenticated
+// caller plus this service contract, never a caller-provided principal. Persist
+// before send for restart recovery. Attempt is a nonnegative explicit retry
+// number for the same key and epoch; zero is the original request. Attempt N+1
+// is eligible only after attempt N failed terminally or was sealed (JOB-A7).
 type RequestIdentity struct {
 	Key          string
 	HistoryEpoch string
+	Attempt      int64
 }
 
+// Opaque kind-specific specification bytes, not a second tagged job Record.
+// Equality includes kind, exact spec bytes and the set of required guarantees.
+// Credentials are supplied at the authorized service boundary.
 type Submission struct {
 	Identity           RequestIdentity
 	Kind               string
@@ -320,6 +359,9 @@ type Submission struct {
 	RequiredGuarantees []string
 }
 
+// Recoverable acceptance evidence. Retention is a minimum duration from
+// original acceptance, never renewed by replay. Expiry does not end work,
+// transfer ownership or authorize duplicate execution. IDs confer no authority.
 type Receipt struct {
 	Identity           RequestIdentity
 	LogicalOwner       string
@@ -328,32 +370,60 @@ type Receipt struct {
 	HistoryRetentionMs int64
 }
 
+// Accepted requires a receipt; other outcomes forbid one. Definite
+// nonacceptance requires authoritative sealed evidence preventing any delayed
+// acceptance of this identity. Absence, timeout, expired history and access
+// denial are insufficient. Unavailable means a required policy decision could
+// not be obtained: no admission effect and no seal were recorded, and the same
+// identity may be presented again (JOB-A9).
 type AcceptanceResult struct {
 	Outcome string
 	Receipt *Receipt
 	Reason  string
 }
 
+// Owner-issued acceptance epoch and minimum reconciliation retention. After
+// closing an epoch the owner fences all its submissions, including delayed
+// ones. This does not assert that old unknown work was never accepted. Result
+// retention is the provider's declared minimum time, in milliseconds after
+// completion, that complete result bytes stay readable; zero declares none
+// (JOB-A11).
 type HistoryWindow struct {
 	LogicalOwner       string
 	HistoryEpoch       string
 	MinimumRetentionMs int64
+	ResultRetentionMs  int64
 }
 
+// Requested acknowledges cancellation intent, not stopped effects. Completion
+// may win the race; observe the existing operation for its terminal result.
+// Unavailable records no intent because a required policy decision could not be
+// obtained; the request may be repeated.
 type CancellationResult struct {
 	Outcome string
 }
 
+// Advisory nonnegative progress. Zero total means unknown. Progress does not
+// authorize delivery or imply completion.
 type WorkProgress struct {
 	Done  int64
 	Total int64
 }
 
+// Last-attempt failure. Unknown classification remains unknown; do not infer it
+// from message text. Retryable failure can coexist with pending work. Permanent
+// classification means the provider will not try this operation again and its
+// state is failed. Cause is the provider's typed reason when known; empty means
+// unreported, and an unrecognized cause is treated as other.
 type WorkFailure struct {
 	Classification string
 	Message        string
+	Cause          string
 }
 
+// Receipt binds original request and logical owner. Cancellation requested is
+// intent, not stopped effects. Progress and last-attempt failure are advisory;
+// no provider paths are exposed.
 type OperationSnapshot struct {
 	Receipt               Receipt
 	State                 string
@@ -362,11 +432,22 @@ type OperationSnapshot struct {
 	Failure               *WorkFailure
 }
 
+// Exactly observed carries a snapshot; all other outcomes forbid it. Absent
+// identities are unknown and observation never seals them. Definite
+// nonacceptance requires an existing authoritative seal. Already accepted
+// journals may be recovered. Unavailable means a required policy decision could
+// not be obtained and no state was read or changed (JOB-A9).
 type ObservationResult struct {
 	Outcome  string
 	Snapshot *OperationSnapshot
 }
 
+// Complete immutable result bytes bound to the original receipt. Offset equals
+// requested nonnegative offset and is at most nonnegative total. Data length is
+// at most requested max_bytes and total-offset. EOF is true exactly when offset
+// plus data length equals total, including an empty complete result. Data is
+// nonempty unless offset equals total and EOF is true. Missing data and errors
+// never imply EOF.
 type ResultChunk struct {
 	Receipt Receipt
 	Offset  int64
@@ -375,11 +456,22 @@ type ResultChunk struct {
 	Eof     bool
 }
 
+// Exactly data carries a chunk; other outcomes forbid it. Only complete
+// immutable results produce data. Incomplete work is not_ready; missing
+// completed bytes are unavailable. Unsupported access, unknown identity,
+// forbidden access and invalid bounds remain distinct.
 type ResultRead struct {
 	Outcome string
 	Chunk   *ResultChunk
 }
 
+// Caller-scoped accepted-operation observations without paths. Only page
+// carries snapshots. A noncomplete page always has a next cursor, even when no
+// own operations were scanned. Complete pages have empty next. Refusals carry
+// no snapshots, empty next and complete=false. Directory traversal is a weak
+// live view: concurrent insertions/removals can be omitted or repeated, not a
+// stable transaction snapshot. An unchanged tree is fully traversable. Large
+// failure diagnostics may be replaced by a bounded generic message.
 type InventoryPage struct {
 	Outcome   string
 	Snapshots []OperationSnapshot
@@ -478,6 +570,14 @@ func encRequestIdentity(out []byte, v *RequestIdentity, depth int) []byte {
 	out = esc(out, "history_epoch")
 	out = append(out, ':', ' ')
 	out = esc(out, v.HistoryEpoch)
+	if v.Attempt != 0 {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "attempt")
+		out = append(out, ':', ' ')
+		out = num(out, v.Attempt)
+	}
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -550,7 +650,7 @@ func encReceipt(out []byte, v *Receipt, depth int) []byte {
 }
 
 func encAcceptanceResult(out []byte, v *AcceptanceResult, depth int) []byte {
-	if v.Outcome != "accepted" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unknown" && v.Outcome != "key_conflict" && v.Outcome != "forbidden" && v.Outcome != "invalid" {
+	if v.Outcome != "accepted" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unknown" && v.Outcome != "key_conflict" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "unavailable" {
 		panic(&Refusal{Word: "bad_enum", Offset: 0})
 	}
 	out = append(out, '{')
@@ -597,13 +697,21 @@ func encHistoryWindow(out []byte, v *HistoryWindow, depth int) []byte {
 	out = esc(out, "minimum_retention_ms")
 	out = append(out, ':', ' ')
 	out = num(out, v.MinimumRetentionMs)
+	if v.ResultRetentionMs != 0 {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "result_retention_ms")
+		out = append(out, ':', ' ')
+		out = num(out, v.ResultRetentionMs)
+	}
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
 }
 
 func encCancellationResult(out []byte, v *CancellationResult, depth int) []byte {
-	if v.Outcome != "requested" && v.Outcome != "already_terminal" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "unsupported" {
+	if v.Outcome != "requested" && v.Outcome != "already_terminal" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "unsupported" && v.Outcome != "unavailable" {
 		panic(&Refusal{Word: "bad_enum", Offset: 0})
 	}
 	out = append(out, '{')
@@ -651,6 +759,14 @@ func encWorkFailure(out []byte, v *WorkFailure, depth int) []byte {
 	out = esc(out, "message")
 	out = append(out, ':', ' ')
 	out = esc(out, v.Message)
+	if v.Cause != "" {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "cause")
+		out = append(out, ':', ' ')
+		out = esc(out, v.Cause)
+	}
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -702,7 +818,7 @@ func encOperationSnapshot(out []byte, v *OperationSnapshot, depth int) []byte {
 }
 
 func encObservationResult(out []byte, v *ObservationResult, depth int) []byte {
-	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" {
+	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unavailable" {
 		panic(&Refusal{Word: "bad_enum", Offset: 0})
 	}
 	out = append(out, '{')
@@ -1655,6 +1771,16 @@ func (r *reader) decodeRequestIdentity() (*RequestIdentity, error) {
 					return nil, err
 				}
 				v.HistoryEpoch = x
+			case "attempt":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Attempt = x
 			default:
 				return nil, r.refuse("unknown_field")
 			}
@@ -1940,7 +2066,7 @@ func (r *reader) decodeAcceptanceResult() (*AcceptanceResult, error) {
 	if seen&5 != 5 {
 		return nil, r.refuse("missing_field")
 	}
-	if v.Outcome != "accepted" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unknown" && v.Outcome != "key_conflict" && v.Outcome != "forbidden" && v.Outcome != "invalid" {
+	if v.Outcome != "accepted" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unknown" && v.Outcome != "key_conflict" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "unavailable" {
 		return nil, r.refuse("bad_enum")
 	}
 	return v, nil
@@ -2004,6 +2130,16 @@ func (r *reader) decodeHistoryWindow() (*HistoryWindow, error) {
 					return nil, err
 				}
 				v.MinimumRetentionMs = x
+			case "result_retention_ms":
+				if seen&8 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 8
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.ResultRetentionMs = x
 			default:
 				return nil, r.refuse("unknown_field")
 			}
@@ -2081,7 +2217,7 @@ func (r *reader) decodeCancellationResult() (*CancellationResult, error) {
 	if seen&1 != 1 {
 		return nil, r.refuse("missing_field")
 	}
-	if v.Outcome != "requested" && v.Outcome != "already_terminal" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "unsupported" {
+	if v.Outcome != "requested" && v.Outcome != "already_terminal" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "unsupported" && v.Outcome != "unavailable" {
 		return nil, r.refuse("bad_enum")
 	}
 	return v, nil
@@ -2204,6 +2340,16 @@ func (r *reader) decodeWorkFailure() (*WorkFailure, error) {
 					return nil, err
 				}
 				v.Message = x
+			case "cause":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Cause = x
 			default:
 				return nil, r.refuse("unknown_field")
 			}
@@ -2396,7 +2542,7 @@ func (r *reader) decodeObservationResult() (*ObservationResult, error) {
 	if seen&1 != 1 {
 		return nil, r.refuse("missing_field")
 	}
-	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" {
+	if v.Outcome != "observed" && v.Outcome != "unknown" && v.Outcome != "forbidden" && v.Outcome != "invalid" && v.Outcome != "definitely_not_accepted" && v.Outcome != "unavailable" {
 		return nil, r.refuse("bad_enum")
 	}
 	return v, nil
@@ -2689,17 +2835,8 @@ func (r *reader) decodeOARecoverableAcceptanceGetHistoryWindowArguments() (*OARe
 			if r.at() != ':' {
 				return nil, r.refuse("malformed")
 			}
-			r.pos++
-			r.ws()
-			switch key {
-			default:
-				return nil, r.refuse("unknown_field")
-			}
-			r.ws()
-			if r.at() != ',' {
-				break
-			}
-			r.pos++
+			_ = key
+			return nil, r.refuse("unknown_field")
 		}
 	}
 	if r.at() != '}' {

@@ -1,6 +1,7 @@
 package acceptanceprovider
 
 import (
+	"encoding/json"
 	"errors"
 	cas "github.com/openabstractions/abstraction-cas/go"
 	"os"
@@ -19,6 +20,23 @@ var ErrResultRange = errors.New("operation result: invalid range")
 // The provider authorizes the request before calling it and adds its receipt.
 type ResultReader interface {
 	ReadOperationResult(root string, record *job.Record, offset, maxBytes int64) ([]byte, int64, error)
+}
+
+// ResultRetainer declares how long complete result bytes stay readable after
+// completion [JOB-A11]. A provider without it declares no retention.
+type ResultRetainer interface {
+	ResultRetentionMs() int64
+}
+
+// resultRetention is the declared retention, zero when none is declared.
+func (p *Provider) resultRetention() int64 {
+	if _, reads := p.executor.(ResultReader); !reads {
+		return 0
+	}
+	if r, ok := p.executor.(ResultRetainer); ok && r.ResultRetentionMs() > 0 {
+		return r.ResultRetentionMs()
+	}
+	return 0
 }
 
 // FailureReporter translates provider failure evidence into public vocabulary.
@@ -78,13 +96,52 @@ func (b *bound) ObserveWork(id api.RequestIdentity) (api.ObservationResult, erro
 	if outcome != "observed" {
 		return api.ObservationResult{Outcome: outcome}, nil
 	}
-	return api.ObservationResult{Outcome: "observed", Snapshot: operationSnapshot(receipt, record, b.provider.executor)}, nil
+	return api.ObservationResult{Outcome: "observed", Snapshot: operationSnapshot(receipt, record, b.provider.executor, b.provider.resultLost(b.scope, id))}, nil
 }
 
-func operationSnapshot(receipt *api.Receipt, record *job.Record, executor Executor) *api.OperationSnapshot {
+// ErrResultLost is returned by a ResultReader when a complete operation's
+// result bytes no longer exist [JOB-A10]. Any other reader error is transient.
+var ErrResultLost = errors.New("acceptance: operation result lost")
+
+// resultLost reports a recorded JOB-A10 loss. The flag is irreversible, so a
+// read outside the journal lock is current enough.
+func (p *Provider) resultLost(scope string, id api.RequestIdentity) bool {
+	j, _, err := p.readJournal(scope, id)
+	return err == nil && j != nil && j.ResultLost
+}
+
+// recordResultLost durably marks a published operation's result as lost.
+func (p *Provider) recordResultLost(scope string, id api.RequestIdentity) error {
+	if err := p.ensureFeature(StorageFeatureResultLost); err != nil {
+		return err
+	}
+	path := p.requestPath(scope, id)
+	if err := regularFile(path); err != nil {
+		return err
+	}
+	return cas.ChangeLimit(path, maxOperationRecordBytes, func(cur []byte) ([]byte, error) {
+		j, err := p.decodeJournal(cur)
+		if err != nil {
+			return nil, err
+		}
+		if j.Phase != "published" || j.Scope != scope || j.Identity != id || j.ResultLost {
+			return cur, nil
+		}
+		j.ResultLost = true
+		return json.Marshal(j)
+	})
+}
+
+func operationSnapshot(receipt *api.Receipt, record *job.Record, executor Executor, lost bool) *api.OperationSnapshot {
 	snapshot := &api.OperationSnapshot{Receipt: *receipt, State: string(record.State),
 		Progress:              api.WorkProgress{Done: record.Progress.Done, Total: record.Progress.Total},
 		CancellationRequested: record.Intent != nil && record.Intent.Want == job.WantCancel}
+	if lost {
+		// A recorded loss projects the complete record as typed terminal failure.
+		snapshot.State = string(job.StateFailed)
+		snapshot.Failure = &api.WorkFailure{Classification: "permanent", Message: "operation result lost", Cause: "result_lost"}
+		return snapshot
+	}
 	if reporter, ok := executor.(FailureReporter); ok {
 		snapshot.Failure = reporter.OperationFailure(record)
 	} else if record.Error != "" || record.State == job.StateFailed {
@@ -118,9 +175,21 @@ func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.
 	default:
 		return api.ResultRead{Outcome: "not_ready"}, nil
 	}
+	if b.provider.resultLost(b.scope, id) {
+		// Reappearing bytes are never served under a lost identity [JOB-A10].
+		return api.ResultRead{Outcome: "unavailable"}, nil
+	}
 	data, total, err := reader.ReadOperationResult(b.provider.root, record, offset, maxBytes)
 	if errors.Is(err, ErrResultRange) {
 		return api.ResultRead{Outcome: "invalid"}, nil
+	}
+	if errors.Is(err, ErrResultLost) {
+		// A failed record write leaves the operation complete and the reply the
+		// same; the failure goes to the provider's error reporter.
+		if err := b.provider.recordResultLost(b.scope, id); err != nil {
+			b.provider.reportError(errors.Join(errResultLostNotRecorded, err))
+		}
+		return api.ResultRead{Outcome: "unavailable"}, nil
 	}
 	if err != nil || total < 0 || offset > total || int64(len(data)) > maxBytes || int64(len(data)) > total-offset || (len(data) == 0 && offset < total) {
 		return api.ResultRead{Outcome: "unavailable"}, nil

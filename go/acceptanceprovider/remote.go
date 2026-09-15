@@ -31,14 +31,23 @@ func (p *Provider) RemoteHandler(authorize RemoteAuthorizer, policy RemoteMethod
 				scope = selected
 			}
 		}
-		permit := func(service, method string) bool {
+		permit := func(service, method string) access {
 			if scope == "" || ctx.Err() != nil {
-				return false
+				return accessDenied
 			}
-			if policy != nil && policy(ctx, peer, service, method) != nil {
-				return false
+			granted := accessAllowed
+			if policy != nil {
+				if err := policy(ctx, peer, service, method); err != nil {
+					if !errors.Is(err, ErrPolicyUnavailable) {
+						return accessDenied
+					}
+					granted = accessUnavailable
+				}
 			}
-			return ctx.Err() == nil
+			if ctx.Err() != nil {
+				return accessDenied
+			}
+			return granted
 		}
 		return p.dispatchFrame(frame, scope, permit)
 	}

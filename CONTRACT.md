@@ -78,6 +78,73 @@ new work or reversing a terminal result.
 Observe the existing job's terminal result through its capability API; cancellation
 never authorizes creating a replacement operation automatically.
 
+**[JOB-A7] A retry is a numbered attempt of the same identity.**
+`RequestIdentity.attempt` numbers explicit caller retries of one key within one
+history epoch. The original request is attempt zero; negative attempts are
+invalid. Attempt N+1 is eligible only when the owner holds evidence for attempt
+N under the same caller scope, key and epoch, and attempt N is either accepted
+with its operation in state `failed`, or sealed as definitely not accepted.
+An absent, live, `complete` or `cancelled` attempt N makes attempt N+1
+ineligible. An ineligible attempt returns `invalid` from Submit and Reconcile;
+the provider neither accepts nor seals it, and the caller may present it again
+after attempt N ends. Each attempt is its own identity under JOB-A1 to JOB-A6:
+a duplicate Submit of one attempt returns its receipt, and reconciliation,
+observation, results and cancellation each address one attempt. Arguments of a
+new attempt must equal those of the latest accepted earlier attempt; different
+arguments return `key_conflict` and start no work. Eligibility requires every
+earlier attempt to be terminally failed or sealed, and both states are
+irreversible. One key therefore has at most one live operation in an epoch.
+The provider decides eligibility from owner evidence at admission. The provider
+creates no attempt itself; cancellation, expiry and failure authorize no
+automatic retry.
+
+**[JOB-A8] A permanent failure is terminal and typed.** An observed failure
+classified `permanent` belongs to an operation in state `failed`, and the
+provider will not try that operation again. A `retryable` failure accompanies
+work the provider will try again. `WorkFailure.cause` names the provider's typed
+reason when known: `digest_mismatch`, `oversize`, `short_transfer`,
+`unauthorized`, `not_found`, `refused`, `server_error`, `transport` or `other`.
+An absent cause is unreported. A reader treats an unrecognized cause as `other`.
+Clients never derive classification or cause from message text.
+
+**[JOB-A9] An unobtainable policy decision is unavailable.** When a provider
+requires a service-owned policy decision for Submit, Reconcile or CancelWork and
+cannot obtain it, the call returns `unavailable`. Submit and Reconcile then carry
+no receipt, make no admission effect and record no seal. The same identity,
+including its attempt, may be presented again. An `unavailable` result is not
+JOB-A7 evidence: an attempt refused this way leaves no journal for a later
+attempt to rely on. CancelWork returning `unavailable` records no cancellation
+intent. `forbidden` is an evaluated refusal. `unknown` asks for reconciliation of
+a call that may have been accepted; `unavailable` reports a call that reached no
+acceptance evidence. Older generated clients refuse this outcome word, and a
+provider returns it only for a configured policy decision.
+The same decision outage makes ObserveWork return `unavailable`, ReadResult
+return `unavailable` and ListWork return an `unavailable` page. None of them
+reads operation state, records a seal or records a lost result. A ReadResult
+`unavailable` caused by an outage makes no claim about the result bytes; ObserveWork
+reports a recorded loss (JOB-A10).
+
+**[JOB-A10] A lost result ends its operation as a typed failure.** When an
+operation is `complete` and the provider determines that its result bytes no
+longer exist, the provider durably records the loss before replying. From then
+on ReadResult returns `unavailable`, and ObserveWork reports state `failed` with a
+`permanent` failure whose cause is `result_lost`. That observation is JOB-A7
+evidence: the next attempt of the key is eligible, and the lost attempt keeps its
+receipt. A read error that does not establish absence returns `unavailable`
+without recording a loss, and the operation stays `complete`. A recorded loss is
+irreversible. Bytes that reappear are not served under the lost identity.
+Recording a loss creates no work and authorizes no automatic retry.
+
+**[JOB-A11] A provider declares its result retention.** `HistoryWindow` carries
+`result_retention_ms`: the minimum time after completion that the provider keeps
+a complete operation's result bytes readable. Zero declares no retention. A
+provider without result access declares zero. Within a declared retention,
+`result_lost` reports storage damage outside the provider's own policy. After it,
+the provider may remove result bytes, and a read then reports `result_lost`
+under JOB-A10. The value is a minimum, and bytes may stay readable longer. It
+applies per provider, and a caller restoring a binding reads it again from the
+history window. A negative value is invalid.
+
 The executable [acceptance corpus](testdata/acceptance.json) and Go
 `abstraction/job/acceptance` decision tests check these semantic distinctions.
 The decision helper consumes trusted owner evidence; its booleans are not wire
@@ -101,6 +168,20 @@ creating managed metadata or preparing execution. This refusal identifies the
 missing ownership transition; it does not certify the contents of that directory.
 Existing explicit admission-only Open behavior remains compatible and creates
 no acceptance mapping for unjournaled records.
+
+**Storage features.** The private owner header lists the journal encodings a
+store has used in `Features`. `abstraction.job/journal-attempts@1` marks
+journals for retry attempts (JOB-A7). `abstraction.job/journal-result-lost@1`
+marks journals that record a lost result (JOB-A10). The provider writes a feature
+into the header atomically and durably before the first journal that needs it,
+and never removes one. Journals for original requests and results that were
+never lost use no feature; their bytes match providers that predate features.
+CheckManaged, OpenManaged, Open and OpenWithExecutor refuse a header with a
+feature they do not support, naming it and matching ErrIncompatibleStorage,
+before they create directories, locks or journals. A provider released before
+features refuses the `Features` field itself in the same check. A runtime
+downgrade therefore fails its storage preflight by name, after the first retry
+or recorded loss, and leaves the store unchanged.
 
 An installation may keep the explicitly selected legacy provider available while
 new submissions use a separate managed service root. Conversion of existing
@@ -291,7 +372,6 @@ Normative for anything sharing a directory with this store:
 <root>/jobs/<id>.json.lock     the lock every write to the record holds; never deleted
 <root>/jobs/<id>.json.*.tmp    a record being written, renamed over the record
 <root>/work/<id>               the name job <id> may spend on scratch
-<root>/services.json           the discovery registry
 ```
 
 **The lock is one machine's.** A byte-range lock taken over SMB and a `flock`
@@ -1284,7 +1364,7 @@ Discovery is the subject of
 [`abstraction-config`](https://github.com/openabstractions/abstraction-config),
 and `job` reimplements the order above in each language rather than depending on
 it. That duplication is a known cost, not a design, and the copies already
-differ: `config.JobStore` also reads a machine-wide file and an older
+differ: `config.LegacyJobStore` also reads a machine-wide file and an older
 `~/.modelget`, and no `jobctl` does.
 
 ---

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -42,6 +43,8 @@ type configuration struct {
 	Owner, Epoch string
 	RetentionMs  int64
 	Execution    string `json:",omitempty"`
+	// Features names journal encodings in use; see SupportedStorageFeatures.
+	Features []string `json:",omitempty"`
 }
 
 // journal is private provider recovery metadata, never an application contract.
@@ -58,7 +61,14 @@ type journal struct {
 	Reason       string
 	WorkSpec     []byte   `json:",omitempty"`
 	WorkRequires []string `json:",omitempty"`
+	// Origin is empty for admitted submissions. legacyMigrationOrigin marks work
+	// an operator mapping converted; only such journals use LegacyPreparer.
+	Origin string `json:",omitempty"`
+	// ResultLost records JOB-A10: a published operation's result bytes are gone.
+	ResultLost bool `json:",omitempty"`
 }
+
+const legacyMigrationOrigin = "abstraction.job/legacy-migration@1"
 
 func (j *journal) workSpec() []byte {
 	if j.Version == 2 {
@@ -73,8 +83,26 @@ type Provider struct {
 	config    configuration
 	store     *job.FileStore
 	executor  Executor
+	// features caches storage features already recorded in the owner header.
+	features sync.Map
 	// Tests inject failures at durable admission boundaries.
 	fault func(string) error
+	// report receives failures no reply carries; see SetErrorReporter.
+	report func(error)
+}
+
+// errResultLostNotRecorded marks a lost result whose journal record failed.
+var errResultLostNotRecorded = errors.New("acceptance: lost result not recorded")
+
+// SetErrorReporter receives failures the provider cannot return to a caller,
+// such as a lost result whose journal record failed. Set it before serving;
+// nil drops them.
+func (p *Provider) SetErrorReporter(report func(error)) { p.report = report }
+
+func (p *Provider) reportError(err error) {
+	if err != nil && p.report != nil {
+		p.report(err)
+	}
 }
 
 // Executor is a service-owned worker. Prepare is a deterministic, side-effect-free
@@ -96,6 +124,14 @@ type GuaranteedExecutor interface {
 	// required contains execution promises after admission promises are removed.
 	// Return the immutable work specification and its placement requirements.
 	PrepareWithGuarantees(operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
+}
+
+// LegacyPreparer reproduces work recorded before service ownership. It is used
+// only for journals written by MigrateLegacy; Submit never reaches it, so a new
+// caller cannot obtain legacy preparation. The same determinism rules as Prepare
+// apply, and the profile must change whenever its meaning changes.
+type LegacyPreparer interface {
+	PrepareLegacy(operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
 }
 
 // SupportedGuarantees is the vocabulary this configured provider can negotiate.
@@ -152,6 +188,38 @@ func (p *Provider) prepare(id string, s api.Submission) ([]byte, []string, error
 	}
 	work, err := p.executor.Prepare(id, s.Kind, bytes.Clone(s.Spec))
 	return bytes.Clone(work), nil, err
+}
+
+func (p *Provider) prepareOrigin(id string, s api.Submission, origin string) ([]byte, []string, error) {
+	if origin == "" {
+		return p.prepare(id, s)
+	}
+	if origin != legacyMigrationOrigin {
+		return nil, nil, errors.New("unknown work origin")
+	}
+	if p.executor == nil {
+		return nil, nil, nil
+	}
+	e, ok := p.executor.(LegacyPreparer)
+	if !ok {
+		return nil, nil, errors.New("executor cannot accept migrated legacy work")
+	}
+	extra := []string{}
+	for _, g := range s.RequiredGuarantees {
+		if !slices.Contains(Guarantees(), g) {
+			extra = append(extra, g)
+		}
+	}
+	work, requires, err := e.PrepareLegacy(id, s.Kind, bytes.Clone(s.Spec), extra)
+	if len(requires) > 64 {
+		return nil, nil, errors.New("too many execution requirements")
+	}
+	for _, g := range requires {
+		if g == "" || len(g) > 256 || !utf8.ValidString(g) {
+			return nil, nil, errors.New("invalid execution requirement")
+		}
+	}
+	return bytes.Clone(work), slices.Clone(requires), err
 }
 
 func OpenWithExecutor(root, logicalOwner string, executor Executor) (*Provider, error) {
@@ -286,10 +354,92 @@ type bound struct {
 
 func (p *Provider) requests() string { return filepath.Join(p.root, "acceptance", "requests") }
 func (p *Provider) requestPath(scope string, id api.RequestIdentity) string {
-	b, _ := json.Marshal([]string{scope, "abstraction.job/acceptance@1", id.HistoryEpoch, id.Key})
+	parts := []string{scope, "abstraction.job/acceptance@1", id.HistoryEpoch, id.Key}
+	if id.Attempt != 0 {
+		// Attempt zero keeps the path of journals written before attempts existed.
+		parts = append(parts, fmt.Sprint(id.Attempt))
+	}
+	b, err := json.Marshal(parts)
+	if err != nil {
+		// A []string always encodes, and the journal path has no failure to return.
+		panic("acceptance: encode request path: " + err.Error())
+	}
 	h := sha256.Sum256(b)
 	return filepath.Join(p.requests(), hex.EncodeToString(h[:])+".json")
 }
+
+// errIneligibleAttempt aborts a journal transaction for an attempt that
+// JOB-A7 does not yet allow, so nothing is accepted or sealed for it.
+var errIneligibleAttempt = errors.New("acceptance: attempt not eligible")
+
+// readJournal loads one caller-scoped journal outside its lock. Journals are
+// replaced atomically, so a reader sees one complete version. Absence is nil.
+func (p *Provider) readJournal(scope string, id api.RequestIdentity) (*journal, string, error) {
+	path := p.requestPath(scope, id)
+	if err := regularFile(path); err != nil {
+		return nil, path, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, path, nil
+	}
+	if err != nil {
+		return nil, path, err
+	}
+	j, err := p.decodeJournal(data)
+	if err != nil {
+		return nil, path, err
+	}
+	if j.Scope != scope || j.Identity != id {
+		return nil, path, fmt.Errorf("acceptance: journal identity mismatch")
+	}
+	return j, path, nil
+}
+
+// attemptEvidence gathers JOB-A7 evidence for id from earlier attempts. Every
+// state it relies on (failed, sealed) is irreversible, so evidence read before
+// the journal lock stays true when the lock is taken.
+func (b *bound) attemptEvidence(id api.RequestIdentity) api.AttemptEvidence {
+	p := b.provider
+	previous := id
+	previous.Attempt--
+	j, path, err := p.readJournal(b.scope, previous)
+	switch {
+	case err != nil:
+		return api.AttemptEvidence{Previous: "contradictory"}
+	case j == nil:
+		return api.AttemptEvidence{Previous: "absent"}
+	}
+	e := api.AttemptEvidence{Previous: "sealed"}
+	if j.Phase != "sealed" {
+		e.Previous = "accepted"
+		if p.materialize(path) == nil {
+			if record, err := p.loadOperationRecord(j.Receipt.OperationId); err == nil {
+				e.State = string(record.State)
+			}
+		}
+		if j.ResultLost {
+			// A recorded loss is typed terminal failure and permits the next attempt.
+			e.State = string(job.StateFailed)
+		}
+	}
+	for walk := j; walk != nil; {
+		if walk.Phase != "sealed" {
+			e.LatestAccepted = walk.Arguments
+			break
+		}
+		if walk.Identity.Attempt == 0 {
+			break
+		}
+		earlier := walk.Identity
+		earlier.Attempt--
+		if walk, _, err = p.readJournal(b.scope, earlier); err != nil {
+			return api.AttemptEvidence{Previous: "contradictory"}
+		}
+	}
+	return e
+}
+
 func strict(b []byte, v any) error {
 	if len(b) == 0 || len(b) > 4*MaxSpecBytes+16384 {
 		return fmt.Errorf("acceptance: invalid recovery record size")
@@ -323,11 +473,14 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	if err := strict(b, &j); err != nil {
 		return nil, err
 	}
-	if j.Version != p.config.Version || j.Scope == "" || len(j.Scope) > MaxCallerScopeBytes || j.Identity.Key == "" || len(j.Identity.Key) > 1024 || j.Identity.HistoryEpoch != p.config.Epoch || len(j.Reason) > 1024 {
+	if j.Version != p.config.Version || j.Scope == "" || len(j.Scope) > MaxCallerScopeBytes || j.Identity.Attempt < 0 || j.Identity.Key == "" || len(j.Identity.Key) > 1024 || j.Identity.HistoryEpoch != p.config.Epoch || len(j.Reason) > 1024 {
 		return nil, fmt.Errorf("acceptance: invalid recovery identity")
 	}
+	if j.Origin != "" && j.Origin != legacyMigrationOrigin {
+		return nil, fmt.Errorf("acceptance: unsupported work origin")
+	}
 	if j.Phase == "sealed" {
-		if j.Arguments != nil || j.Receipt != nil || len(j.WorkSpec) != 0 || len(j.WorkRequires) != 0 {
+		if j.Arguments != nil || j.Receipt != nil || len(j.WorkSpec) != 0 || len(j.WorkRequires) != 0 || j.Origin != "" || j.ResultLost {
 			return nil, fmt.Errorf("acceptance: contradictory seal")
 		}
 		return &j, nil
@@ -360,7 +513,7 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 		return nil, err
 	}
 	if p.executor != nil {
-		expected, requires, err := p.prepare(j.Receipt.OperationId, *j.Arguments)
+		expected, requires, err := p.prepareOrigin(j.Receipt.OperationId, *j.Arguments, j.Origin)
 		if err != nil || !bytes.Equal(expected, j.WorkSpec) || !slices.Equal(requires, j.WorkRequires) {
 			return nil, errors.New("acceptance: incompatible execution specification")
 		}
@@ -393,7 +546,7 @@ func (b *bound) GetHistoryWindow() (api.HistoryWindow, error) {
 		return api.HistoryWindow{}, &api.ServiceError{Code: "forbidden", Message: "caller not authorized"}
 	}
 	c := b.provider.config
-	return api.HistoryWindow{LogicalOwner: c.Owner, HistoryEpoch: c.Epoch, MinimumRetentionMs: c.RetentionMs}, nil
+	return api.HistoryWindow{LogicalOwner: c.Owner, HistoryEpoch: c.Epoch, MinimumRetentionMs: c.RetentionMs, ResultRetentionMs: b.provider.resultRetention()}, nil
 }
 func outcome(word, reason string) api.AcceptanceResult {
 	return api.AcceptanceResult{Outcome: word, Reason: reason}
@@ -420,7 +573,7 @@ func (b *bound) Reconcile(id api.RequestIdentity) (api.AcceptanceResult, error) 
 
 func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.AcceptanceResult, error) {
 	p := b.provider
-	if id.Key == "" || len(id.Key) > 1024 || id.HistoryEpoch == "" {
+	if id.Key == "" || len(id.Key) > 1024 || id.HistoryEpoch == "" || id.Attempt < 0 {
 		return outcome("invalid", "request identity required"), nil
 	}
 	// Unknown/old epochs are never fresh namespaces eligible for acceptance.
@@ -431,12 +584,29 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 	if err := regularFile(path); err != nil {
 		return outcome("unknown", "owner recovery evidence unavailable"), nil
 	}
+	var eligibility api.AcceptanceResult
+	if id.Attempt > 0 {
+		eligibility = api.AttemptEligibility(id, s, b.attemptEvidence(id))
+	}
+	if id.Attempt > 0 && eligibility.Outcome == "" {
+		// A journal with a nonzero attempt needs the storage feature first, so an
+		// older provider's storage check refuses the store by name.
+		if err := p.ensureFeature(StorageFeatureAttempts); err != nil {
+			return outcome("unknown", "owner storage feature unavailable"), nil
+		}
+		if err := p.crashPoint("after-storage-feature"); err != nil {
+			return outcome("unknown", "acceptance reply unavailable"), nil
+		}
+	}
 	var j *journal
 	err := cas.Change(path, func(cur []byte) ([]byte, error) {
 		if cur != nil {
 			var err error
 			j, err = p.decodeJournal(cur)
 			return cur, err
+		}
+		if eligibility.Outcome != "" {
+			return nil, errIneligibleAttempt
 		}
 		j = &journal{Version: p.config.Version, Scope: b.scope, Identity: id, Phase: "sealed", Reason: "identity sealed before acceptance"}
 		if s != nil {
@@ -461,6 +631,9 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 		}
 		return json.Marshal(j)
 	})
+	if errors.Is(err, errIneligibleAttempt) {
+		return eligibility, nil
+	}
 	if err != nil {
 		return outcome("unknown", "owner recovery evidence unavailable"), nil
 	}

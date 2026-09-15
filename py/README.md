@@ -14,6 +14,28 @@ installed-runtime trust. For an explicitly configured host, Jobs.restore accepts
 an independent server expectation. Retain that expectation on recovery. Acceptance and inventory are distinct contracts;
 resolving inventory does not grant acceptance methods.
 
+## Who owns a job
+
+The runtime files each accepted submission under a caller scope: the
+authenticated account and the absolute path of the calling executable as the
+operating system reports it. For Python that executable is the interpreter. On
+Linux the path is `/proc/<pid>/exe` with symlinks resolved, and a virtual
+environment's `python` is commonly a symlink to the base interpreter. Every
+Python application of one account on the same interpreter shares a scope;
+upgrading or moving that interpreter creates a new one. Identity keys, receipts,
+observation and result bytes are visible only inside the scope. Restarts,
+reboots and runtime upgrades keep it. Another executable in the same account has
+its own scope. Reconciling an identity the caller's scope never accepted returns
+`definitely_not_accepted` and seals that identity for the caller.
+
+For continuity across reinstall, run the application on an interpreter at a
+stable absolute path. Before `Submit`, persist the identity, the complete
+submission, the endpoint, the required guarantees and the logical owner outside
+the installation directory. After reinstall,
+`Jobs.restore_installed(endpoint, owner, required_guarantees=...)` restores the
+binding with installed-runtime trust; reconcile the saved identity there. The
+runtime has no transfer of work between program scopes.
+
 Configurable timeouts and absolute monotonic deadlines bound waiting. A binding's
 with_waiting() supplies a fresh deadline/cancellation policy while sharing its
 fixed owner and endpoint. Cancellation stops waiting only. CancelWork explicitly

@@ -86,7 +86,6 @@ func TestReservedNamesTheLayoutAndNothingElse(t *testing.T) {
 		"work",
 		"work/" + other,
 		"work/" + other + "/part",
-		"services.json",
 
 		// The spellings a filesystem would fold into the ones above.
 		"Jobs/x.json",
@@ -94,7 +93,6 @@ func TestReservedNamesTheLayoutAndNothingElse(t *testing.T) {
 		`jobs\x.json`,
 		"jobs./x.json",
 		"WORK/" + other,
-		"Services.json",
 		"models/../jobs/x.json",
 		"./jobs/x.json",
 	} {
@@ -112,8 +110,7 @@ func TestReservedNamesTheLayoutAndNothingElse(t *testing.T) {
 		"jobsy/x.json",
 		"myjobs/x.json",
 		"a/jobs/x.json",
-		"a/services.json",
-		"services.json.bak",
+		"services.json", // the removed discovery registry's name is free
 		"jobs/../models/x.gguf",
 		"supervisor.json", // download's, not the job layer's — see download.ReservedSink
 	} {

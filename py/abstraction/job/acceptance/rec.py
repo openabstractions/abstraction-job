@@ -128,11 +128,11 @@ def enc_list(out, v, depth, enc):
     out += b"]"
 
 
-OUTCOME_NAMES = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid"]
+OUTCOME_NAMES = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"]
 OUTCOME_UNKNOWN = "refuse"
 
 
-CANCELLATIONOUTCOME_NAMES = ["requested", "already_terminal", "unknown", "forbidden", "unsupported"]
+CANCELLATIONOUTCOME_NAMES = ["requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"]
 CANCELLATIONOUTCOME_UNKNOWN = "refuse"
 
 
@@ -144,7 +144,11 @@ FAILURECLASS_NAMES = ["retryable", "permanent", "unknown"]
 FAILURECLASS_UNKNOWN = "refuse"
 
 
-OBSERVATIONOUTCOME_NAMES = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted"]
+FAILURECAUSE_NAMES = ["other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"]
+FAILURECAUSE_UNKNOWN = "grant"
+
+
+OBSERVATIONOUTCOME_NAMES = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"]
 OBSERVATIONOUTCOME_UNKNOWN = "refuse"
 
 
@@ -159,12 +163,21 @@ INVENTORYOUTCOME_UNKNOWN = "refuse"
 ADMISSION_GUARANTEES = ["abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"]
 
 
+# Stable SDK key in an owner-issued history epoch. Scope is authenticated caller
+# plus this service contract, never a caller-provided principal. Persist before
+# send for restart recovery. Attempt is a nonnegative explicit retry number for
+# the same key and epoch; zero is the original request. Attempt N+1 is eligible
+# only after attempt N failed terminally or was sealed (JOB-A7).
 class RequestIdentity:
     def __init__(self, **kw):
         self.key = kw.get("key", "")
         self.history_epoch = kw.get("history_epoch", "")
+        self.attempt = kw.get("attempt", 0)
 
 
+# Opaque kind-specific specification bytes, not a second tagged job Record.
+# Equality includes kind, exact spec bytes and the set of required guarantees.
+# Credentials are supplied at the authorized service boundary.
 class Submission:
     def __init__(self, **kw):
         self.identity = kw.get("identity", RequestIdentity())
@@ -173,6 +186,9 @@ class Submission:
         self.required_guarantees = kw.get("required_guarantees", [])
 
 
+# Recoverable acceptance evidence. Retention is a minimum duration from original
+# acceptance, never renewed by replay. Expiry does not end work, transfer
+# ownership or authorize duplicate execution. IDs confer no authority.
 class Receipt:
     def __init__(self, **kw):
         self.identity = kw.get("identity", RequestIdentity())
@@ -182,6 +198,12 @@ class Receipt:
         self.history_retention_ms = kw.get("history_retention_ms", 0)
 
 
+# Accepted requires a receipt; other outcomes forbid one. Definite nonacceptance
+# requires authoritative sealed evidence preventing any delayed acceptance of
+# this identity. Absence, timeout, expired history and access denial are
+# insufficient. Unavailable means a required policy decision could not be
+# obtained: no admission effect and no seal were recorded, and the same identity
+# may be presented again (JOB-A9).
 class AcceptanceResult:
     def __init__(self, **kw):
         self.outcome = kw.get("outcome", "")
@@ -189,30 +211,52 @@ class AcceptanceResult:
         self.reason = kw.get("reason", "")
 
 
+# Owner-issued acceptance epoch and minimum reconciliation retention. After
+# closing an epoch the owner fences all its submissions, including delayed ones.
+# This does not assert that old unknown work was never accepted. Result
+# retention is the provider's declared minimum time, in milliseconds after
+# completion, that complete result bytes stay readable; zero declares none
+# (JOB-A11).
 class HistoryWindow:
     def __init__(self, **kw):
         self.logical_owner = kw.get("logical_owner", "")
         self.history_epoch = kw.get("history_epoch", "")
         self.minimum_retention_ms = kw.get("minimum_retention_ms", 0)
+        self.result_retention_ms = kw.get("result_retention_ms", 0)
 
 
+# Requested acknowledges cancellation intent, not stopped effects. Completion
+# may win the race; observe the existing operation for its terminal result.
+# Unavailable records no intent because a required policy decision could not be
+# obtained; the request may be repeated.
 class CancellationResult:
     def __init__(self, **kw):
         self.outcome = kw.get("outcome", "")
 
 
+# Advisory nonnegative progress. Zero total means unknown. Progress does not
+# authorize delivery or imply completion.
 class WorkProgress:
     def __init__(self, **kw):
         self.done = kw.get("done", 0)
         self.total = kw.get("total", 0)
 
 
+# Last-attempt failure. Unknown classification remains unknown; do not infer it
+# from message text. Retryable failure can coexist with pending work. Permanent
+# classification means the provider will not try this operation again and its
+# state is failed. Cause is the provider's typed reason when known; empty means
+# unreported, and an unrecognized cause is treated as other.
 class WorkFailure:
     def __init__(self, **kw):
         self.classification = kw.get("classification", "")
         self.message = kw.get("message", "")
+        self.cause = kw.get("cause", "")
 
 
+# Receipt binds original request and logical owner. Cancellation requested is
+# intent, not stopped effects. Progress and last-attempt failure are advisory;
+# no provider paths are exposed.
 class OperationSnapshot:
     def __init__(self, **kw):
         self.receipt = kw.get("receipt", Receipt())
@@ -222,12 +266,23 @@ class OperationSnapshot:
         self.failure = kw.get("failure", None)
 
 
+# Exactly observed carries a snapshot; all other outcomes forbid it. Absent
+# identities are unknown and observation never seals them. Definite
+# nonacceptance requires an existing authoritative seal. Already accepted
+# journals may be recovered. Unavailable means a required policy decision could
+# not be obtained and no state was read or changed (JOB-A9).
 class ObservationResult:
     def __init__(self, **kw):
         self.outcome = kw.get("outcome", "")
         self.snapshot = kw.get("snapshot", None)
 
 
+# Complete immutable result bytes bound to the original receipt. Offset equals
+# requested nonnegative offset and is at most nonnegative total. Data length is
+# at most requested max_bytes and total-offset. EOF is true exactly when offset
+# plus data length equals total, including an empty complete result. Data is
+# nonempty unless offset equals total and EOF is true. Missing data and errors
+# never imply EOF.
 class ResultChunk:
     def __init__(self, **kw):
         self.receipt = kw.get("receipt", Receipt())
@@ -237,12 +292,23 @@ class ResultChunk:
         self.eof = kw.get("eof", False)
 
 
+# Exactly data carries a chunk; other outcomes forbid it. Only complete
+# immutable results produce data. Incomplete work is not_ready; missing
+# completed bytes are unavailable. Unsupported access, unknown identity,
+# forbidden access and invalid bounds remain distinct.
 class ResultRead:
     def __init__(self, **kw):
         self.outcome = kw.get("outcome", "")
         self.chunk = kw.get("chunk", None)
 
 
+# Caller-scoped accepted-operation observations without paths. Only page carries
+# snapshots. A noncomplete page always has a next cursor, even when no own
+# operations were scanned. Complete pages have empty next. Refusals carry no
+# snapshots, empty next and complete=false. Directory traversal is a weak live
+# view: concurrent insertions/removals can be omitted or repeated, not a stable
+# transaction snapshot. An unchanged tree is fully traversable. Large failure
+# diagnostics may be replaced by a bounded generic message.
 class InventoryPage:
     def __init__(self, **kw):
         self.outcome = kw.get("outcome", "")
@@ -360,6 +426,13 @@ def enc_requestidentity(out, v, depth):
     esc(out, "history_epoch")
     out += b": "
     esc(out, v.history_epoch)
+    if v.attempt != 0:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "attempt")
+        out += b": "
+        num(out, v.attempt)
     out += b"\n"
     pad(out, depth)
     out += b"}"
@@ -433,7 +506,7 @@ def enc_receipt(out, v, depth):
 
 def enc_acceptanceresult(out, v, depth):
     if type(v.outcome) is not str: raise Refusal("wrong_type",0)
-    if v.outcome != "accepted" and v.outcome != "definitely_not_accepted" and v.outcome != "unknown" and v.outcome != "key_conflict" and v.outcome != "forbidden" and v.outcome != "invalid": raise Refusal("bad_enum",0)
+    if v.outcome != "accepted" and v.outcome != "definitely_not_accepted" and v.outcome != "unknown" and v.outcome != "key_conflict" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "unavailable": raise Refusal("bad_enum",0)
     out += b"{"
     out += b"\n"
     pad(out, depth + 1)
@@ -477,6 +550,13 @@ def enc_historywindow(out, v, depth):
     esc(out, "minimum_retention_ms")
     out += b": "
     num(out, v.minimum_retention_ms)
+    if v.result_retention_ms != 0:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "result_retention_ms")
+        out += b": "
+        num(out, v.result_retention_ms)
     out += b"\n"
     pad(out, depth)
     out += b"}"
@@ -484,7 +564,7 @@ def enc_historywindow(out, v, depth):
 
 def enc_cancellationresult(out, v, depth):
     if type(v.outcome) is not str: raise Refusal("wrong_type",0)
-    if v.outcome != "requested" and v.outcome != "already_terminal" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "unsupported": raise Refusal("bad_enum",0)
+    if v.outcome != "requested" and v.outcome != "already_terminal" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "unsupported" and v.outcome != "unavailable": raise Refusal("bad_enum",0)
     out += b"{"
     out += b"\n"
     pad(out, depth + 1)
@@ -517,6 +597,8 @@ def enc_workprogress(out, v, depth):
 def enc_workfailure(out, v, depth):
     if type(v.classification) is not str: raise Refusal("wrong_type",0)
     if v.classification != "retryable" and v.classification != "permanent" and v.classification != "unknown": raise Refusal("bad_enum",0)
+    if v.cause != "":
+        if type(v.cause) is not str: raise Refusal("wrong_type",0)
     out += b"{"
     out += b"\n"
     pad(out, depth + 1)
@@ -529,6 +611,13 @@ def enc_workfailure(out, v, depth):
     esc(out, "message")
     out += b": "
     esc(out, v.message)
+    if v.cause:
+        out += b","
+        out += b"\n"
+        pad(out, depth + 1)
+        esc(out, "cause")
+        out += b": "
+        esc(out, v.cause)
     out += b"\n"
     pad(out, depth)
     out += b"}"
@@ -575,7 +664,7 @@ def enc_operationsnapshot(out, v, depth):
 
 def enc_observationresult(out, v, depth):
     if type(v.outcome) is not str: raise Refusal("wrong_type",0)
-    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted": raise Refusal("bad_enum",0)
+    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted" and v.outcome != "unavailable": raise Refusal("bad_enum",0)
     out += b"{"
     out += b"\n"
     pad(out, depth + 1)
@@ -1298,6 +1387,11 @@ def _decode_requestidentity(r):
                     raise r.refuse("duplicate_field")
                 seen |= 2
                 v.history_epoch = r.string()
+            elif key == "attempt":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.attempt = r.integer(-9223372036854775808, 9223372036854775807)
             else:
                 raise r.refuse("unknown_field")
             r.ws()
@@ -1472,7 +1566,7 @@ def _decode_acceptanceresult(r):
     r.depth -= 1
     if seen & 5 != 5:
         raise r.refuse("missing_field")
-    if v.outcome != "accepted" and v.outcome != "definitely_not_accepted" and v.outcome != "unknown" and v.outcome != "key_conflict" and v.outcome != "forbidden" and v.outcome != "invalid": raise r.refuse("bad_enum")
+    if v.outcome != "accepted" and v.outcome != "definitely_not_accepted" and v.outcome != "unknown" and v.outcome != "key_conflict" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "unavailable": raise r.refuse("bad_enum")
     return v
 
 
@@ -1510,6 +1604,11 @@ def _decode_historywindow(r):
                     raise r.refuse("duplicate_field")
                 seen |= 4
                 v.minimum_retention_ms = r.integer(-9223372036854775808, 9223372036854775807)
+            elif key == "result_retention_ms":
+                if seen & 8:
+                    raise r.refuse("duplicate_field")
+                seen |= 8
+                v.result_retention_ms = r.integer(-9223372036854775808, 9223372036854775807)
             else:
                 raise r.refuse("unknown_field")
             r.ws()
@@ -1561,7 +1660,7 @@ def _decode_cancellationresult(r):
     r.depth -= 1
     if seen & 1 != 1:
         raise r.refuse("missing_field")
-    if v.outcome != "requested" and v.outcome != "already_terminal" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "unsupported": raise r.refuse("bad_enum")
+    if v.outcome != "requested" and v.outcome != "already_terminal" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "unsupported" and v.outcome != "unavailable": raise r.refuse("bad_enum")
     return v
 
 
@@ -1638,6 +1737,11 @@ def _decode_workfailure(r):
                     raise r.refuse("duplicate_field")
                 seen |= 2
                 v.message = r.string()
+            elif key == "cause":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.cause = r.string()
             else:
                 raise r.refuse("unknown_field")
             r.ws()
@@ -1755,7 +1859,7 @@ def _decode_observationresult(r):
     r.depth -= 1
     if seen & 1 != 1:
         raise r.refuse("missing_field")
-    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted": raise r.refuse("bad_enum")
+    if v.outcome != "observed" and v.outcome != "unknown" and v.outcome != "forbidden" and v.outcome != "invalid" and v.outcome != "definitely_not_accepted" and v.outcome != "unavailable": raise r.refuse("bad_enum")
     return v
 
 
@@ -2794,14 +2898,14 @@ def _service_response(frame, service, method):
     return reply.payload
 
 _SERVICE_RECORDS = {
-    "RequestIdentity": (RequestIdentity, [("key","string","never"),("history_epoch","string","never"),]),
+    "RequestIdentity": (RequestIdentity, [("key","string","never"),("history_epoch","string","never"),("attempt","i64","zero"),]),
     "Submission": (Submission, [("identity","RequestIdentity","never"),("kind","string","never"),("spec","binary","never"),("required_guarantees","list<string>","never"),]),
     "Receipt": (Receipt, [("identity","RequestIdentity","never"),("logical_owner","string","never"),("operation_id","string","never"),("accepted_guarantees","list<string>","never"),("history_retention_ms","i64","never"),]),
     "AcceptanceResult": (AcceptanceResult, [("outcome","string","never"),("receipt","Receipt","absent"),("reason","string","never"),]),
-    "HistoryWindow": (HistoryWindow, [("logical_owner","string","never"),("history_epoch","string","never"),("minimum_retention_ms","i64","never"),]),
+    "HistoryWindow": (HistoryWindow, [("logical_owner","string","never"),("history_epoch","string","never"),("minimum_retention_ms","i64","never"),("result_retention_ms","i64","zero"),]),
     "CancellationResult": (CancellationResult, [("outcome","string","never"),]),
     "WorkProgress": (WorkProgress, [("done","i64","never"),("total","i64","never"),]),
-    "WorkFailure": (WorkFailure, [("classification","string","never"),("message","string","never"),]),
+    "WorkFailure": (WorkFailure, [("classification","string","never"),("message","string","never"),("cause","string","zero"),]),
     "OperationSnapshot": (OperationSnapshot, [("receipt","Receipt","never"),("state","string","never"),("progress","WorkProgress","never"),("cancellation_requested","bool","never"),("failure","WorkFailure","absent"),]),
     "ObservationResult": (ObservationResult, [("outcome","string","never"),("snapshot","OperationSnapshot","absent"),]),
     "ResultChunk": (ResultChunk, [("receipt","Receipt","never"),("offset","i64","never"),("total","i64","never"),("data","binary","never"),("eof","bool","never"),]),

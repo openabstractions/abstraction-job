@@ -43,16 +43,9 @@ func Reserved(owner, rel string) bool {
 		return true
 	case "work":
 		return len(segs) < 2 || segs[1] != foldSegment(owner)
-	case registryFile:
-		return len(segs) == 1
 	}
 	return false
 }
-
-// registryFile is the discovery registry, which sits at the root beside jobs/
-// and work/ rather than inside either. See abstraction-job/cpp/src/discovery_client.cpp and
-// abstraction-download/python/abstraction_discovery.py, which read it.
-const registryFile = "services.json"
 
 // RootName is the name rel takes in the store root, or "" if rel names
 // something deeper, climbs out of the root, or is empty.
