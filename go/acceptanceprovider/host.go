@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 )
 
@@ -30,7 +31,14 @@ func AcquireHost(path string) (io.Closer, error) {
 	if err = root.MkdirAll("acceptance", 0700); err != nil {
 		return nil, err
 	}
-	f, err := root.OpenFile("acceptance/host.lock", os.O_CREATE|os.O_RDWR, 0600)
+	// Hosts starting together race to create the lock. On darwin a creator
+	// that loses a plain O_CREAT race can fail with ENOENT
+	// (golang/go#81246). O_EXCL makes the loser see ErrExist, and the loser
+	// then opens the file the winner created.
+	f, err := root.OpenFile("acceptance/host.lock", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if errors.Is(err, fs.ErrExist) {
+		f, err = root.OpenFile("acceptance/host.lock", os.O_RDWR, 0600)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -5,12 +5,50 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+// Hosts that start together on a fresh store race to create the lock file.
+// Each must learn only who owns the store: on darwin a plain O_CREAT loser
+// could fail with ENOENT (golang/go#81246).
+func TestAcquireHostCreateRaceReportsOnlyOwnership(t *testing.T) {
+	const rounds, hosts = 50, 32
+	for round := 0; round < rounds; round++ {
+		root := t.TempDir()
+		start := make(chan struct{})
+		guards := make([]io.Closer, hosts)
+		errs := make([]error, hosts)
+		var wg sync.WaitGroup
+		for i := 0; i < hosts; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				guards[i], errs[i] = AcquireHost(root)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		owners := 0
+		for i := 0; i < hosts; i++ {
+			if errs[i] == nil {
+				owners++
+				guards[i].Close()
+			} else if !errors.Is(errs[i], ErrHostActive) {
+				t.Errorf("round %d host %d: %v", round, i, errs[i])
+			}
+		}
+		if owners != 1 {
+			t.Fatalf("round %d: %d owners", round, owners)
+		}
+	}
+}
 
 func TestHostGuardProcessFixture(t *testing.T) {
 	root := os.Getenv("OA_TEST_HOST_GUARD_ROOT")
