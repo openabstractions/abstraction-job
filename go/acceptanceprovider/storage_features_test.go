@@ -37,7 +37,7 @@ func TestStorageFeatureMarksRetryBeforeJournal(t *testing.T) {
 	if !bytes.Equal(before, ownerHeader(t, root)) {
 		t.Fatal("ineligible retry changed the owner header")
 	}
-	endOperation(t, p, first.OperationId, job.StateFailed)
+	endOperation(t, p, first.OperationID, job.StateFailed)
 
 	// A crash between the marker and the journal leaves the marker alone.
 	p.fault = func(point string) error {
@@ -67,7 +67,7 @@ func TestStorageFeatureMarksRetryBeforeJournal(t *testing.T) {
 		t.Fatalf("current preflight: %v", err)
 	}
 	reopened := openTest(t, root)
-	if v, err := reopened.Bind("alice").Reconcile(retry(original, 1).Identity); err != nil || v.Outcome != "accepted" {
+	if v, err := reopened.Bind("alice").Reconcile(retry(original, 1).Identity); err != nil || v.Outcome.String() != "accepted" {
 		t.Fatalf("current provider after marker: %+v %v", v, err)
 	}
 

@@ -15,6 +15,533 @@ namespace abstraction::job::acceptance {
 
 using Raw = std::string;
 
+class Refusal : public std::runtime_error {
+public:
+    Refusal(const char* word, std::size_t offset)
+        : std::runtime_error(std::string("refused: ") + word + " at byte " + std::to_string(offset)),
+          word(word),
+          offset(offset) {}
+    const char* word;
+    std::size_t offset;
+};
+
+enum class AcceptanceOutcome : std::int32_t {
+    Accepted = 1,
+    DefinitelyNotAccepted = 2,
+    Unknown = 3,
+    KeyConflict = 4,
+    Forbidden = 5,
+    Invalid = 6,
+    Unavailable = 7,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(AcceptanceOutcome value) {
+    switch (value) {
+        case AcceptanceOutcome::Accepted: return "accepted";
+        case AcceptanceOutcome::DefinitelyNotAccepted: return "definitely_not_accepted";
+        case AcceptanceOutcome::Unknown: return "unknown";
+        case AcceptanceOutcome::KeyConflict: return "key_conflict";
+        case AcceptanceOutcome::Forbidden: return "forbidden";
+        case AcceptanceOutcome::Invalid: return "invalid";
+        case AcceptanceOutcome::Unavailable: return "unavailable";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<AcceptanceOutcome> parse_acceptance_outcome(std::string_view name) {
+    if (name == "accepted") return AcceptanceOutcome::Accepted;
+    if (name == "definitely_not_accepted") return AcceptanceOutcome::DefinitelyNotAccepted;
+    if (name == "unknown") return AcceptanceOutcome::Unknown;
+    if (name == "key_conflict") return AcceptanceOutcome::KeyConflict;
+    if (name == "forbidden") return AcceptanceOutcome::Forbidden;
+    if (name == "invalid") return AcceptanceOutcome::Invalid;
+    if (name == "unavailable") return AcceptanceOutcome::Unavailable;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(AcceptanceOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(AcceptanceOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, AcceptanceOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, AcceptanceOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kAcceptanceOutcomeNames = {"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"};
+
+enum class CancellationOutcome : std::int32_t {
+    Requested = 1,
+    AlreadyTerminal = 2,
+    Unknown = 3,
+    Forbidden = 4,
+    Unsupported = 5,
+    Unavailable = 6,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(CancellationOutcome value) {
+    switch (value) {
+        case CancellationOutcome::Requested: return "requested";
+        case CancellationOutcome::AlreadyTerminal: return "already_terminal";
+        case CancellationOutcome::Unknown: return "unknown";
+        case CancellationOutcome::Forbidden: return "forbidden";
+        case CancellationOutcome::Unsupported: return "unsupported";
+        case CancellationOutcome::Unavailable: return "unavailable";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<CancellationOutcome> parse_cancellation_outcome(std::string_view name) {
+    if (name == "requested") return CancellationOutcome::Requested;
+    if (name == "already_terminal") return CancellationOutcome::AlreadyTerminal;
+    if (name == "unknown") return CancellationOutcome::Unknown;
+    if (name == "forbidden") return CancellationOutcome::Forbidden;
+    if (name == "unsupported") return CancellationOutcome::Unsupported;
+    if (name == "unavailable") return CancellationOutcome::Unavailable;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(CancellationOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(CancellationOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, CancellationOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, CancellationOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kCancellationOutcomeNames = {"requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"};
+
+enum class WorkState : std::int32_t {
+    Pending = 1,
+    Running = 2,
+    Transferred = 3,
+    Complete = 4,
+    Failed = 5,
+    Cancelled = 6,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(WorkState value) {
+    switch (value) {
+        case WorkState::Pending: return "pending";
+        case WorkState::Running: return "running";
+        case WorkState::Transferred: return "transferred";
+        case WorkState::Complete: return "complete";
+        case WorkState::Failed: return "failed";
+        case WorkState::Cancelled: return "cancelled";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<WorkState> parse_work_state(std::string_view name) {
+    if (name == "pending") return WorkState::Pending;
+    if (name == "running") return WorkState::Running;
+    if (name == "transferred") return WorkState::Transferred;
+    if (name == "complete") return WorkState::Complete;
+    if (name == "failed") return WorkState::Failed;
+    if (name == "cancelled") return WorkState::Cancelled;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(WorkState value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(WorkState value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, WorkState value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, WorkState value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kWorkStateNames = {"pending", "running", "transferred", "complete", "failed", "cancelled"};
+
+enum class FailureClass : std::int32_t {
+    Retryable = 1,
+    Permanent = 2,
+    Unknown = 3,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(FailureClass value) {
+    switch (value) {
+        case FailureClass::Retryable: return "retryable";
+        case FailureClass::Permanent: return "permanent";
+        case FailureClass::Unknown: return "unknown";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<FailureClass> parse_failure_class(std::string_view name) {
+    if (name == "retryable") return FailureClass::Retryable;
+    if (name == "permanent") return FailureClass::Permanent;
+    if (name == "unknown") return FailureClass::Unknown;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(FailureClass value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(FailureClass value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, FailureClass value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, FailureClass value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kFailureClassNames = {"retryable", "permanent", "unknown"};
+
+inline const std::vector<std::string> kFailureCauseNames = {"other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost", "credential"};
+inline constexpr std::string_view kFailureCauseOther = "other";
+inline constexpr std::string_view kFailureCauseDigestMismatch = "digest_mismatch";
+inline constexpr std::string_view kFailureCauseOversize = "oversize";
+inline constexpr std::string_view kFailureCauseShortTransfer = "short_transfer";
+inline constexpr std::string_view kFailureCauseUnauthorized = "unauthorized";
+inline constexpr std::string_view kFailureCauseNotFound = "not_found";
+inline constexpr std::string_view kFailureCauseRefused = "refused";
+inline constexpr std::string_view kFailureCauseServerError = "server_error";
+inline constexpr std::string_view kFailureCauseTransport = "transport";
+inline constexpr std::string_view kFailureCauseResultLost = "result_lost";
+inline constexpr std::string_view kFailureCauseCredential = "credential";
+
+enum class ObservationOutcome : std::int32_t {
+    Observed = 1,
+    Unknown = 2,
+    Forbidden = 3,
+    Invalid = 4,
+    DefinitelyNotAccepted = 5,
+    Unavailable = 6,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(ObservationOutcome value) {
+    switch (value) {
+        case ObservationOutcome::Observed: return "observed";
+        case ObservationOutcome::Unknown: return "unknown";
+        case ObservationOutcome::Forbidden: return "forbidden";
+        case ObservationOutcome::Invalid: return "invalid";
+        case ObservationOutcome::DefinitelyNotAccepted: return "definitely_not_accepted";
+        case ObservationOutcome::Unavailable: return "unavailable";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<ObservationOutcome> parse_observation_outcome(std::string_view name) {
+    if (name == "observed") return ObservationOutcome::Observed;
+    if (name == "unknown") return ObservationOutcome::Unknown;
+    if (name == "forbidden") return ObservationOutcome::Forbidden;
+    if (name == "invalid") return ObservationOutcome::Invalid;
+    if (name == "definitely_not_accepted") return ObservationOutcome::DefinitelyNotAccepted;
+    if (name == "unavailable") return ObservationOutcome::Unavailable;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(ObservationOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(ObservationOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, ObservationOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, ObservationOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kObservationOutcomeNames = {"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"};
+
+enum class ResultOutcome : std::int32_t {
+    Data = 1,
+    NotReady = 2,
+    Unavailable = 3,
+    Unsupported = 4,
+    Unknown = 5,
+    Forbidden = 6,
+    Invalid = 7,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(ResultOutcome value) {
+    switch (value) {
+        case ResultOutcome::Data: return "data";
+        case ResultOutcome::NotReady: return "not_ready";
+        case ResultOutcome::Unavailable: return "unavailable";
+        case ResultOutcome::Unsupported: return "unsupported";
+        case ResultOutcome::Unknown: return "unknown";
+        case ResultOutcome::Forbidden: return "forbidden";
+        case ResultOutcome::Invalid: return "invalid";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<ResultOutcome> parse_result_outcome(std::string_view name) {
+    if (name == "data") return ResultOutcome::Data;
+    if (name == "not_ready") return ResultOutcome::NotReady;
+    if (name == "unavailable") return ResultOutcome::Unavailable;
+    if (name == "unsupported") return ResultOutcome::Unsupported;
+    if (name == "unknown") return ResultOutcome::Unknown;
+    if (name == "forbidden") return ResultOutcome::Forbidden;
+    if (name == "invalid") return ResultOutcome::Invalid;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(ResultOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(ResultOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, ResultOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, ResultOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kResultOutcomeNames = {"data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"};
+
+enum class InventoryOutcome : std::int32_t {
+    Page = 1,
+    Gap = 2,
+    Forbidden = 3,
+    Invalid = 4,
+    Unavailable = 5,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(InventoryOutcome value) {
+    switch (value) {
+        case InventoryOutcome::Page: return "page";
+        case InventoryOutcome::Gap: return "gap";
+        case InventoryOutcome::Forbidden: return "forbidden";
+        case InventoryOutcome::Invalid: return "invalid";
+        case InventoryOutcome::Unavailable: return "unavailable";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<InventoryOutcome> parse_inventory_outcome(std::string_view name) {
+    if (name == "page") return InventoryOutcome::Page;
+    if (name == "gap") return InventoryOutcome::Gap;
+    if (name == "forbidden") return InventoryOutcome::Forbidden;
+    if (name == "invalid") return InventoryOutcome::Invalid;
+    if (name == "unavailable") return InventoryOutcome::Unavailable;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(InventoryOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(InventoryOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, InventoryOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, InventoryOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kInventoryOutcomeNames = {"page", "gap", "forbidden", "invalid", "unavailable"};
+
+enum class OperatorCancellationOutcome : std::int32_t {
+    Requested = 1,
+    AlreadyTerminal = 2,
+    Unknown = 3,
+    Forbidden = 4,
+    Invalid = 5,
+    Unavailable = 6,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(OperatorCancellationOutcome value) {
+    switch (value) {
+        case OperatorCancellationOutcome::Requested: return "requested";
+        case OperatorCancellationOutcome::AlreadyTerminal: return "already_terminal";
+        case OperatorCancellationOutcome::Unknown: return "unknown";
+        case OperatorCancellationOutcome::Forbidden: return "forbidden";
+        case OperatorCancellationOutcome::Invalid: return "invalid";
+        case OperatorCancellationOutcome::Unavailable: return "unavailable";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<OperatorCancellationOutcome> parse_operator_cancellation_outcome(std::string_view name) {
+    if (name == "requested") return OperatorCancellationOutcome::Requested;
+    if (name == "already_terminal") return OperatorCancellationOutcome::AlreadyTerminal;
+    if (name == "unknown") return OperatorCancellationOutcome::Unknown;
+    if (name == "forbidden") return OperatorCancellationOutcome::Forbidden;
+    if (name == "invalid") return OperatorCancellationOutcome::Invalid;
+    if (name == "unavailable") return OperatorCancellationOutcome::Unavailable;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(OperatorCancellationOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(OperatorCancellationOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, OperatorCancellationOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, OperatorCancellationOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kOperatorCancellationOutcomeNames = {"requested", "already_terminal", "unknown", "forbidden", "invalid", "unavailable"};
+
+inline const std::vector<std::string> kServiceErrorCodeNames = {"handler_error", "invalid_result", "unknown_version", "unknown_service", "unknown_method", "wrong_mode", "forbidden"};
+inline constexpr std::string_view kServiceErrorCodeHandlerError = "handler_error";
+inline constexpr std::string_view kServiceErrorCodeInvalidResult = "invalid_result";
+inline constexpr std::string_view kServiceErrorCodeUnknownVersion = "unknown_version";
+inline constexpr std::string_view kServiceErrorCodeUnknownService = "unknown_service";
+inline constexpr std::string_view kServiceErrorCodeUnknownMethod = "unknown_method";
+inline constexpr std::string_view kServiceErrorCodeWrongMode = "wrong_mode";
+inline constexpr std::string_view kServiceErrorCodeForbidden = "forbidden";
+
+inline const std::vector<std::string> kAdmissionGuarantees = {"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"};
+
+inline const std::vector<std::string> kAcceptanceErrorCodes = {"forbidden"};
+
+inline const std::vector<std::string> kResourceActions = {"abstraction.job/acceptance.submit", "abstraction.job/acceptance.cancel", "abstraction.job/inventory.read"};
+
+// Stable SDK key in an owner-issued history epoch. Scope is authenticated
+// caller plus this service contract, never a caller-provided principal. Persist
+// before send for restart recovery. Attempt is a nonnegative explicit retry
+// number for the same key and epoch; zero is the original request. Attempt N+1
+// is eligible only after attempt N failed terminally or was sealed (JOB-A7).
+struct RequestIdentity {
+    std::string key;
+    std::string history_epoch;
+    std::int64_t attempt = 0;
+};
+
+// Opaque kind-specific specification bytes, not a second tagged job Record.
+// Equality includes kind, exact spec bytes and the set of required guarantees.
+// Credentials are supplied at the authorized service boundary. Label is the
+// caller's display text for the operation, 1 to 256 UTF-8 bytes after trimming
+// on one line; an empty label is absent, and an invalid one makes Submit
+// invalid. It is outside equality and fixed at acceptance (JOB-A12).
+struct Submission {
+    RequestIdentity identity;
+    std::string kind;
+    std::vector<std::uint8_t> spec;
+    std::vector<std::string> required_guarantees;
+    std::string label;
+};
+
+// Recoverable acceptance evidence. Retention is a minimum duration from
+// original acceptance, never renewed by replay. Expiry does not end work,
+// transfer ownership or authorize duplicate execution. IDs confer no authority.
+struct Receipt {
+    RequestIdentity identity;
+    std::string logical_owner;
+    std::string operation_id;
+    std::vector<std::string> accepted_guarantees;
+    std::int64_t history_retention_ms = 0;
+};
+
+// Accepted requires a receipt; other outcomes forbid one. Definite
+// nonacceptance requires authoritative sealed evidence preventing any delayed
+// acceptance of this identity. Absence, timeout, expired history and access
+// denial are insufficient. Unavailable means a required policy decision could
+// not be obtained: no admission effect and no seal were recorded, and the same
+// identity may be presented again (JOB-A9).
+struct AcceptanceResult {
+    AcceptanceOutcome outcome{};
+    std::optional<Receipt> receipt;
+    std::string reason;
+};
+
+// Owner-issued acceptance epoch and minimum reconciliation retention. After
+// closing an epoch the owner fences all its submissions, including delayed
+// ones. This does not assert that old unknown work was never accepted. Result
+// retention is the provider's declared minimum time, in milliseconds after
+// completion, that complete result bytes stay readable; zero declares none
+// (JOB-A11).
+struct HistoryWindow {
+    std::string logical_owner;
+    std::string history_epoch;
+    std::int64_t minimum_retention_ms = 0;
+    std::int64_t result_retention_ms = 0;
+};
+
+// Requested acknowledges cancellation intent, not stopped effects. Completion
+// may win the race; observe the existing operation for its terminal result.
+// Unavailable records no intent because a required policy decision could not be
+// obtained; the request may be repeated.
+struct CancellationResult {
+    CancellationOutcome outcome{};
+};
+
+// Advisory nonnegative progress. Zero total means unknown. Progress does not
+// authorize delivery or imply completion.
+struct WorkProgress {
+    std::int64_t done = 0;
+    std::int64_t total = 0;
+};
+
+// Last-attempt failure. Unknown classification remains unknown; do not infer it
+// from message text. Retryable failure can coexist with pending work. Permanent
+// classification means the provider will not try this operation again and its
+// state is failed. Cause is the provider's typed reason when known; empty means
+// unreported, and an unrecognized cause is treated as other.
+struct WorkFailure {
+    FailureClass classification{};
+    std::string message;
+    std::string cause;
+};
+
+// Receipt binds original request and logical owner. Cancellation requested is
+// intent, not stopped effects. Progress and last-attempt failure are advisory;
+// no provider paths are exposed, and the label is display text, never a path or
+// a result file name. Label is the stored display label: the caller's, or one
+// the kind's provider derived at acceptance, when label_derived is true. It is
+// absent when neither exists (JOB-A12). Waiting is the word the kind's provider
+// reports for accepted, unfinished work held by a condition the submission set,
+// such as network:metered; empty when nothing holds it. It is advisory and
+// never a failure (JOB-A15).
+struct OperationSnapshot {
+    Receipt receipt;
+    WorkState state{};
+    WorkProgress progress;
+    bool cancellation_requested = false;
+    std::optional<WorkFailure> failure;
+    std::string label;
+    bool label_derived = false;
+    std::string waiting;
+};
+
+// Exactly observed carries a snapshot; all other outcomes forbid it. Absent
+// identities are unknown and observation never seals them. Definite
+// nonacceptance requires an existing authoritative seal. Already accepted
+// journals may be recovered. Unavailable means a required policy decision could
+// not be obtained and no state was read or changed (JOB-A9).
+struct ObservationResult {
+    ObservationOutcome outcome{};
+    std::optional<OperationSnapshot> snapshot;
+};
+
+// Complete immutable result bytes bound to the original receipt. Offset equals
+// requested nonnegative offset and is at most nonnegative total. Data length is
+// at most requested max_bytes and total-offset. EOF is true exactly when offset
+// plus data length equals total, including an empty complete result. Data is
+// nonempty unless offset equals total and EOF is true. Missing data and errors
+// never imply EOF.
+struct ResultChunk {
+    Receipt receipt;
+    std::int64_t offset = 0;
+    std::int64_t total = 0;
+    std::vector<std::uint8_t> data;
+    bool eof = false;
+};
+
+// Exactly data carries a chunk; other outcomes forbid it. Only complete
+// immutable results produce data. Incomplete work is not_ready; missing
+// completed bytes are unavailable. Unsupported access, unknown identity,
+// forbidden access and invalid bounds remain distinct.
+struct ResultRead {
+    ResultOutcome outcome{};
+    std::optional<ResultChunk> chunk;
+};
+
+// Caller-scoped accepted-operation observations without paths. Only page
+// carries snapshots. A noncomplete page always has a next cursor, even when no
+// own operations were scanned. Complete pages have empty next. Refusals carry
+// no snapshots, empty next and complete=false. Directory traversal is a weak
+// live view: concurrent insertions/removals can be omitted or repeated, not a
+// stable transaction snapshot. An unchanged tree is fully traversable. Large
+// failure diagnostics may be replaced by a bounded generic message.
+struct InventoryPage {
+    InventoryOutcome outcome{};
+    std::vector<OperationSnapshot> snapshots;
+    std::string next;
+    bool complete = false;
+};
+
+// Requested acknowledges cancellation intent recorded on the named operation,
+// whichever scope accepted it; it is not stopped effects. Already_terminal
+// names an operation that ended. Unknown names no operation of this provider.
+// Invalid is a malformed operation id. Forbidden is an evaluated refusal of the
+// caller's rule. Unavailable records no intent because the decision or the
+// store could not be reached (JOB-A13).
+struct OperatorCancellation {
+    OperatorCancellationOutcome outcome{};
+};
+
+// Codec machinery. Nothing here is API; it may change in any release.
+namespace detail {
+
 inline void esc(std::string& out, const std::string& s);
 
 inline void esc_byte(std::string& out, unsigned char c) {
@@ -56,6 +583,8 @@ inline void strs(std::string& out, const std::vector<std::string>& v, int depth)
     pad(out, depth);
     out += ']';
 }
+
+
 
 inline bool ws(unsigned char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
@@ -132,16 +661,6 @@ inline void esc(std::string& out, const std::string& s) {
     out += '"';
 }
 
-class Refusal : public std::runtime_error {
-public:
-    Refusal(const char* word, std::size_t offset)
-        : std::runtime_error(std::string("refused: ") + word + " at byte " + std::to_string(offset)),
-          word(word),
-          offset(offset) {}
-    const char* word;
-    std::size_t offset;
-};
-
 template <typename T>
 inline void enc_list(std::string& out, const std::vector<T>& v, int depth,
                      void (*enc)(std::string&, const T&, int)) {
@@ -159,173 +678,6 @@ inline void enc_list(std::string& out, const std::vector<T>& v, int depth,
 
 inline std::string encode_binary(const std::vector<std::uint8_t>&);
 inline std::vector<std::uint8_t> decode_binary(const std::string&);
-
-inline const std::vector<std::string> kOutcomeNames = {"accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"};
-inline const std::string kOutcomeUnknown = "refuse";
-
-inline const std::vector<std::string> kCancellationOutcomeNames = {"requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"};
-inline const std::string kCancellationOutcomeUnknown = "refuse";
-
-inline const std::vector<std::string> kWorkStateNames = {"pending", "running", "transferred", "complete", "failed", "cancelled"};
-inline const std::string kWorkStateUnknown = "refuse";
-
-inline const std::vector<std::string> kFailureClassNames = {"retryable", "permanent", "unknown"};
-inline const std::string kFailureClassUnknown = "refuse";
-
-inline const std::vector<std::string> kFailureCauseNames = {"other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"};
-inline const std::string kFailureCauseUnknown = "grant";
-
-inline const std::vector<std::string> kObservationOutcomeNames = {"observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"};
-inline const std::string kObservationOutcomeUnknown = "refuse";
-
-inline const std::vector<std::string> kResultOutcomeNames = {"data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"};
-inline const std::string kResultOutcomeUnknown = "refuse";
-
-inline const std::vector<std::string> kInventoryOutcomeNames = {"page", "gap", "forbidden", "invalid", "unavailable"};
-inline const std::string kInventoryOutcomeUnknown = "refuse";
-
-inline const std::vector<std::string> kAdmissionGuarantees = {"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"};
-
-// Stable SDK key in an owner-issued history epoch. Scope is authenticated
-// caller plus this service contract, never a caller-provided principal. Persist
-// before send for restart recovery. Attempt is a nonnegative explicit retry
-// number for the same key and epoch; zero is the original request. Attempt N+1
-// is eligible only after attempt N failed terminally or was sealed (JOB-A7).
-struct RequestIdentity {
-    std::string key;
-    std::string history_epoch;
-    std::int64_t attempt = 0;
-};
-
-// Opaque kind-specific specification bytes, not a second tagged job Record.
-// Equality includes kind, exact spec bytes and the set of required guarantees.
-// Credentials are supplied at the authorized service boundary.
-struct Submission {
-    RequestIdentity identity;
-    std::string kind;
-    std::vector<std::uint8_t> spec;
-    std::vector<std::string> required_guarantees;
-};
-
-// Recoverable acceptance evidence. Retention is a minimum duration from
-// original acceptance, never renewed by replay. Expiry does not end work,
-// transfer ownership or authorize duplicate execution. IDs confer no authority.
-struct Receipt {
-    RequestIdentity identity;
-    std::string logical_owner;
-    std::string operation_id;
-    std::vector<std::string> accepted_guarantees;
-    std::int64_t history_retention_ms = 0;
-};
-
-// Accepted requires a receipt; other outcomes forbid one. Definite
-// nonacceptance requires authoritative sealed evidence preventing any delayed
-// acceptance of this identity. Absence, timeout, expired history and access
-// denial are insufficient. Unavailable means a required policy decision could
-// not be obtained: no admission effect and no seal were recorded, and the same
-// identity may be presented again (JOB-A9).
-struct AcceptanceResult {
-    std::string outcome;
-    std::optional<Receipt> receipt;
-    std::string reason;
-};
-
-// Owner-issued acceptance epoch and minimum reconciliation retention. After
-// closing an epoch the owner fences all its submissions, including delayed
-// ones. This does not assert that old unknown work was never accepted. Result
-// retention is the provider's declared minimum time, in milliseconds after
-// completion, that complete result bytes stay readable; zero declares none
-// (JOB-A11).
-struct HistoryWindow {
-    std::string logical_owner;
-    std::string history_epoch;
-    std::int64_t minimum_retention_ms = 0;
-    std::int64_t result_retention_ms = 0;
-};
-
-// Requested acknowledges cancellation intent, not stopped effects. Completion
-// may win the race; observe the existing operation for its terminal result.
-// Unavailable records no intent because a required policy decision could not be
-// obtained; the request may be repeated.
-struct CancellationResult {
-    std::string outcome;
-};
-
-// Advisory nonnegative progress. Zero total means unknown. Progress does not
-// authorize delivery or imply completion.
-struct WorkProgress {
-    std::int64_t done = 0;
-    std::int64_t total = 0;
-};
-
-// Last-attempt failure. Unknown classification remains unknown; do not infer it
-// from message text. Retryable failure can coexist with pending work. Permanent
-// classification means the provider will not try this operation again and its
-// state is failed. Cause is the provider's typed reason when known; empty means
-// unreported, and an unrecognized cause is treated as other.
-struct WorkFailure {
-    std::string classification;
-    std::string message;
-    std::string cause;
-};
-
-// Receipt binds original request and logical owner. Cancellation requested is
-// intent, not stopped effects. Progress and last-attempt failure are advisory;
-// no provider paths are exposed.
-struct OperationSnapshot {
-    Receipt receipt;
-    std::string state;
-    WorkProgress progress;
-    bool cancellation_requested = false;
-    std::optional<WorkFailure> failure;
-};
-
-// Exactly observed carries a snapshot; all other outcomes forbid it. Absent
-// identities are unknown and observation never seals them. Definite
-// nonacceptance requires an existing authoritative seal. Already accepted
-// journals may be recovered. Unavailable means a required policy decision could
-// not be obtained and no state was read or changed (JOB-A9).
-struct ObservationResult {
-    std::string outcome;
-    std::optional<OperationSnapshot> snapshot;
-};
-
-// Complete immutable result bytes bound to the original receipt. Offset equals
-// requested nonnegative offset and is at most nonnegative total. Data length is
-// at most requested max_bytes and total-offset. EOF is true exactly when offset
-// plus data length equals total, including an empty complete result. Data is
-// nonempty unless offset equals total and EOF is true. Missing data and errors
-// never imply EOF.
-struct ResultChunk {
-    Receipt receipt;
-    std::int64_t offset = 0;
-    std::int64_t total = 0;
-    std::vector<std::uint8_t> data;
-    bool eof = false;
-};
-
-// Exactly data carries a chunk; other outcomes forbid it. Only complete
-// immutable results produce data. Incomplete work is not_ready; missing
-// completed bytes are unavailable. Unsupported access, unknown identity,
-// forbidden access and invalid bounds remain distinct.
-struct ResultRead {
-    std::string outcome;
-    std::optional<ResultChunk> chunk;
-};
-
-// Caller-scoped accepted-operation observations without paths. Only page
-// carries snapshots. A noncomplete page always has a next cursor, even when no
-// own operations were scanned. Complete pages have empty next. Refusals carry
-// no snapshots, empty next and complete=false. Directory traversal is a weak
-// live view: concurrent insertions/removals can be omitted or repeated, not a
-// stable transaction snapshot. An unchanged tree is fully traversable. Large
-// failure diagnostics may be replaced by a bounded generic message.
-struct InventoryPage {
-    std::string outcome;
-    std::vector<OperationSnapshot> snapshots;
-    std::string next;
-    bool complete = false;
-};
 
 struct OARecoverableAcceptanceGetHistoryWindowArguments {
 };
@@ -355,6 +707,15 @@ struct OAOperationControlReadResultArguments {
 struct OAJobInventoryListWorkArguments {
     std::string cursor;
     std::int64_t limit = 0;
+};
+
+struct OAJobOperatorListAccountWorkArguments {
+    std::string cursor;
+    std::int64_t limit = 0;
+};
+
+struct OAJobOperatorCancelOperationArguments {
+    std::string operation_id;
 };
 
 struct OAServiceFrame {
@@ -405,7 +766,50 @@ struct OAJobInventoryListWorkResult {
     InventoryPage value;
 };
 
-inline void enc_requestidentity(std::string& out, const RequestIdentity& v, int depth) {
+struct OAJobOperatorListAccountWorkResult {
+    InventoryPage value;
+};
+
+struct OAJobOperatorCancelOperationResult {
+    OperatorCancellation value;
+};
+inline void enc_request_identity(std::string&, const RequestIdentity&, int);
+inline void enc_submission(std::string&, const Submission&, int);
+inline void enc_receipt(std::string&, const Receipt&, int);
+inline void enc_acceptance_result(std::string&, const AcceptanceResult&, int);
+inline void enc_history_window(std::string&, const HistoryWindow&, int);
+inline void enc_cancellation_result(std::string&, const CancellationResult&, int);
+inline void enc_work_progress(std::string&, const WorkProgress&, int);
+inline void enc_work_failure(std::string&, const WorkFailure&, int);
+inline void enc_operation_snapshot(std::string&, const OperationSnapshot&, int);
+inline void enc_observation_result(std::string&, const ObservationResult&, int);
+inline void enc_result_chunk(std::string&, const ResultChunk&, int);
+inline void enc_result_read(std::string&, const ResultRead&, int);
+inline void enc_inventory_page(std::string&, const InventoryPage&, int);
+inline void enc_operator_cancellation(std::string&, const OperatorCancellation&, int);
+inline void enc_oa_recoverable_acceptance_get_history_window_arguments(std::string&, const OARecoverableAcceptanceGetHistoryWindowArguments&, int);
+inline void enc_oa_recoverable_acceptance_submit_arguments(std::string&, const OARecoverableAcceptanceSubmitArguments&, int);
+inline void enc_oa_recoverable_acceptance_reconcile_arguments(std::string&, const OARecoverableAcceptanceReconcileArguments&, int);
+inline void enc_oa_recoverable_acceptance_cancel_work_arguments(std::string&, const OARecoverableAcceptanceCancelWorkArguments&, int);
+inline void enc_oa_operation_control_observe_work_arguments(std::string&, const OAOperationControlObserveWorkArguments&, int);
+inline void enc_oa_operation_control_read_result_arguments(std::string&, const OAOperationControlReadResultArguments&, int);
+inline void enc_oa_job_inventory_list_work_arguments(std::string&, const OAJobInventoryListWorkArguments&, int);
+inline void enc_oa_job_operator_list_account_work_arguments(std::string&, const OAJobOperatorListAccountWorkArguments&, int);
+inline void enc_oa_job_operator_cancel_operation_arguments(std::string&, const OAJobOperatorCancelOperationArguments&, int);
+inline void enc_oa_service_frame(std::string&, const OAServiceFrame&, int);
+inline void enc_oa_service_reply(std::string&, const OAServiceReply&, int);
+inline void enc_oa_service_error(std::string&, const OAServiceError&, int);
+inline void enc_oa_recoverable_acceptance_get_history_window_result(std::string&, const OARecoverableAcceptanceGetHistoryWindowResult&, int);
+inline void enc_oa_recoverable_acceptance_submit_result(std::string&, const OARecoverableAcceptanceSubmitResult&, int);
+inline void enc_oa_recoverable_acceptance_reconcile_result(std::string&, const OARecoverableAcceptanceReconcileResult&, int);
+inline void enc_oa_recoverable_acceptance_cancel_work_result(std::string&, const OARecoverableAcceptanceCancelWorkResult&, int);
+inline void enc_oa_operation_control_observe_work_result(std::string&, const OAOperationControlObserveWorkResult&, int);
+inline void enc_oa_operation_control_read_result_result(std::string&, const OAOperationControlReadResultResult&, int);
+inline void enc_oa_job_inventory_list_work_result(std::string&, const OAJobInventoryListWorkResult&, int);
+inline void enc_oa_job_operator_list_account_work_result(std::string&, const OAJobOperatorListAccountWorkResult&, int);
+inline void enc_oa_job_operator_cancel_operation_result(std::string&, const OAJobOperatorCancelOperationResult&, int);
+
+inline void enc_request_identity(std::string& out, const RequestIdentity& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -437,7 +841,7 @@ inline void enc_submission(std::string& out, const Submission& v, int depth) {
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -456,6 +860,14 @@ inline void enc_submission(std::string& out, const Submission& v, int depth) {
     esc(out, "required_guarantees");
     out += ": ";
     strs(out, v.required_guarantees, depth + 1);
+    if (!v.label.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "label");
+        out += ": ";
+        esc(out, v.label);
+    }
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -467,7 +879,7 @@ inline void enc_receipt(std::string& out, const Receipt& v, int depth) {
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -497,14 +909,14 @@ inline void enc_receipt(std::string& out, const Receipt& v, int depth) {
     out += '}';
 }
 
-inline void enc_acceptanceresult(std::string& out, const AcceptanceResult& v, int depth) {
-    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
+inline void enc_acceptance_result(std::string& out, const AcceptanceResult& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "outcome");
     out += ": ";
-    esc(out, v.outcome);
+    esc(out, std::string(wire_name(v.outcome)));
     if (v.receipt.has_value()) {
         out += ',';
         out += '\n';
@@ -524,7 +936,7 @@ inline void enc_acceptanceresult(std::string& out, const AcceptanceResult& v, in
     out += '}';
 }
 
-inline void enc_historywindow(std::string& out, const HistoryWindow& v, int depth) {
+inline void enc_history_window(std::string& out, const HistoryWindow& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -556,20 +968,20 @@ inline void enc_historywindow(std::string& out, const HistoryWindow& v, int dept
     out += '}';
 }
 
-inline void enc_cancellationresult(std::string& out, const CancellationResult& v, int depth) {
-    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
+inline void enc_cancellation_result(std::string& out, const CancellationResult& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "outcome");
     out += ": ";
-    esc(out, v.outcome);
+    esc(out, std::string(wire_name(v.outcome)));
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_workprogress(std::string& out, const WorkProgress& v, int depth) {
+inline void enc_work_progress(std::string& out, const WorkProgress& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -587,14 +999,14 @@ inline void enc_workprogress(std::string& out, const WorkProgress& v, int depth)
     out += '}';
 }
 
-inline void enc_workfailure(std::string& out, const WorkFailure& v, int depth) {
-    if (v.classification != "retryable" && v.classification != "permanent" && v.classification != "unknown") { throw Refusal("bad_enum",0); }
+inline void enc_work_failure(std::string& out, const WorkFailure& v, int depth) {
+    if (wire_name(v.classification).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "classification");
     out += ": ";
-    esc(out, v.classification);
+    esc(out, std::string(wire_name(v.classification)));
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -614,8 +1026,8 @@ inline void enc_workfailure(std::string& out, const WorkFailure& v, int depth) {
     out += '}';
 }
 
-inline void enc_operationsnapshot(std::string& out, const OperationSnapshot& v, int depth) {
-    if (v.state != "pending" && v.state != "running" && v.state != "transferred" && v.state != "complete" && v.state != "failed" && v.state != "cancelled") { throw Refusal("bad_enum",0); }
+inline void enc_operation_snapshot(std::string& out, const OperationSnapshot& v, int depth) {
+    if (wire_name(v.state).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -627,13 +1039,13 @@ inline void enc_operationsnapshot(std::string& out, const OperationSnapshot& v, 
     pad(out, depth + 1);
     esc(out, "state");
     out += ": ";
-    esc(out, v.state);
+    esc(out, std::string(wire_name(v.state)));
     out += ',';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "progress");
     out += ": ";
-    enc_workprogress(out, v.progress, depth + 1);
+    enc_work_progress(out, v.progress, depth + 1);
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -646,35 +1058,59 @@ inline void enc_operationsnapshot(std::string& out, const OperationSnapshot& v, 
         pad(out, depth + 1);
         esc(out, "failure");
         out += ": ";
-        enc_workfailure(out, *v.failure, depth + 1);
+        enc_work_failure(out, *v.failure, depth + 1);
+    }
+    if (!v.label.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "label");
+        out += ": ";
+        esc(out, v.label);
+    }
+    if (v.label_derived) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "label_derived");
+        out += ": ";
+        out += v.label_derived ? "true" : "false";
+    }
+    if (!v.waiting.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "waiting");
+        out += ": ";
+        esc(out, v.waiting);
     }
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_observationresult(std::string& out, const ObservationResult& v, int depth) {
-    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
+inline void enc_observation_result(std::string& out, const ObservationResult& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "outcome");
     out += ": ";
-    esc(out, v.outcome);
+    esc(out, std::string(wire_name(v.outcome)));
     if (v.snapshot.has_value()) {
         out += ',';
         out += '\n';
         pad(out, depth + 1);
         esc(out, "snapshot");
         out += ": ";
-        enc_operationsnapshot(out, *v.snapshot, depth + 1);
+        enc_operation_snapshot(out, *v.snapshot, depth + 1);
     }
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_resultchunk(std::string& out, const ResultChunk& v, int depth) {
+inline void enc_result_chunk(std::string& out, const ResultChunk& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -710,41 +1146,41 @@ inline void enc_resultchunk(std::string& out, const ResultChunk& v, int depth) {
     out += '}';
 }
 
-inline void enc_resultread(std::string& out, const ResultRead& v, int depth) {
-    if (v.outcome != "data" && v.outcome != "not_ready" && v.outcome != "unavailable" && v.outcome != "unsupported" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid") { throw Refusal("bad_enum",0); }
+inline void enc_result_read(std::string& out, const ResultRead& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "outcome");
     out += ": ";
-    esc(out, v.outcome);
+    esc(out, std::string(wire_name(v.outcome)));
     if (v.chunk.has_value()) {
         out += ',';
         out += '\n';
         pad(out, depth + 1);
         esc(out, "chunk");
         out += ": ";
-        enc_resultchunk(out, *v.chunk, depth + 1);
+        enc_result_chunk(out, *v.chunk, depth + 1);
     }
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_inventorypage(std::string& out, const InventoryPage& v, int depth) {
-    if (v.outcome != "page" && v.outcome != "gap" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { throw Refusal("bad_enum",0); }
+inline void enc_inventory_page(std::string& out, const InventoryPage& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "outcome");
     out += ": ";
-    esc(out, v.outcome);
+    esc(out, std::string(wire_name(v.outcome)));
     out += ',';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "snapshots");
     out += ": ";
-    enc_list<OperationSnapshot>(out, v.snapshots, depth + 1, enc_operationsnapshot);
+    enc_list<OperationSnapshot>(out, v.snapshots, depth + 1, enc_operation_snapshot);
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -762,12 +1198,25 @@ inline void enc_inventorypage(std::string& out, const InventoryPage& v, int dept
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancegethistorywindowarguments(std::string& out, const OARecoverableAcceptanceGetHistoryWindowArguments& v, int depth) {
+inline void enc_operator_cancellation(std::string& out, const OperatorCancellation& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "outcome");
+    out += ": ";
+    esc(out, std::string(wire_name(v.outcome)));
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_recoverable_acceptance_get_history_window_arguments(std::string& out, const OARecoverableAcceptanceGetHistoryWindowArguments& v, int depth) {
     out += '{';
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancesubmitarguments(std::string& out, const OARecoverableAcceptanceSubmitArguments& v, int depth) {
+inline void enc_oa_recoverable_acceptance_submit_arguments(std::string& out, const OARecoverableAcceptanceSubmitArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -779,49 +1228,49 @@ inline void enc_oarecoverableacceptancesubmitarguments(std::string& out, const O
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancereconcilearguments(std::string& out, const OARecoverableAcceptanceReconcileArguments& v, int depth) {
+inline void enc_oa_recoverable_acceptance_reconcile_arguments(std::string& out, const OARecoverableAcceptanceReconcileArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancecancelworkarguments(std::string& out, const OARecoverableAcceptanceCancelWorkArguments& v, int depth) {
+inline void enc_oa_recoverable_acceptance_cancel_work_arguments(std::string& out, const OARecoverableAcceptanceCancelWorkArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oaoperationcontrolobserveworkarguments(std::string& out, const OAOperationControlObserveWorkArguments& v, int depth) {
+inline void enc_oa_operation_control_observe_work_arguments(std::string& out, const OAOperationControlObserveWorkArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oaoperationcontrolreadresultarguments(std::string& out, const OAOperationControlReadResultArguments& v, int depth) {
+inline void enc_oa_operation_control_read_result_arguments(std::string& out, const OAOperationControlReadResultArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "identity");
     out += ": ";
-    enc_requestidentity(out, v.identity, depth + 1);
+    enc_request_identity(out, v.identity, depth + 1);
     out += ',';
     out += '\n';
     pad(out, depth + 1);
@@ -839,7 +1288,7 @@ inline void enc_oaoperationcontrolreadresultarguments(std::string& out, const OA
     out += '}';
 }
 
-inline void enc_oajobinventorylistworkarguments(std::string& out, const OAJobInventoryListWorkArguments& v, int depth) {
+inline void enc_oa_job_inventory_list_work_arguments(std::string& out, const OAJobInventoryListWorkArguments& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -857,7 +1306,37 @@ inline void enc_oajobinventorylistworkarguments(std::string& out, const OAJobInv
     out += '}';
 }
 
-inline void enc_oaserviceframe(std::string& out, const OAServiceFrame& v, int depth) {
+inline void enc_oa_job_operator_list_account_work_arguments(std::string& out, const OAJobOperatorListAccountWorkArguments& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "cursor");
+    out += ": ";
+    esc(out, v.cursor);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "limit");
+    out += ": ";
+    num(out, v.limit);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_job_operator_cancel_operation_arguments(std::string& out, const OAJobOperatorCancelOperationArguments& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "operation_id");
+    out += ": ";
+    esc(out, v.operation_id);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_service_frame(std::string& out, const OAServiceFrame& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -887,7 +1366,7 @@ inline void enc_oaserviceframe(std::string& out, const OAServiceFrame& v, int de
     out += '}';
 }
 
-inline void enc_oaservicereply(std::string& out, const OAServiceReply& v, int depth) {
+inline void enc_oa_service_reply(std::string& out, const OAServiceReply& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -923,7 +1402,7 @@ inline void enc_oaservicereply(std::string& out, const OAServiceReply& v, int de
     out += '}';
 }
 
-inline void enc_oaserviceerror(std::string& out, const OAServiceError& v, int depth) {
+inline void enc_oa_service_error(std::string& out, const OAServiceError& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
@@ -941,101 +1420,116 @@ inline void enc_oaserviceerror(std::string& out, const OAServiceError& v, int de
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancegethistorywindowresult(std::string& out, const OARecoverableAcceptanceGetHistoryWindowResult& v, int depth) {
+inline void enc_oa_recoverable_acceptance_get_history_window_result(std::string& out, const OARecoverableAcceptanceGetHistoryWindowResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_historywindow(out, v.value, depth + 1);
+    enc_history_window(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancesubmitresult(std::string& out, const OARecoverableAcceptanceSubmitResult& v, int depth) {
+inline void enc_oa_recoverable_acceptance_submit_result(std::string& out, const OARecoverableAcceptanceSubmitResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_acceptanceresult(out, v.value, depth + 1);
+    enc_acceptance_result(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancereconcileresult(std::string& out, const OARecoverableAcceptanceReconcileResult& v, int depth) {
+inline void enc_oa_recoverable_acceptance_reconcile_result(std::string& out, const OARecoverableAcceptanceReconcileResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_acceptanceresult(out, v.value, depth + 1);
+    enc_acceptance_result(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oarecoverableacceptancecancelworkresult(std::string& out, const OARecoverableAcceptanceCancelWorkResult& v, int depth) {
+inline void enc_oa_recoverable_acceptance_cancel_work_result(std::string& out, const OARecoverableAcceptanceCancelWorkResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_cancellationresult(out, v.value, depth + 1);
+    enc_cancellation_result(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oaoperationcontrolobserveworkresult(std::string& out, const OAOperationControlObserveWorkResult& v, int depth) {
+inline void enc_oa_operation_control_observe_work_result(std::string& out, const OAOperationControlObserveWorkResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_observationresult(out, v.value, depth + 1);
+    enc_observation_result(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oaoperationcontrolreadresultresult(std::string& out, const OAOperationControlReadResultResult& v, int depth) {
+inline void enc_oa_operation_control_read_result_result(std::string& out, const OAOperationControlReadResultResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_resultread(out, v.value, depth + 1);
+    enc_result_read(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline void enc_oajobinventorylistworkresult(std::string& out, const OAJobInventoryListWorkResult& v, int depth) {
+inline void enc_oa_job_inventory_list_work_result(std::string& out, const OAJobInventoryListWorkResult& v, int depth) {
     out += '{';
     out += '\n';
     pad(out, depth + 1);
     esc(out, "value");
     out += ": ";
-    enc_inventorypage(out, v.value, depth + 1);
+    enc_inventory_page(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
 }
 
-inline std::string encode(const AcceptanceResult& v) {
-    std::string out;
-    enc_acceptanceresult(out, v, 0);
+inline void enc_oa_job_operator_list_account_work_result(std::string& out, const OAJobOperatorListAccountWorkResult& v, int depth) {
+    out += '{';
     out += '\n';
-    return out;
+    pad(out, depth + 1);
+    esc(out, "value");
+    out += ": ";
+    enc_inventory_page(out, v.value, depth + 1);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_job_operator_cancel_operation_result(std::string& out, const OAJobOperatorCancelOperationResult& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "value");
+    out += ": ";
+    enc_operator_cancellation(out, v.value, depth + 1);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
 }
 
 inline constexpr int kDepthLimit = 64;
 inline constexpr std::size_t kI64Digits = 19;
-
-
 
 inline void append_rune(std::string& out, std::uint32_t cp) {
     if (cp < 0x80) {
@@ -1351,38 +1845,43 @@ inline std::vector<T> decode_list(Reader& r, T (*elem)(Reader&)) {
     return out;
 }
 
-inline RequestIdentity decode_requestidentity(Reader& r);
+inline RequestIdentity decode_request_identity(Reader& r);
 inline Submission decode_submission(Reader& r);
 inline Receipt decode_receipt(Reader& r);
-inline AcceptanceResult decode_acceptanceresult(Reader& r);
-inline HistoryWindow decode_historywindow(Reader& r);
-inline CancellationResult decode_cancellationresult(Reader& r);
-inline WorkProgress decode_workprogress(Reader& r);
-inline WorkFailure decode_workfailure(Reader& r);
-inline OperationSnapshot decode_operationsnapshot(Reader& r);
-inline ObservationResult decode_observationresult(Reader& r);
-inline ResultChunk decode_resultchunk(Reader& r);
-inline ResultRead decode_resultread(Reader& r);
-inline InventoryPage decode_inventorypage(Reader& r);
-inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oarecoverableacceptancegethistorywindowarguments(Reader& r);
-inline OARecoverableAcceptanceSubmitArguments decode_oarecoverableacceptancesubmitarguments(Reader& r);
-inline OARecoverableAcceptanceReconcileArguments decode_oarecoverableacceptancereconcilearguments(Reader& r);
-inline OARecoverableAcceptanceCancelWorkArguments decode_oarecoverableacceptancecancelworkarguments(Reader& r);
-inline OAOperationControlObserveWorkArguments decode_oaoperationcontrolobserveworkarguments(Reader& r);
-inline OAOperationControlReadResultArguments decode_oaoperationcontrolreadresultarguments(Reader& r);
-inline OAJobInventoryListWorkArguments decode_oajobinventorylistworkarguments(Reader& r);
-inline OAServiceFrame decode_oaserviceframe(Reader& r);
-inline OAServiceReply decode_oaservicereply(Reader& r);
-inline OAServiceError decode_oaserviceerror(Reader& r);
-inline OARecoverableAcceptanceGetHistoryWindowResult decode_oarecoverableacceptancegethistorywindowresult(Reader& r);
-inline OARecoverableAcceptanceSubmitResult decode_oarecoverableacceptancesubmitresult(Reader& r);
-inline OARecoverableAcceptanceReconcileResult decode_oarecoverableacceptancereconcileresult(Reader& r);
-inline OARecoverableAcceptanceCancelWorkResult decode_oarecoverableacceptancecancelworkresult(Reader& r);
-inline OAOperationControlObserveWorkResult decode_oaoperationcontrolobserveworkresult(Reader& r);
-inline OAOperationControlReadResultResult decode_oaoperationcontrolreadresultresult(Reader& r);
-inline OAJobInventoryListWorkResult decode_oajobinventorylistworkresult(Reader& r);
+inline AcceptanceResult decode_acceptance_result(Reader& r);
+inline HistoryWindow decode_history_window(Reader& r);
+inline CancellationResult decode_cancellation_result(Reader& r);
+inline WorkProgress decode_work_progress(Reader& r);
+inline WorkFailure decode_work_failure(Reader& r);
+inline OperationSnapshot decode_operation_snapshot(Reader& r);
+inline ObservationResult decode_observation_result(Reader& r);
+inline ResultChunk decode_result_chunk(Reader& r);
+inline ResultRead decode_result_read(Reader& r);
+inline InventoryPage decode_inventory_page(Reader& r);
+inline OperatorCancellation decode_operator_cancellation(Reader& r);
+inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oa_recoverable_acceptance_get_history_window_arguments(Reader& r);
+inline OARecoverableAcceptanceSubmitArguments decode_oa_recoverable_acceptance_submit_arguments(Reader& r);
+inline OARecoverableAcceptanceReconcileArguments decode_oa_recoverable_acceptance_reconcile_arguments(Reader& r);
+inline OARecoverableAcceptanceCancelWorkArguments decode_oa_recoverable_acceptance_cancel_work_arguments(Reader& r);
+inline OAOperationControlObserveWorkArguments decode_oa_operation_control_observe_work_arguments(Reader& r);
+inline OAOperationControlReadResultArguments decode_oa_operation_control_read_result_arguments(Reader& r);
+inline OAJobInventoryListWorkArguments decode_oa_job_inventory_list_work_arguments(Reader& r);
+inline OAJobOperatorListAccountWorkArguments decode_oa_job_operator_list_account_work_arguments(Reader& r);
+inline OAJobOperatorCancelOperationArguments decode_oa_job_operator_cancel_operation_arguments(Reader& r);
+inline OAServiceFrame decode_oa_service_frame(Reader& r);
+inline OAServiceReply decode_oa_service_reply(Reader& r);
+inline OAServiceError decode_oa_service_error(Reader& r);
+inline OARecoverableAcceptanceGetHistoryWindowResult decode_oa_recoverable_acceptance_get_history_window_result(Reader& r);
+inline OARecoverableAcceptanceSubmitResult decode_oa_recoverable_acceptance_submit_result(Reader& r);
+inline OARecoverableAcceptanceReconcileResult decode_oa_recoverable_acceptance_reconcile_result(Reader& r);
+inline OARecoverableAcceptanceCancelWorkResult decode_oa_recoverable_acceptance_cancel_work_result(Reader& r);
+inline OAOperationControlObserveWorkResult decode_oa_operation_control_observe_work_result(Reader& r);
+inline OAOperationControlReadResultResult decode_oa_operation_control_read_result_result(Reader& r);
+inline OAJobInventoryListWorkResult decode_oa_job_inventory_list_work_result(Reader& r);
+inline OAJobOperatorListAccountWorkResult decode_oa_job_operator_list_account_work_result(Reader& r);
+inline OAJobOperatorCancelOperationResult decode_oa_job_operator_cancel_operation_result(Reader& r);
 
-inline RequestIdentity decode_requestidentity(Reader& r) {
+inline RequestIdentity decode_request_identity(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -1444,7 +1943,7 @@ inline Submission decode_submission(Reader& r) {
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else if (key == "kind") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
@@ -1457,6 +1956,10 @@ inline Submission decode_submission(Reader& r) {
                 if (seen & 8u) r.refuse("duplicate_field");
                 seen |= 8u;
                 v.required_guarantees = r.str_list();
+            } else if (key == "label") {
+                if (seen & 16u) r.refuse("duplicate_field");
+                seen |= 16u;
+                v.label = r.str();
             } else {
                 r.refuse("unknown_field");
             }
@@ -1491,7 +1994,7 @@ inline Receipt decode_receipt(Reader& r) {
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else if (key == "logical_owner") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
@@ -1523,11 +2026,12 @@ inline Receipt decode_receipt(Reader& r) {
     return v;
 }
 
-inline AcceptanceResult decode_acceptanceresult(Reader& r) {
+inline AcceptanceResult decode_acceptance_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     AcceptanceResult v;
+    std::optional<std::string> wire_outcome;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1542,7 +2046,7 @@ inline AcceptanceResult decode_acceptanceresult(Reader& r) {
             if (key == "outcome") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.outcome = r.str();
+                wire_outcome = r.str();
             } else if (key == "receipt") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
@@ -1563,11 +2067,15 @@ inline AcceptanceResult decode_acceptanceresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 5u) != 5u) r.refuse("missing_field");
-    if (v.outcome != "accepted" && v.outcome != "definitely_not_accepted" && v.outcome != "unknown" && v.outcome != "key_conflict" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
+    if (wire_outcome) {
+        const auto parsed = parse_acceptance_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
     return v;
 }
 
-inline HistoryWindow decode_historywindow(Reader& r) {
+inline HistoryWindow decode_history_window(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -1614,11 +2122,12 @@ inline HistoryWindow decode_historywindow(Reader& r) {
     return v;
 }
 
-inline CancellationResult decode_cancellationresult(Reader& r) {
+inline CancellationResult decode_cancellation_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     CancellationResult v;
+    std::optional<std::string> wire_outcome;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1633,7 +2142,7 @@ inline CancellationResult decode_cancellationresult(Reader& r) {
             if (key == "outcome") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.outcome = r.str();
+                wire_outcome = r.str();
             } else {
                 r.refuse("unknown_field");
             }
@@ -1646,11 +2155,15 @@ inline CancellationResult decode_cancellationresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
-    if (v.outcome != "requested" && v.outcome != "already_terminal" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "unsupported" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
+    if (wire_outcome) {
+        const auto parsed = parse_cancellation_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
     return v;
 }
 
-inline WorkProgress decode_workprogress(Reader& r) {
+inline WorkProgress decode_work_progress(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -1689,11 +2202,12 @@ inline WorkProgress decode_workprogress(Reader& r) {
     return v;
 }
 
-inline WorkFailure decode_workfailure(Reader& r) {
+inline WorkFailure decode_work_failure(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     WorkFailure v;
+    std::optional<std::string> wire_classification;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1708,7 +2222,7 @@ inline WorkFailure decode_workfailure(Reader& r) {
             if (key == "classification") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.classification = r.str();
+                wire_classification = r.str();
             } else if (key == "message") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
@@ -1729,15 +2243,20 @@ inline WorkFailure decode_workfailure(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 3u) != 3u) r.refuse("missing_field");
-    if (v.classification != "retryable" && v.classification != "permanent" && v.classification != "unknown") { r.refuse("bad_enum"); }
+    if (wire_classification) {
+        const auto parsed = parse_failure_class(*wire_classification);
+        if (!parsed) r.refuse("bad_enum");
+        v.classification = *parsed;
+    }
     return v;
 }
 
-inline OperationSnapshot decode_operationsnapshot(Reader& r) {
+inline OperationSnapshot decode_operation_snapshot(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     OperationSnapshot v;
+    std::optional<std::string> wire_state;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1756,11 +2275,11 @@ inline OperationSnapshot decode_operationsnapshot(Reader& r) {
             } else if (key == "state") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
-                v.state = r.str();
+                wire_state = r.str();
             } else if (key == "progress") {
                 if (seen & 4u) r.refuse("duplicate_field");
                 seen |= 4u;
-                v.progress = decode_workprogress(r);
+                v.progress = decode_work_progress(r);
             } else if (key == "cancellation_requested") {
                 if (seen & 8u) r.refuse("duplicate_field");
                 seen |= 8u;
@@ -1768,7 +2287,19 @@ inline OperationSnapshot decode_operationsnapshot(Reader& r) {
             } else if (key == "failure") {
                 if (seen & 16u) r.refuse("duplicate_field");
                 seen |= 16u;
-                v.failure = decode_workfailure(r);
+                v.failure = decode_work_failure(r);
+            } else if (key == "label") {
+                if (seen & 32u) r.refuse("duplicate_field");
+                seen |= 32u;
+                v.label = r.str();
+            } else if (key == "label_derived") {
+                if (seen & 64u) r.refuse("duplicate_field");
+                seen |= 64u;
+                v.label_derived = r.boolean();
+            } else if (key == "waiting") {
+                if (seen & 128u) r.refuse("duplicate_field");
+                seen |= 128u;
+                v.waiting = r.str();
             } else {
                 r.refuse("unknown_field");
             }
@@ -1781,15 +2312,20 @@ inline OperationSnapshot decode_operationsnapshot(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 15u) != 15u) r.refuse("missing_field");
-    if (v.state != "pending" && v.state != "running" && v.state != "transferred" && v.state != "complete" && v.state != "failed" && v.state != "cancelled") { r.refuse("bad_enum"); }
+    if (wire_state) {
+        const auto parsed = parse_work_state(*wire_state);
+        if (!parsed) r.refuse("bad_enum");
+        v.state = *parsed;
+    }
     return v;
 }
 
-inline ObservationResult decode_observationresult(Reader& r) {
+inline ObservationResult decode_observation_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     ObservationResult v;
+    std::optional<std::string> wire_outcome;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1804,11 +2340,11 @@ inline ObservationResult decode_observationresult(Reader& r) {
             if (key == "outcome") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.outcome = r.str();
+                wire_outcome = r.str();
             } else if (key == "snapshot") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
-                v.snapshot = decode_operationsnapshot(r);
+                v.snapshot = decode_operation_snapshot(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -1821,11 +2357,15 @@ inline ObservationResult decode_observationresult(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
-    if (v.outcome != "observed" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "definitely_not_accepted" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
+    if (wire_outcome) {
+        const auto parsed = parse_observation_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
     return v;
 }
 
-inline ResultChunk decode_resultchunk(Reader& r) {
+inline ResultChunk decode_result_chunk(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -1876,11 +2416,12 @@ inline ResultChunk decode_resultchunk(Reader& r) {
     return v;
 }
 
-inline ResultRead decode_resultread(Reader& r) {
+inline ResultRead decode_result_read(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     ResultRead v;
+    std::optional<std::string> wire_outcome;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1895,11 +2436,11 @@ inline ResultRead decode_resultread(Reader& r) {
             if (key == "outcome") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.outcome = r.str();
+                wire_outcome = r.str();
             } else if (key == "chunk") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
-                v.chunk = decode_resultchunk(r);
+                v.chunk = decode_result_chunk(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -1912,15 +2453,20 @@ inline ResultRead decode_resultread(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
-    if (v.outcome != "data" && v.outcome != "not_ready" && v.outcome != "unavailable" && v.outcome != "unsupported" && v.outcome != "unknown" && v.outcome != "forbidden" && v.outcome != "invalid") { r.refuse("bad_enum"); }
+    if (wire_outcome) {
+        const auto parsed = parse_result_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
     return v;
 }
 
-inline InventoryPage decode_inventorypage(Reader& r) {
+inline InventoryPage decode_inventory_page(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
     InventoryPage v;
+    std::optional<std::string> wire_outcome;
     std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
@@ -1935,11 +2481,11 @@ inline InventoryPage decode_inventorypage(Reader& r) {
             if (key == "outcome") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.outcome = r.str();
+                wire_outcome = r.str();
             } else if (key == "snapshots") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
-                v.snapshots = decode_list<OperationSnapshot>(r, decode_operationsnapshot);
+                v.snapshots = decode_list<OperationSnapshot>(r, decode_operation_snapshot);
             } else if (key == "next") {
                 if (seen & 4u) r.refuse("duplicate_field");
                 seen |= 4u;
@@ -1960,11 +2506,56 @@ inline InventoryPage decode_inventorypage(Reader& r) {
     ++r.pos;
     --r.depth;
     if ((seen & 15u) != 15u) r.refuse("missing_field");
-    if (v.outcome != "page" && v.outcome != "gap" && v.outcome != "forbidden" && v.outcome != "invalid" && v.outcome != "unavailable") { r.refuse("bad_enum"); }
+    if (wire_outcome) {
+        const auto parsed = parse_inventory_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
     return v;
 }
 
-inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oarecoverableacceptancegethistorywindowarguments(Reader& r) {
+inline OperatorCancellation decode_operator_cancellation(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OperatorCancellation v;
+    std::optional<std::string> wire_outcome;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "outcome") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                wire_outcome = r.str();
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
+    if (wire_outcome) {
+        const auto parsed = parse_operator_cancellation_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
+    return v;
+}
+
+inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oa_recoverable_acceptance_get_history_window_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -1995,7 +2586,7 @@ inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oarecoverableacce
     return v;
 }
 
-inline OARecoverableAcceptanceSubmitArguments decode_oarecoverableacceptancesubmitarguments(Reader& r) {
+inline OARecoverableAcceptanceSubmitArguments decode_oa_recoverable_acceptance_submit_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2030,7 +2621,7 @@ inline OARecoverableAcceptanceSubmitArguments decode_oarecoverableacceptancesubm
     return v;
 }
 
-inline OARecoverableAcceptanceReconcileArguments decode_oarecoverableacceptancereconcilearguments(Reader& r) {
+inline OARecoverableAcceptanceReconcileArguments decode_oa_recoverable_acceptance_reconcile_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2049,7 +2640,7 @@ inline OARecoverableAcceptanceReconcileArguments decode_oarecoverableacceptancer
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2065,7 +2656,7 @@ inline OARecoverableAcceptanceReconcileArguments decode_oarecoverableacceptancer
     return v;
 }
 
-inline OARecoverableAcceptanceCancelWorkArguments decode_oarecoverableacceptancecancelworkarguments(Reader& r) {
+inline OARecoverableAcceptanceCancelWorkArguments decode_oa_recoverable_acceptance_cancel_work_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2084,7 +2675,7 @@ inline OARecoverableAcceptanceCancelWorkArguments decode_oarecoverableacceptance
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2100,7 +2691,7 @@ inline OARecoverableAcceptanceCancelWorkArguments decode_oarecoverableacceptance
     return v;
 }
 
-inline OAOperationControlObserveWorkArguments decode_oaoperationcontrolobserveworkarguments(Reader& r) {
+inline OAOperationControlObserveWorkArguments decode_oa_operation_control_observe_work_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2119,7 +2710,7 @@ inline OAOperationControlObserveWorkArguments decode_oaoperationcontrolobservewo
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2135,7 +2726,7 @@ inline OAOperationControlObserveWorkArguments decode_oaoperationcontrolobservewo
     return v;
 }
 
-inline OAOperationControlReadResultArguments decode_oaoperationcontrolreadresultarguments(Reader& r) {
+inline OAOperationControlReadResultArguments decode_oa_operation_control_read_result_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2154,7 +2745,7 @@ inline OAOperationControlReadResultArguments decode_oaoperationcontrolreadresult
             if (key == "identity") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.identity = decode_requestidentity(r);
+                v.identity = decode_request_identity(r);
             } else if (key == "offset") {
                 if (seen & 2u) r.refuse("duplicate_field");
                 seen |= 2u;
@@ -2178,7 +2769,7 @@ inline OAOperationControlReadResultArguments decode_oaoperationcontrolreadresult
     return v;
 }
 
-inline OAJobInventoryListWorkArguments decode_oajobinventorylistworkarguments(Reader& r) {
+inline OAJobInventoryListWorkArguments decode_oa_job_inventory_list_work_arguments(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2217,7 +2808,81 @@ inline OAJobInventoryListWorkArguments decode_oajobinventorylistworkarguments(Re
     return v;
 }
 
-inline OAServiceFrame decode_oaserviceframe(Reader& r) {
+inline OAJobOperatorListAccountWorkArguments decode_oa_job_operator_list_account_work_arguments(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAJobOperatorListAccountWorkArguments v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "cursor") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.cursor = r.str();
+            } else if (key == "limit") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.limit = r.integer(INT64_MIN, INT64_MAX);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 3u) != 3u) r.refuse("missing_field");
+    return v;
+}
+
+inline OAJobOperatorCancelOperationArguments decode_oa_job_operator_cancel_operation_arguments(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAJobOperatorCancelOperationArguments v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "operation_id") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.operation_id = r.str();
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
+    return v;
+}
+
+inline OAServiceFrame decode_oa_service_frame(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2264,7 +2929,7 @@ inline OAServiceFrame decode_oaserviceframe(Reader& r) {
     return v;
 }
 
-inline OAServiceReply decode_oaservicereply(Reader& r) {
+inline OAServiceReply decode_oa_service_reply(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2315,7 +2980,7 @@ inline OAServiceReply decode_oaservicereply(Reader& r) {
     return v;
 }
 
-inline OAServiceError decode_oaserviceerror(Reader& r) {
+inline OAServiceError decode_oa_service_error(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2354,7 +3019,7 @@ inline OAServiceError decode_oaserviceerror(Reader& r) {
     return v;
 }
 
-inline OARecoverableAcceptanceGetHistoryWindowResult decode_oarecoverableacceptancegethistorywindowresult(Reader& r) {
+inline OARecoverableAcceptanceGetHistoryWindowResult decode_oa_recoverable_acceptance_get_history_window_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2373,7 +3038,7 @@ inline OARecoverableAcceptanceGetHistoryWindowResult decode_oarecoverableaccepta
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_historywindow(r);
+                v.value = decode_history_window(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2389,7 +3054,7 @@ inline OARecoverableAcceptanceGetHistoryWindowResult decode_oarecoverableaccepta
     return v;
 }
 
-inline OARecoverableAcceptanceSubmitResult decode_oarecoverableacceptancesubmitresult(Reader& r) {
+inline OARecoverableAcceptanceSubmitResult decode_oa_recoverable_acceptance_submit_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2408,7 +3073,7 @@ inline OARecoverableAcceptanceSubmitResult decode_oarecoverableacceptancesubmitr
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_acceptanceresult(r);
+                v.value = decode_acceptance_result(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2424,7 +3089,7 @@ inline OARecoverableAcceptanceSubmitResult decode_oarecoverableacceptancesubmitr
     return v;
 }
 
-inline OARecoverableAcceptanceReconcileResult decode_oarecoverableacceptancereconcileresult(Reader& r) {
+inline OARecoverableAcceptanceReconcileResult decode_oa_recoverable_acceptance_reconcile_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2443,7 +3108,7 @@ inline OARecoverableAcceptanceReconcileResult decode_oarecoverableacceptancereco
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_acceptanceresult(r);
+                v.value = decode_acceptance_result(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2459,7 +3124,7 @@ inline OARecoverableAcceptanceReconcileResult decode_oarecoverableacceptancereco
     return v;
 }
 
-inline OARecoverableAcceptanceCancelWorkResult decode_oarecoverableacceptancecancelworkresult(Reader& r) {
+inline OARecoverableAcceptanceCancelWorkResult decode_oa_recoverable_acceptance_cancel_work_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2478,7 +3143,7 @@ inline OARecoverableAcceptanceCancelWorkResult decode_oarecoverableacceptancecan
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_cancellationresult(r);
+                v.value = decode_cancellation_result(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2494,7 +3159,7 @@ inline OARecoverableAcceptanceCancelWorkResult decode_oarecoverableacceptancecan
     return v;
 }
 
-inline OAOperationControlObserveWorkResult decode_oaoperationcontrolobserveworkresult(Reader& r) {
+inline OAOperationControlObserveWorkResult decode_oa_operation_control_observe_work_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2513,7 +3178,7 @@ inline OAOperationControlObserveWorkResult decode_oaoperationcontrolobserveworkr
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_observationresult(r);
+                v.value = decode_observation_result(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2529,7 +3194,7 @@ inline OAOperationControlObserveWorkResult decode_oaoperationcontrolobserveworkr
     return v;
 }
 
-inline OAOperationControlReadResultResult decode_oaoperationcontrolreadresultresult(Reader& r) {
+inline OAOperationControlReadResultResult decode_oa_operation_control_read_result_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2548,7 +3213,7 @@ inline OAOperationControlReadResultResult decode_oaoperationcontrolreadresultres
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_resultread(r);
+                v.value = decode_result_read(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2564,7 +3229,7 @@ inline OAOperationControlReadResultResult decode_oaoperationcontrolreadresultres
     return v;
 }
 
-inline OAJobInventoryListWorkResult decode_oajobinventorylistworkresult(Reader& r) {
+inline OAJobInventoryListWorkResult decode_oa_job_inventory_list_work_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
     ++r.pos;
@@ -2583,7 +3248,7 @@ inline OAJobInventoryListWorkResult decode_oajobinventorylistworkresult(Reader& 
             if (key == "value") {
                 if (seen & 1u) r.refuse("duplicate_field");
                 seen |= 1u;
-                v.value = decode_inventorypage(r);
+                v.value = decode_inventory_page(r);
             } else {
                 r.refuse("unknown_field");
             }
@@ -2599,22 +3264,74 @@ inline OAJobInventoryListWorkResult decode_oajobinventorylistworkresult(Reader& 
     return v;
 }
 
-inline AcceptanceResult decode(std::string_view data) {
-    Reader r{data};
+inline OAJobOperatorListAccountWorkResult decode_oa_job_operator_list_account_work_result(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAJobOperatorListAccountWorkResult v;
+    std::uint32_t seen = 0;
     r.skip_ws();
-    AcceptanceResult v = decode_acceptanceresult(r);
-    r.skip_ws();
-    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "value") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.value = decode_inventory_page(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
     return v;
 }
 
-// kRefusals is in the order two of them are chosen between.
-inline const std::vector<std::string> kRefusals = {"malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"};
-
-inline int refusal_rank(std::string_view word) {
-    for (std::size_t i = 0; i < kRefusals.size(); ++i)
-        if (kRefusals[i] == word) return static_cast<int>(i);
-    return -1;
+inline OAJobOperatorCancelOperationResult decode_oa_job_operator_cancel_operation_result(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAJobOperatorCancelOperationResult v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "value") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.value = decode_operator_cancellation(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
+    return v;
 }
 
 inline std::string encode_binary(const std::vector<std::uint8_t>& value){
@@ -2639,57 +3356,125 @@ inline std::vector<std::uint8_t> decode_binary(const std::string& text){
  if(encode_binary(out)!=text)refuse("bad_binary");return out;
 }
 
-struct FrameWriter{virtual ~FrameWriter()=default;virtual void WriteFrame(std::string_view)=0;};
-struct DispatchError:std::runtime_error{using std::runtime_error::runtime_error;};
-inline OAServiceFrame service_payload(std::string_view frame){Reader r{frame};r.skip_ws();auto v=decode_oaserviceframe(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");if(v.version!=1)throw DispatchError("unknown_version");return v;}
-// Validates the request envelope and version; dispatchers validate typed arguments.
-inline std::string service_name(std::string_view frame){return service_payload(frame).service;}
+}  // namespace detail
 
-struct FrameExchanger{virtual ~FrameExchanger()=default;virtual std::string ExchangeFrame(std::string_view)=0;};
+inline std::string encode(const AcceptanceResult& v) {
+    std::string out;
+    detail::enc_acceptance_result(out, v, 0);
+    out += '\n';
+    return out;
+}
+
+inline AcceptanceResult decode(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    AcceptanceResult v = detail::decode_acceptance_result(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+namespace detail {
+// kRefusals is in the order two of them are chosen between.
+inline const std::vector<std::string> kRefusals = {"malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"};
+
+inline int refusal_rank(std::string_view word) {
+    for (std::size_t i = 0; i < kRefusals.size(); ++i)
+        if (kRefusals[i] == word) return static_cast<int>(i);
+    return -1;
+}
+}  // namespace detail
+
+struct FrameWriter{virtual ~FrameWriter()=default;virtual void write_frame(std::string_view frame)=0;};
+struct DispatchError:std::runtime_error{using std::runtime_error::runtime_error;};
+namespace detail {
+inline OAServiceFrame service_payload(std::string_view frame){Reader r{frame};r.skip_ws();auto v=decode_oa_service_frame(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");if(v.version!=1)throw DispatchError("unknown_version");return v;}
+}  // namespace detail
+// Validates the request envelope and version; dispatchers validate typed arguments.
+inline std::string service_name(std::string_view frame){return detail::service_payload(frame).service;}
+
+struct FrameExchanger{virtual ~FrameExchanger()=default;virtual std::string exchange_frame(std::string_view frame)=0;};
 struct ServiceError:std::runtime_error{std::string code,message;ServiceError(std::string c,std::string m):std::runtime_error(m.empty()?c:m),code(c),message(m){}};
+namespace detail {
 inline Raw service_response(std::string_view frame,std::string_view service,std::string_view method){
- Reader r{frame};r.skip_ws();auto v=decode_oaservicereply(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");if(v.version!=1)throw DispatchError("unknown_version");if(v.service!=service||v.method!=method)throw DispatchError("mismatched_response");
- if(!v.ok){Reader e{v.payload};e.depth=1;e.skip_ws();auto error=decode_oaserviceerror(e);e.skip_ws();if(e.pos!=e.buf.size())e.refuse("trailing_bytes");if(error.code.empty())throw DispatchError("invalid_error");throw ServiceError(error.code,error.message);}return v.payload;
+ Reader r{frame};r.skip_ws();auto v=decode_oa_service_reply(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");if(v.version!=1)throw DispatchError("unknown_version");if(v.service!=service||v.method!=method)throw DispatchError("mismatched_response");
+ if(!v.ok){Reader e{v.payload};e.depth=1;e.skip_ws();auto error=decode_oa_service_error(e);e.skip_ws();if(e.pos!=e.buf.size())e.refuse("trailing_bytes");if(error.code.empty())throw DispatchError("invalid_error");throw ServiceError(error.code,error.message);}return v.payload;
 }
 inline std::string service_reply(const OAServiceFrame& request,const Raw& payload,const ServiceError* error=nullptr){
  OAServiceReply reply;reply.version=1;reply.service=request.service;reply.method=request.method;reply.ok=error==nullptr;reply.payload=payload;
- if(error){OAServiceError e;e.code=error->code.empty()?"handler_error":error->code;e.message=error->message;reply.payload.clear();enc_oaserviceerror(reply.payload,e,1);}
- std::string frame;enc_oaservicereply(frame,reply,0);Reader r{frame};r.skip_ws();decode_oaservicereply(r);return frame;
+ if(error){OAServiceError e;e.code=error->code.empty()?"handler_error":error->code;e.message=error->message;reply.payload.clear();enc_oa_service_error(reply.payload,e,1);}
+ std::string frame;enc_oa_service_reply(frame,reply,0);Reader r{frame};r.skip_ws();decode_oa_service_reply(r);return frame;
+}
+}  // namespace detail
+
+// The base-protocol service every dispatcher answers beside its own.
+inline constexpr std::string_view kEndpointContract="abstraction.facade/endpoint@1";
+// One service an endpoint hosts, as a dispatcher of any generated namespace
+// reports it to describe_endpoint.
+struct DescribedService{std::string contract;bool ready;std::string why;};
+namespace detail {
+template<class H>auto ready_hook(int)->decltype((void)static_cast<H*>(nullptr)->ready(),static_cast<bool(*)(void*,std::string&)>(nullptr)){return [](void* h,std::string& why)->bool{auto r=static_cast<H*>(h)->ready();why=r.second;return r.first;};}
+template<class H>bool(*ready_hook(long))(void*,std::string&){return nullptr;}
+}  // namespace detail
+// Answers an abstraction.facade/endpoint@1 Describe frame for an endpoint
+// hosting services, in that order: each is a dispatcher of any generated
+// namespace. program and version are the provider's own display name and
+// version, never authority. A frame for another service reads unknown_service.
+template<class... Services>std::string describe_endpoint(std::string_view frame,const std::string& program,const std::string& version,const Services&... services){
+ auto v=detail::service_payload(frame);
+ if(v.service!=kEndpointContract){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+ if(v.method!="Describe"){ServiceError e("unknown_method","");return detail::service_reply(v,"",&e);}
+ detail::Reader r{v.arguments};r.skip_ws();bool empty=false;
+ if(r.pos<r.buf.size()&&r.buf[r.pos]=='{'){r.pos++;r.skip_ws();if(r.pos<r.buf.size()&&r.buf[r.pos]=='}'){r.pos++;r.skip_ws();empty=r.pos==r.buf.size();}}
+ if(!empty){ServiceError e("unknown_field","");return detail::service_reply(v,"",&e);}
+ try{
+  Raw out="{\"value\":{\"outcome\":\"described\",\"program\":";detail::esc(out,program);out+=",\"version\":";detail::esc(out,version);out+=",\"services\":[";
+  bool first=true;
+  auto add=[&](const auto& s){if(!first)out+=',';first=false;out+="{\"contract\":";detail::esc(out,s.contract);out+=",\"readiness\":\"";out+=s.ready?"ready":"not_ready";out+="\",\"why\":";detail::esc(out,s.why);out+=",\"guarantees\":[],\"capabilities\":{}}";};
+  (void)add;
+  (add(services.describe_service()),...);
+  out+="]}}";
+  return detail::service_reply(v,out);
+ }catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
 struct RecoverableAcceptance{virtual ~RecoverableAcceptance()=default;
-virtual HistoryWindow GetHistoryWindow()=0;
-virtual AcceptanceResult Submit(const Submission& arg0)=0;
-virtual AcceptanceResult Reconcile(const RequestIdentity& arg0)=0;
-virtual CancellationResult CancelWork(const RequestIdentity& arg0)=0;
+virtual HistoryWindow get_history_window()=0;
+virtual AcceptanceResult submit(const Submission& submission)=0;
+virtual AcceptanceResult reconcile(const RequestIdentity& identity)=0;
+virtual CancellationResult cancel_work(const RequestIdentity& identity)=0;
 };
 template<class Transport>struct RecoverableAcceptanceClient:RecoverableAcceptance{Transport& transport_;explicit RecoverableAcceptanceClient(Transport&t):transport_(t){}
-HistoryWindow GetHistoryWindow()override{OARecoverableAcceptanceGetHistoryWindowArguments args;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="GetHistoryWindow";enc_oarecoverableacceptancegethistorywindowarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oarecoverableacceptancegethistorywindowresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+HistoryWindow get_history_window()override{detail::OARecoverableAcceptanceGetHistoryWindowArguments args;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="GetHistoryWindow";detail::enc_oa_recoverable_acceptance_get_history_window_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_recoverable_acceptance_get_history_window_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
-AcceptanceResult Submit(const Submission& arg0)override{OARecoverableAcceptanceSubmitArguments args;
-args.submission=arg0;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="Submit";enc_oarecoverableacceptancesubmitarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oarecoverableacceptancesubmitresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+AcceptanceResult submit(const Submission& submission)override{detail::OARecoverableAcceptanceSubmitArguments args;
+args.submission=submission;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="Submit";detail::enc_oa_recoverable_acceptance_submit_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_recoverable_acceptance_submit_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
-AcceptanceResult Reconcile(const RequestIdentity& arg0)override{OARecoverableAcceptanceReconcileArguments args;
-args.identity=arg0;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="Reconcile";enc_oarecoverableacceptancereconcilearguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oarecoverableacceptancereconcileresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+AcceptanceResult reconcile(const RequestIdentity& identity)override{detail::OARecoverableAcceptanceReconcileArguments args;
+args.identity=identity;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="Reconcile";detail::enc_oa_recoverable_acceptance_reconcile_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_recoverable_acceptance_reconcile_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
-CancellationResult CancelWork(const RequestIdentity& arg0)override{OARecoverableAcceptanceCancelWorkArguments args;
-args.identity=arg0;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="CancelWork";enc_oarecoverableacceptancecancelworkarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oarecoverableacceptancecancelworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+CancellationResult cancel_work(const RequestIdentity& identity)override{detail::OARecoverableAcceptanceCancelWorkArguments args;
+args.identity=identity;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/acceptance@1";v.method="CancelWork";detail::enc_oa_recoverable_acceptance_cancel_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_recoverable_acceptance_cancel_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
 };
-struct RecoverableAcceptanceService{inline static constexpr std::string_view wire_name="abstraction.job/acceptance@1";inline static constexpr std::string_view capability="abstraction.job";template<class Transport>using Client=RecoverableAcceptanceClient<Transport>;};
+struct RecoverableAcceptanceService{inline static constexpr std::string_view kWireName="abstraction.job/acceptance@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=RecoverableAcceptanceClient<Transport>;};
 struct RecoverableAcceptanceDispatcher:FrameWriter,FrameExchanger{RecoverableAcceptance&handler;explicit RecoverableAcceptanceDispatcher(RecoverableAcceptance&h):handler(h){}
-void WriteFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/acceptance@1")throw DispatchError("unknown_service");
+// A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
+template<class H,class=decltype(static_cast<RecoverableAcceptance&>(*static_cast<H*>(nullptr)))>explicit RecoverableAcceptanceDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+// This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
+DescribedService describe_service()const{DescribedService s{"abstraction.job/acceptance@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/acceptance@1")throw DispatchError("unknown_service");
 if(v.method=="GetHistoryWindow"){
 throw DispatchError("wrong_mode");}
 if(v.method=="Submit"){
@@ -2699,157 +3484,243 @@ throw DispatchError("wrong_mode");}
 if(v.method=="CancelWork"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string ExchangeFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/acceptance@1"){ServiceError e("unknown_service","");return service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/acceptance@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="GetHistoryWindow"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oarecoverableacceptancegethistorywindowarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_GetHistoryWindow(args);return service_reply(v,payload);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_recoverable_acceptance_get_history_window_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_get_history_window(args);return detail::service_reply(v,payload);}
 if(v.method=="Submit"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oarecoverableacceptancesubmitarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_Submit(args);return service_reply(v,payload);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_recoverable_acceptance_submit_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_submit(args);return detail::service_reply(v,payload);}
 if(v.method=="Reconcile"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oarecoverableacceptancereconcilearguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_Reconcile(args);return service_reply(v,payload);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_recoverable_acceptance_reconcile_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_reconcile(args);return detail::service_reply(v,payload);}
 if(v.method=="CancelWork"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oarecoverableacceptancecancelworkarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_CancelWork(args);return service_reply(v,payload);}
-throw ServiceError("unknown_method","");}catch(const ServiceError&e){return service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return service_reply(v,"",&error);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_recoverable_acceptance_cancel_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_cancel_work(args);return detail::service_reply(v,payload);}
+throw ServiceError("unknown_method","");}catch(const ServiceError&e){return detail::service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
-Raw invoke_GetHistoryWindow(const OARecoverableAcceptanceGetHistoryWindowArguments&args){
+private:
+Raw invoke_get_history_window(const detail::OARecoverableAcceptanceGetHistoryWindowArguments&args){
 HistoryWindow result{};
 try{
-result=handler.GetHistoryWindow();
+result=handler.get_history_window();
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OARecoverableAcceptanceGetHistoryWindowResult value;
+detail::OARecoverableAcceptanceGetHistoryWindowResult value;
 value.value=result;
-Raw payload;enc_oarecoverableacceptancegethistorywindowresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oarecoverableacceptancegethistorywindowresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_recoverable_acceptance_get_history_window_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_recoverable_acceptance_get_history_window_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
-Raw invoke_Submit(const OARecoverableAcceptanceSubmitArguments&args){
+Raw invoke_submit(const detail::OARecoverableAcceptanceSubmitArguments&args){
 AcceptanceResult result{};
 try{
-result=handler.Submit(args.submission);
+result=handler.submit(args.submission);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OARecoverableAcceptanceSubmitResult value;
+detail::OARecoverableAcceptanceSubmitResult value;
 value.value=result;
-Raw payload;enc_oarecoverableacceptancesubmitresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oarecoverableacceptancesubmitresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_recoverable_acceptance_submit_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_recoverable_acceptance_submit_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
-Raw invoke_Reconcile(const OARecoverableAcceptanceReconcileArguments&args){
+Raw invoke_reconcile(const detail::OARecoverableAcceptanceReconcileArguments&args){
 AcceptanceResult result{};
 try{
-result=handler.Reconcile(args.identity);
+result=handler.reconcile(args.identity);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OARecoverableAcceptanceReconcileResult value;
+detail::OARecoverableAcceptanceReconcileResult value;
 value.value=result;
-Raw payload;enc_oarecoverableacceptancereconcileresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oarecoverableacceptancereconcileresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_recoverable_acceptance_reconcile_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_recoverable_acceptance_reconcile_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
-Raw invoke_CancelWork(const OARecoverableAcceptanceCancelWorkArguments&args){
+Raw invoke_cancel_work(const detail::OARecoverableAcceptanceCancelWorkArguments&args){
 CancellationResult result{};
 try{
-result=handler.CancelWork(args.identity);
+result=handler.cancel_work(args.identity);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OARecoverableAcceptanceCancelWorkResult value;
+detail::OARecoverableAcceptanceCancelWorkResult value;
 value.value=result;
-Raw payload;enc_oarecoverableacceptancecancelworkresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oarecoverableacceptancecancelworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_recoverable_acceptance_cancel_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_recoverable_acceptance_cancel_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
+private:
+void* ready_self_=nullptr;
+bool(*ready_hook_)(void*,std::string&)=nullptr;
 };
 struct OperationControl{virtual ~OperationControl()=default;
-virtual ObservationResult ObserveWork(const RequestIdentity& arg0)=0;
-virtual ResultRead ReadResult(const RequestIdentity& arg0,const std::int64_t& arg1,const std::int64_t& arg2)=0;
+virtual ObservationResult observe_work(const RequestIdentity& identity)=0;
+virtual ResultRead read_result(const RequestIdentity& identity,const std::int64_t& offset,const std::int64_t& max_bytes)=0;
 };
 template<class Transport>struct OperationControlClient:OperationControl{Transport& transport_;explicit OperationControlClient(Transport&t):transport_(t){}
-ObservationResult ObserveWork(const RequestIdentity& arg0)override{OAOperationControlObserveWorkArguments args;
-args.identity=arg0;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="ObserveWork";enc_oaoperationcontrolobserveworkarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oaoperationcontrolobserveworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+ObservationResult observe_work(const RequestIdentity& identity)override{detail::OAOperationControlObserveWorkArguments args;
+args.identity=identity;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="ObserveWork";detail::enc_oa_operation_control_observe_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_observe_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
-ResultRead ReadResult(const RequestIdentity& arg0,const std::int64_t& arg1,const std::int64_t& arg2)override{OAOperationControlReadResultArguments args;
-args.identity=arg0;
-args.offset=arg1;
-args.max_bytes=arg2;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="ReadResult";enc_oaoperationcontrolreadresultarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oaoperationcontrolreadresultresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+ResultRead read_result(const RequestIdentity& identity,const std::int64_t& offset,const std::int64_t& max_bytes)override{detail::OAOperationControlReadResultArguments args;
+args.identity=identity;
+args.offset=offset;
+args.max_bytes=max_bytes;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="ReadResult";detail::enc_oa_operation_control_read_result_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_read_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
 };
-struct OperationControlService{inline static constexpr std::string_view wire_name="abstraction.job/operations@1";inline static constexpr std::string_view capability="abstraction.job";template<class Transport>using Client=OperationControlClient<Transport>;};
+struct OperationControlService{inline static constexpr std::string_view kWireName="abstraction.job/operations@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=OperationControlClient<Transport>;};
 struct OperationControlDispatcher:FrameWriter,FrameExchanger{OperationControl&handler;explicit OperationControlDispatcher(OperationControl&h):handler(h){}
-void WriteFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/operations@1")throw DispatchError("unknown_service");
+// A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
+template<class H,class=decltype(static_cast<OperationControl&>(*static_cast<H*>(nullptr)))>explicit OperationControlDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+// This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
+DescribedService describe_service()const{DescribedService s{"abstraction.job/operations@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/operations@1")throw DispatchError("unknown_service");
 if(v.method=="ObserveWork"){
 throw DispatchError("wrong_mode");}
 if(v.method=="ReadResult"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string ExchangeFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/operations@1"){ServiceError e("unknown_service","");return service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operations@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="ObserveWork"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oaoperationcontrolobserveworkarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_ObserveWork(args);return service_reply(v,payload);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_observe_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_observe_work(args);return detail::service_reply(v,payload);}
 if(v.method=="ReadResult"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oaoperationcontrolreadresultarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_ReadResult(args);return service_reply(v,payload);}
-throw ServiceError("unknown_method","");}catch(const ServiceError&e){return service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return service_reply(v,"",&error);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_read_result_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_read_result(args);return detail::service_reply(v,payload);}
+throw ServiceError("unknown_method","");}catch(const ServiceError&e){return detail::service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
-Raw invoke_ObserveWork(const OAOperationControlObserveWorkArguments&args){
+private:
+Raw invoke_observe_work(const detail::OAOperationControlObserveWorkArguments&args){
 ObservationResult result{};
 try{
-result=handler.ObserveWork(args.identity);
+result=handler.observe_work(args.identity);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OAOperationControlObserveWorkResult value;
+detail::OAOperationControlObserveWorkResult value;
 value.value=result;
-Raw payload;enc_oaoperationcontrolobserveworkresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oaoperationcontrolobserveworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_operation_control_observe_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_observe_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
-Raw invoke_ReadResult(const OAOperationControlReadResultArguments&args){
+Raw invoke_read_result(const detail::OAOperationControlReadResultArguments&args){
 ResultRead result{};
 try{
-result=handler.ReadResult(args.identity,args.offset,args.max_bytes);
+result=handler.read_result(args.identity,args.offset,args.max_bytes);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OAOperationControlReadResultResult value;
+detail::OAOperationControlReadResultResult value;
 value.value=result;
-Raw payload;enc_oaoperationcontrolreadresultresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oaoperationcontrolreadresultresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_operation_control_read_result_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_read_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
+private:
+void* ready_self_=nullptr;
+bool(*ready_hook_)(void*,std::string&)=nullptr;
 };
 struct JobInventory{virtual ~JobInventory()=default;
-virtual InventoryPage ListWork(const std::string& arg0,const std::int64_t& arg1)=0;
+virtual InventoryPage list_work(const std::string& cursor,const std::int64_t& limit)=0;
 };
 template<class Transport>struct JobInventoryClient:JobInventory{Transport& transport_;explicit JobInventoryClient(Transport&t):transport_(t){}
-InventoryPage ListWork(const std::string& arg0,const std::int64_t& arg1)override{OAJobInventoryListWorkArguments args;
-args.cursor=arg0;
-args.limit=arg1;
-OAServiceFrame v;v.version=1;v.service="abstraction.job/inventory@1";v.method="ListWork";enc_oajobinventorylistworkarguments(v.arguments,args,1);std::string frame;enc_oaserviceframe(frame,v,0);service_payload(frame);
-auto response=transport_.ExchangeFrame(frame);auto payload=service_response(response,v.service,v.method);Reader r{payload};r.depth=1;r.skip_ws();auto result=decode_oajobinventorylistworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+InventoryPage list_work(const std::string& cursor,const std::int64_t& limit)override{detail::OAJobInventoryListWorkArguments args;
+args.cursor=cursor;
+args.limit=limit;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/inventory@1";v.method="ListWork";detail::enc_oa_job_inventory_list_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_job_inventory_list_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
 };
-struct JobInventoryService{inline static constexpr std::string_view wire_name="abstraction.job/inventory@1";inline static constexpr std::string_view capability="abstraction.job";template<class Transport>using Client=JobInventoryClient<Transport>;};
+struct JobInventoryService{inline static constexpr std::string_view kWireName="abstraction.job/inventory@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=JobInventoryClient<Transport>;};
 struct JobInventoryDispatcher:FrameWriter,FrameExchanger{JobInventory&handler;explicit JobInventoryDispatcher(JobInventory&h):handler(h){}
-void WriteFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/inventory@1")throw DispatchError("unknown_service");
+// A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
+template<class H,class=decltype(static_cast<JobInventory&>(*static_cast<H*>(nullptr)))>explicit JobInventoryDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+// This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
+DescribedService describe_service()const{DescribedService s{"abstraction.job/inventory@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/inventory@1")throw DispatchError("unknown_service");
 if(v.method=="ListWork"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string ExchangeFrame(std::string_view frame)override{auto v=service_payload(frame);if(v.service!="abstraction.job/inventory@1"){ServiceError e("unknown_service","");return service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/inventory@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="ListWork"){
-Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=decode_oajobinventorylistworkarguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_ListWork(args);return service_reply(v,payload);}
-throw ServiceError("unknown_method","");}catch(const ServiceError&e){return service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return service_reply(v,"",&error);}
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_job_inventory_list_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_list_work(args);return detail::service_reply(v,payload);}
+throw ServiceError("unknown_method","");}catch(const ServiceError&e){return detail::service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
-Raw invoke_ListWork(const OAJobInventoryListWorkArguments&args){
+private:
+Raw invoke_list_work(const detail::OAJobInventoryListWorkArguments&args){
 InventoryPage result{};
 try{
-result=handler.ListWork(args.cursor,args.limit);
+result=handler.list_work(args.cursor,args.limit);
 }catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
 try{
-OAJobInventoryListWorkResult value;
+detail::OAJobInventoryListWorkResult value;
 value.value=result;
-Raw payload;enc_oajobinventorylistworkresult(payload,value,1);Reader r{payload};r.depth=1;r.skip_ws();decode_oajobinventorylistworkresult(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+Raw payload;detail::enc_oa_job_inventory_list_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_job_inventory_list_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
+private:
+void* ready_self_=nullptr;
+bool(*ready_hook_)(void*,std::string&)=nullptr;
+};
+struct JobOperator{virtual ~JobOperator()=default;
+virtual InventoryPage list_account_work(const std::string& cursor,const std::int64_t& limit)=0;
+virtual OperatorCancellation cancel_operation(const std::string& operation_id)=0;
+};
+template<class Transport>struct JobOperatorClient:JobOperator{Transport& transport_;explicit JobOperatorClient(Transport&t):transport_(t){}
+InventoryPage list_account_work(const std::string& cursor,const std::int64_t& limit)override{detail::OAJobOperatorListAccountWorkArguments args;
+args.cursor=cursor;
+args.limit=limit;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operator@1";v.method="ListAccountWork";detail::enc_oa_job_operator_list_account_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_job_operator_list_account_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+return result.value;
+}
+OperatorCancellation cancel_operation(const std::string& operation_id)override{detail::OAJobOperatorCancelOperationArguments args;
+args.operation_id=operation_id;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operator@1";v.method="CancelOperation";detail::enc_oa_job_operator_cancel_operation_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_job_operator_cancel_operation_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+return result.value;
+}
+};
+struct JobOperatorService{inline static constexpr std::string_view kWireName="abstraction.job/operator@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=JobOperatorClient<Transport>;};
+struct JobOperatorDispatcher:FrameWriter,FrameExchanger{JobOperator&handler;explicit JobOperatorDispatcher(JobOperator&h):handler(h){}
+// A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
+template<class H,class=decltype(static_cast<JobOperator&>(*static_cast<H*>(nullptr)))>explicit JobOperatorDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+// This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
+DescribedService describe_service()const{DescribedService s{"abstraction.job/operator@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/operator@1")throw DispatchError("unknown_service");
+if(v.method=="ListAccountWork"){
+throw DispatchError("wrong_mode");}
+if(v.method=="CancelOperation"){
+throw DispatchError("wrong_mode");}
+throw DispatchError("unknown_method");}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operator@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+try{
+if(v.method=="ListAccountWork"){
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_job_operator_list_account_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_list_account_work(args);return detail::service_reply(v,payload);}
+if(v.method=="CancelOperation"){
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_job_operator_cancel_operation_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_cancel_operation(args);return detail::service_reply(v,payload);}
+throw ServiceError("unknown_method","");}catch(const ServiceError&e){return detail::service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
+}
+private:
+Raw invoke_list_account_work(const detail::OAJobOperatorListAccountWorkArguments&args){
+InventoryPage result{};
+try{
+result=handler.list_account_work(args.cursor,args.limit);
+}catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
+try{
+detail::OAJobOperatorListAccountWorkResult value;
+value.value=result;
+Raw payload;detail::enc_oa_job_operator_list_account_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_job_operator_list_account_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+}catch(...){throw ServiceError("invalid_result","");}
+}
+Raw invoke_cancel_operation(const detail::OAJobOperatorCancelOperationArguments&args){
+OperatorCancellation result{};
+try{
+result=handler.cancel_operation(args.operation_id);
+}catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
+try{
+detail::OAJobOperatorCancelOperationResult value;
+value.value=result;
+Raw payload;detail::enc_oa_job_operator_cancel_operation_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_job_operator_cancel_operation_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+}catch(...){throw ServiceError("invalid_result","");}
+}
+private:
+void* ready_self_=nullptr;
+bool(*ready_hook_)(void*,std::string&)=nullptr;
 };
 
 }  // namespace abstraction::job::acceptance

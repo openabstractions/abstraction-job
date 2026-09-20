@@ -31,14 +31,16 @@ type inventoryState struct {
 }
 type inventorySession struct {
 	scope, token string
-	dir          *os.File
-	sequence     uint64
-	lastInput    string
-	lastLimit    int64
-	replay       []byte
-	pending      *api.OperationSnapshot
-	expires      time.Time
-	timer        *time.Timer
+	// account marks an account-wide operator listing (JOB-A13).
+	account   bool
+	dir       *os.File
+	sequence  uint64
+	lastInput string
+	lastLimit int64
+	replay    []byte
+	pending   *api.OperationSnapshot
+	expires   time.Time
+	timer     *time.Timer
 }
 
 // CloseInventory closes enumeration handles and caches. It is idempotent and
@@ -83,36 +85,43 @@ func (p *Provider) BindInventory(scope string) api.JobInventory {
 	}
 	return &bound{provider: p, scope: scope}
 }
-func inventoryRefusal(outcome string) api.InventoryPage {
+func inventoryRefusal(outcome api.InventoryOutcome) api.InventoryPage {
 	return api.InventoryPage{Outcome: outcome, Snapshots: []api.OperationSnapshot{}}
 }
 func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) {
+	return b.listWork(cursor, limit, false)
+}
+
+// listWork enumerates the caller's own scope, or every scope when account is
+// true. A session and its cursors belong to one caller and one of the two
+// listings.
+func (b *bound) listWork(cursor string, limit int64, account bool) (api.InventoryPage, error) {
 	if b.scope == "" {
-		return inventoryRefusal("forbidden"), nil
+		return inventoryRefusal(api.InventoryOutcomeForbidden), nil
 	}
 	if limit < 1 || limit > 64 || len(cursor) > 128 {
-		return inventoryRefusal("invalid"), nil
+		return inventoryRefusal(api.InventoryOutcomeInvalid), nil
 	}
 	p := b.provider
 	p.inventory.mu.Lock()
 	defer p.inventory.mu.Unlock()
 	if p.inventory.closed {
-		return inventoryRefusal("unavailable"), nil
+		return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 	}
 	var s *inventorySession
 	if cursor == "" {
 		if len(p.inventory.sessions) >= inventorySessions {
-			return inventoryRefusal("unavailable"), nil
+			return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 		}
 		var key [16]byte
 		if _, err := rand.Read(key[:]); err != nil {
-			return inventoryRefusal("unavailable"), nil
+			return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 		}
 		dir, err := os.Open(p.requests())
 		if err != nil {
-			return inventoryRefusal("unavailable"), nil
+			return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 		}
-		s = &inventorySession{scope: b.scope, token: hex.EncodeToString(key[:]), dir: dir, expires: time.Now().Add(inventoryIdle)}
+		s = &inventorySession{scope: b.scope, account: account, token: hex.EncodeToString(key[:]), dir: dir, expires: time.Now().Add(inventoryIdle)}
 		if p.inventory.sessions == nil {
 			p.inventory.sessions = map[string]*inventorySession{}
 		}
@@ -122,8 +131,8 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 		token, word, ok := strings.Cut(cursor, ":")
 		n, err := strconv.ParseUint(word, 10, 64)
 		s = p.inventory.sessions[token]
-		if !ok || err != nil || strconv.FormatUint(n, 10) != word || s == nil || s.scope != b.scope {
-			return inventoryRefusal("gap"), nil
+		if !ok || err != nil || strconv.FormatUint(n, 10) != word || s == nil || s.scope != b.scope || s.account != account {
+			return inventoryRefusal(api.InventoryOutcomeGap), nil
 		}
 		if time.Now().After(s.expires) {
 			if s.dir != nil {
@@ -131,11 +140,11 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 			}
 			s.timer.Stop()
 			delete(p.inventory.sessions, token)
-			return inventoryRefusal("gap"), nil
+			return inventoryRefusal(api.InventoryOutcomeGap), nil
 		}
 		if cursor == s.lastInput && len(s.replay) > 0 {
 			if limit != s.lastLimit {
-				return inventoryRefusal("invalid"), nil
+				return inventoryRefusal(api.InventoryOutcomeInvalid), nil
 			}
 			s.expires = time.Now().Add(inventoryIdle)
 			var page api.InventoryPage
@@ -143,7 +152,7 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 			return page, nil
 		}
 		if n != s.sequence || s.dir == nil {
-			return inventoryRefusal("gap"), nil
+			return inventoryRefusal(api.InventoryOutcomeGap), nil
 		}
 	}
 	fail := func() (api.InventoryPage, error) {
@@ -152,9 +161,9 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 		}
 		s.timer.Stop()
 		delete(p.inventory.sessions, s.token)
-		return inventoryRefusal("unavailable"), nil
+		return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 	}
-	page := api.InventoryPage{Outcome: "page", Snapshots: []api.OperationSnapshot{}}
+	page := api.InventoryPage{Outcome: api.InventoryOutcomePage, Snapshots: []api.OperationSnapshot{}}
 	used := 0
 	remaining := int64(inventoryReadBytes)
 	for scanned := 0; scanned < inventoryScanEntries && len(page.Snapshots) < int(limit); {
@@ -190,11 +199,11 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 			if filepath.Base(p.requestPath(j.Scope, j.Identity)) != entry.Name() {
 				return fail()
 			}
-			if j.Scope != b.scope || j.Phase == "sealed" {
+			if (!s.account && j.Scope != b.scope) || j.Phase == "sealed" {
 				continue
 			}
 			// Inventory observes published records only; incomplete recovery is explicit.
-			data, err = inventoryRead(filepath.Join(p.store.Root(), "jobs", j.Receipt.OperationId+".json"), &remaining)
+			data, err = inventoryRead(filepath.Join(p.store.Root(), "jobs", j.Receipt.OperationID+".json"), &remaining)
 			if err != nil {
 				return fail()
 			}
@@ -202,10 +211,10 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 			if err != nil {
 				return fail()
 			}
-			if record.ID != j.Receipt.OperationId {
+			if record.ID != j.Receipt.OperationID {
 				return fail()
 			}
-			snapshot = operationSnapshot(j.Receipt, record, p.executor, j.ResultLost)
+			snapshot = operationSnapshot(j, record, p.executor, j.ResultLost)
 			if snapshot.Failure != nil && len(snapshot.Failure.Message) > 4096 {
 				failure := *snapshot.Failure
 				failure.Message = "operation failure diagnostic exceeds inventory limit"
@@ -229,6 +238,14 @@ func (b *bound) ListWork(cursor string, limit int64) (api.InventoryPage, error) 
 		s.dir = nil
 	} else {
 		page.Next = s.token + ":" + strconv.FormatUint(s.sequence, 10)
+	}
+	// An initial page has no replayable input token: retrying the empty cursor
+	// starts a new enumeration. Release its completed session immediately.
+	// Completed continuation pages still retain their lost-reply replay cache.
+	if page.Complete && cursor == "" {
+		s.timer.Stop()
+		delete(p.inventory.sessions, s.token)
+		return page, nil
 	}
 	s.lastInput = cursor
 	s.lastLimit = limit

@@ -26,7 +26,7 @@ func (f *acceptanceFixture) Reconcile(id RequestIdentity) (AcceptanceResult, err
 }
 func (f *acceptanceFixture) CancelWork(id RequestIdentity) (CancellationResult, error) {
 	f.cancellations++
-	return CancellationResult{Outcome: "requested"}, nil
+	return CancellationResult{Outcome: CancellationOutcomeRequested}, nil
 }
 
 type loseReply struct {
@@ -46,7 +46,7 @@ func (l *loseReply) ExchangeFrame(frame []byte) ([]byte, error) {
 func TestLostReplyThroughGeneratedService(t *testing.T) {
 	id := RequestIdentity{Key: "saved-before-send", HistoryEpoch: "epoch"}
 	args := Submission{Identity: id, Kind: "download", Spec: []byte("opaque"), RequiredGuarantees: []string{"reconcile@1"}}
-	f := &acceptanceFixture{evidence: Evidence{CallerScope: "caller", Identity: id, Arguments: &args, HistoryAvailable: true, Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationId: "original-operation", AcceptedGuarantees: []string{"reconcile@1"}, HistoryRetentionMs: 60000}}}
+	f := &acceptanceFixture{evidence: Evidence{CallerScope: "caller", Identity: id, Arguments: &args, HistoryAvailable: true, Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationID: "original-operation", AcceptedGuarantees: []string{"reconcile@1"}, HistoryRetentionMs: 60000}}}
 	transport := &loseReply{dispatcher: &RecoverableAcceptanceDispatcher{Handler: f}}
 	client := NewRecoverableAcceptanceClient(transport)
 	if _, err := client.Submit(args); err == nil {
@@ -55,14 +55,14 @@ func TestLostReplyThroughGeneratedService(t *testing.T) {
 	// A new client models reconnect/restart with the retained pre-send identity.
 	client = NewRecoverableAcceptanceClient(transport)
 	got, err := client.Reconcile(id)
-	if err != nil || got.Receipt == nil || got.Receipt.OperationId != "original-operation" {
+	if err != nil || got.Receipt == nil || got.Receipt.OperationID != "original-operation" {
 		t.Fatalf("recovery: %+v %v", got, err)
 	}
 	if f.submissions != 1 || f.cancellations != 0 {
 		t.Fatal("reconciliation submitted or cancelled work")
 	}
 	cancelled, err := client.CancelWork(id)
-	if err != nil || cancelled.Outcome != "requested" || f.cancellations != 1 {
+	if err != nil || cancelled.Outcome.String() != "requested" || f.cancellations != 1 {
 		t.Fatalf("explicit cancel: %+v %v", cancelled, err)
 	}
 }
@@ -113,10 +113,10 @@ func TestAttemptCorpus(t *testing.T) {
 			if want == "eligible" {
 				want = ""
 			}
-			if got.Outcome != want || got.Receipt != nil {
+			if got.Outcome.String() != want || got.Receipt != nil {
 				t.Fatalf("got %+v; want %s", got, c.Want)
 			}
-			if got.Outcome != "" && c.Attempt >= 0 {
+			if got.Outcome != 0 && c.Attempt >= 0 {
 				if err := ValidateResult(got, id, "owner-1"); err != nil {
 					t.Fatal(err)
 				}
@@ -126,7 +126,7 @@ func TestAttemptCorpus(t *testing.T) {
 	// A retried identity is distinct from its earlier attempt in receipts.
 	first := RequestIdentity{Key: "k", HistoryEpoch: "e"}
 	retry := RequestIdentity{Key: "k", HistoryEpoch: "e", Attempt: 1}
-	receipt := AcceptanceResult{Outcome: "accepted", Receipt: &Receipt{Identity: first, LogicalOwner: "o", OperationId: "op", HistoryRetentionMs: 1}}
+	receipt := AcceptanceResult{Outcome: AcceptanceOutcomeAccepted, Receipt: &Receipt{Identity: first, LogicalOwner: "o", OperationID: "op", HistoryRetentionMs: 1}}
 	if ValidateResult(receipt, retry, "o") == nil {
 		t.Fatal("earlier attempt receipt validated for a retry")
 	}
@@ -155,7 +155,7 @@ func TestAcceptanceCorpus(t *testing.T) {
 			args := Submission{Identity: id, Kind: "download", Spec: []byte(`{"source":"artifact"}`), RequiredGuarantees: []string{"caller-exit@1", "reconcile@1"}}
 			e := Evidence{CallerScope: "authenticated-alice", Identity: id, Arguments: &args, HistoryAvailable: c.History, HistoryExpired: c.Expired, SealedNonAcceptance: c.Sealed, DecisionUnavailable: c.DecisionUnavailable}
 			if c.Receipt {
-				e.Receipt = &Receipt{Identity: id, LogicalOwner: "owner-1", OperationId: "operation-1", AcceptedGuarantees: []string{"caller-exit@1", "reconcile@1"}, HistoryRetentionMs: 60000}
+				e.Receipt = &Receipt{Identity: id, LogicalOwner: "owner-1", OperationID: "operation-1", AcceptedGuarantees: []string{"caller-exit@1", "reconcile@1"}, HistoryRetentionMs: 60000}
 			}
 			caller, owner := "authenticated-alice", "owner-1"
 			submission := args
@@ -188,7 +188,7 @@ func TestAcceptanceCorpus(t *testing.T) {
 				}
 			}
 			got := ReconcileEvidence(caller, owner, id, submitted, e)
-			if got.Outcome != c.Want || CanResolveFresh(got) != c.Fresh {
+			if got.Outcome.String() != c.Want || CanResolveFresh(got) != c.Fresh {
 				t.Fatalf("got %+v fresh=%v; want %s fresh=%v", got, CanResolveFresh(got), c.Want, c.Fresh)
 			}
 			if err := ValidateResult(got, id, owner); err != nil {
@@ -200,7 +200,7 @@ func TestAcceptanceCorpus(t *testing.T) {
 				t.Fatalf("generated roundtrip: %+v %v", round, err)
 			}
 			if got.Receipt != nil {
-				if got.Receipt.OperationId != "operation-1" {
+				if got.Receipt.OperationID != "operation-1" {
 					t.Fatal("duplicate operation")
 				}
 				got.Receipt.AcceptedGuarantees[0] = "mutated"
@@ -215,15 +215,15 @@ func TestAcceptanceCorpus(t *testing.T) {
 func TestAcceptanceValidation(t *testing.T) {
 	id := RequestIdentity{Key: "key", HistoryEpoch: "epoch"}
 	for _, v := range []AcceptanceResult{
-		{Outcome: "accepted"}, {Outcome: "new-future-outcome"},
-		{Outcome: "unknown", Receipt: &Receipt{}},
-		{Outcome: "accepted", Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationId: "op", HistoryRetentionMs: 0}},
+		{Outcome: AcceptanceOutcomeAccepted}, {Outcome: AcceptanceOutcome(99)},
+		{Outcome: AcceptanceOutcomeUnknown, Receipt: &Receipt{}},
+		{Outcome: AcceptanceOutcomeAccepted, Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationID: "op", HistoryRetentionMs: 0}},
 	} {
 		if ValidateResult(v, id, "owner") == nil {
 			t.Fatalf("accepted invalid result %+v", v)
 		}
 	}
-	if CanResolveFresh(AcceptanceResult{}) || CanResolveFresh(AcceptanceResult{Outcome: "unknown"}) {
+	if CanResolveFresh(AcceptanceResult{}) || CanResolveFresh(AcceptanceResult{Outcome: AcceptanceOutcomeUnknown}) {
 		t.Fatal("uncertainty permits fresh resolution")
 	}
 	if ValidateSubmission(Submission{Identity: id, Kind: "download", RequiredGuarantees: []string{"same", "same"}}) == nil {
@@ -238,7 +238,7 @@ func TestReconcileValidatesRetainedArgumentsWithoutResubmission(t *testing.T) {
 			original := Submission{Identity: id, Kind: "download", RequiredGuarantees: []string{"durable@1"}}
 			retained := original
 			e := Evidence{CallerScope: "caller", Identity: id, HistoryAvailable: true, Arguments: &retained,
-				Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationId: "operation", AcceptedGuarantees: []string{"durable@1"}, HistoryRetentionMs: 1000}}
+				Receipt: &Receipt{Identity: id, LogicalOwner: "owner", OperationID: "operation", AcceptedGuarantees: []string{"durable@1"}, HistoryRetentionMs: 1000}}
 			switch name {
 			case "missing-guarantee":
 				e.Receipt.AcceptedGuarantees = nil
@@ -257,7 +257,7 @@ func TestReconcileValidatesRetainedArgumentsWithoutResubmission(t *testing.T) {
 					want = "accepted"
 				}
 				got := ReconcileEvidence("caller", "owner", id, submitted, e)
-				if got.Outcome != want || CanResolveFresh(got) {
+				if got.Outcome.String() != want || CanResolveFresh(got) {
 					t.Fatalf("resubmitted=%v: got %+v, want %s", submitted != nil, got, want)
 				}
 			}

@@ -89,30 +89,25 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 		}
 		return granted
 	}
-	reply, err := provider.dispatchFrame(call.Frame, scope, permit)
+	reply, err := provider.dispatchFrame(call.Frame, scope, permit, policy != nil)
 	if err != nil {
 		return err
 	}
 	return call.Reply(reply)
 }
 
-func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) access) ([]byte, error) {
-	service, err := api.ServiceName(frame)
-	if err != nil {
-		return nil, err
-	}
-	var reply []byte
-	if service == "abstraction.job/inventory@1" {
-		dispatcher := api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.BindInventory(scope), denied: provider.BindInventory(""), permit: permit}}
-		reply, err = dispatcher.ExchangeFrame(frame)
-	} else if service == "abstraction.job/operations@1" {
-		dispatcher := api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperations(scope), denied: provider.BindOperations(""), permit: permit}}
-		reply, err = dispatcher.ExchangeFrame(frame)
-	} else {
-		dispatcher := api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.Bind(scope), denied: provider.Bind(""), permit: permit}}
-		reply, err = dispatcher.ExchangeFrame(frame)
-	}
-	return reply, err
+// OperatorService is the wire name of the account-wide job operator profile.
+const OperatorService = "abstraction.job/operator@1"
+
+// dispatchFrame serves one generated exchange. decided reports a configured
+// method policy: the operator profile crosses caller scopes and is forbidden
+// without one (JOB-A13).
+func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) access, decided bool) ([]byte, error) {
+	return api.ServeEndpoint(frame, "openabstractions", "",
+		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.Bind(scope), denied: provider.Bind(""), permit: permit}},
+		&api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.BindInventory(scope), denied: provider.BindInventory(""), permit: permit}},
+		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperations(scope), denied: provider.BindOperations(""), permit: permit}},
+		&api.JobOperatorDispatcher{Handler: methodOperator{bound: &bound{provider: provider, scope: boundScope(scope)}, permit: permit, decided: decided}})
 }
 
 type methodAcceptance struct {
@@ -137,21 +132,21 @@ func (h methodAcceptance) GetHistoryWindow() (api.HistoryWindow, error) {
 func (h methodAcceptance) Submit(s api.Submission) (api.AcceptanceResult, error) {
 	handler, granted := h.handler("Submit")
 	if granted == accessUnavailable {
-		return outcome("unavailable", policyUnavailableReason), nil
+		return outcome(api.AcceptanceOutcomeUnavailable, policyUnavailableReason), nil
 	}
 	return handler.Submit(s)
 }
 func (h methodAcceptance) Reconcile(id api.RequestIdentity) (api.AcceptanceResult, error) {
 	handler, granted := h.handler("Reconcile")
 	if granted == accessUnavailable {
-		return outcome("unavailable", policyUnavailableReason), nil
+		return outcome(api.AcceptanceOutcomeUnavailable, policyUnavailableReason), nil
 	}
 	return handler.Reconcile(id)
 }
 func (h methodAcceptance) CancelWork(id api.RequestIdentity) (api.CancellationResult, error) {
 	handler, granted := h.handler("CancelWork")
 	if granted == accessUnavailable {
-		return api.CancellationResult{Outcome: "unavailable"}, nil
+		return api.CancellationResult{Outcome: api.CancellationOutcomeUnavailable}, nil
 	}
 	return handler.CancelWork(id)
 }
@@ -166,7 +161,7 @@ func (h methodOperations) ObserveWork(id api.RequestIdentity) (api.ObservationRe
 	case accessAllowed:
 		return h.allowed.ObserveWork(id)
 	case accessUnavailable:
-		return api.ObservationResult{Outcome: "unavailable"}, nil
+		return api.ObservationResult{Outcome: api.ObservationOutcomeUnavailable}, nil
 	}
 	return h.denied.ObserveWork(id)
 }
@@ -175,7 +170,7 @@ func (h methodOperations) ReadResult(id api.RequestIdentity, offset, max int64) 
 	case accessAllowed:
 		return h.allowed.ReadResult(id, offset, max)
 	case accessUnavailable:
-		return api.ResultRead{Outcome: "unavailable"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	}
 	return h.denied.ReadResult(id, offset, max)
 }
@@ -190,7 +185,7 @@ func (h methodInventory) ListWork(cursor string, limit int64) (api.InventoryPage
 	case accessAllowed:
 		return h.allowed.ListWork(cursor, limit)
 	case accessUnavailable:
-		return inventoryRefusal("unavailable"), nil
+		return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 	}
 	return h.denied.ListWork(cursor, limit)
 }

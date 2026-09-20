@@ -49,6 +49,6 @@ func (p *Provider) RemoteHandler(authorize RemoteAuthorizer, policy RemoteMethod
 			}
 			return granted
 		}
-		return p.dispatchFrame(frame, scope, permit)
+		return p.dispatchFrame(frame, scope, permit, policy != nil)
 	}
 }

@@ -29,7 +29,7 @@ func submission(p *Provider, key string) api.Submission {
 func accept(t *testing.T, c api.RecoverableAcceptance, s api.Submission) api.Receipt {
 	t.Helper()
 	v, err := c.Submit(s)
-	if err != nil || v.Outcome != "accepted" || v.Receipt == nil {
+	if err != nil || v.Outcome.String() != "accepted" || v.Receipt == nil {
 		t.Fatalf("submit: %+v %v", v, err)
 	}
 	return *v.Receipt
@@ -50,24 +50,24 @@ func TestRestartDuplicateAndScopedIdentity(t *testing.T) {
 	r := accept(t, p.Bind("alice"), s)
 	p = openTest(t, root)
 	v, err := p.Bind("alice").Reconcile(s.Identity)
-	if err != nil || v.Receipt == nil || v.Receipt.OperationId != r.OperationId {
+	if err != nil || v.Receipt == nil || v.Receipt.OperationID != r.OperationID {
 		t.Fatalf("restart: %+v %v", v, err)
 	}
-	if duplicate := accept(t, p.Bind("alice"), s); duplicate.OperationId != r.OperationId {
+	if duplicate := accept(t, p.Bind("alice"), s); duplicate.OperationID != r.OperationID {
 		t.Fatal("duplicate ID")
 	}
 	changed := s
 	changed.Spec = []byte(`{"source":"different"}`)
 	v, _ = p.Bind("alice").Submit(changed)
-	if v.Outcome != "key_conflict" {
+	if v.Outcome.String() != "key_conflict" {
 		t.Fatalf("different arguments: %+v", v)
 	}
 	other := accept(t, p.Bind("bob"), s)
-	if other.OperationId == r.OperationId || jobs(t, root) != 2 {
+	if other.OperationID == r.OperationID || jobs(t, root) != 2 {
 		t.Fatal("caller scopes aliased")
 	}
 	v, _ = p.Bind("").Reconcile(s.Identity)
-	if v.Outcome != "forbidden" {
+	if v.Outcome.String() != "forbidden" {
 		t.Fatal(v)
 	}
 	if _, err = p.Bind("").GetHistoryWindow(); err == nil {
@@ -80,12 +80,12 @@ func TestNegativeSealsDelayedSubmission(t *testing.T) {
 	p := openTest(t, root)
 	s := submission(p, "delayed")
 	v, _ := p.Bind("alice").Reconcile(s.Identity)
-	if v.Outcome != "definitely_not_accepted" {
+	if v.Outcome.String() != "definitely_not_accepted" {
 		t.Fatal(v)
 	}
 	p = openTest(t, root)
 	v, _ = p.Bind("alice").Submit(s)
-	if v.Outcome != "definitely_not_accepted" || jobs(t, root) != 0 {
+	if v.Outcome.String() != "definitely_not_accepted" || jobs(t, root) != 0 {
 		t.Fatalf("delayed submit: %+v", v)
 	}
 }
@@ -107,10 +107,10 @@ func TestNegativeVersusSubmitRace(t *testing.T) {
 		if submitted.Outcome != reconciled.Outcome {
 			t.Fatalf("race outcomes disagree: %+v %+v", submitted, reconciled)
 		}
-		if submitted.Outcome != "accepted" && submitted.Outcome != "definitely_not_accepted" {
+		if submitted.Outcome.String() != "accepted" && submitted.Outcome.String() != "definitely_not_accepted" {
 			t.Fatal(submitted)
 		}
-		if submitted.Outcome == "accepted" && submitted.Receipt.OperationId != reconciled.Receipt.OperationId {
+		if submitted.Outcome.String() == "accepted" && submitted.Receipt.OperationID != reconciled.Receipt.OperationID {
 			t.Fatal("race duplicated operation")
 		}
 	}
@@ -135,13 +135,13 @@ func TestConcurrentDuplicateSubmissions(t *testing.T) {
 	operation := ""
 	for i := 0; i < 8; i++ {
 		v := <-results
-		if v.Outcome != "accepted" || v.Receipt == nil {
+		if v.Outcome.String() != "accepted" || v.Receipt == nil {
 			t.Fatal(v)
 		}
 		if operation == "" {
-			operation = v.Receipt.OperationId
+			operation = v.Receipt.OperationID
 		}
-		if operation != v.Receipt.OperationId {
+		if operation != v.Receipt.OperationID {
 			t.Fatal("different concurrent operation")
 		}
 	}
@@ -170,7 +170,7 @@ func TestCrashChild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := p.store.Claim(j.Receipt.OperationId, "test-worker", time.Minute)
+			r, err := p.store.Claim(j.Receipt.OperationID, "test-worker", time.Minute)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -217,19 +217,19 @@ func TestProcessCrashRecoveryBoundaries(t *testing.T) {
 			}
 			p = openTest(t, root)
 			v, _ := p.Bind("alice").Reconcile(s.Identity)
-			if v.Outcome != "accepted" || v.Receipt.OperationId != j.Receipt.OperationId || jobs(t, root) != 1 {
+			if v.Outcome.String() != "accepted" || v.Receipt.OperationID != j.Receipt.OperationID || jobs(t, root) != 1 {
 				t.Fatalf("recovery: %+v", v)
 			}
-			if again := accept(t, p.Bind("alice"), s); again.OperationId != j.Receipt.OperationId || jobs(t, root) != 1 {
+			if again := accept(t, p.Bind("alice"), s); again.OperationID != j.Receipt.OperationID || jobs(t, root) != 1 {
 				t.Fatal("restart duplicate")
 			}
 			if point == "after-job-complete" {
-				r, err := p.store.Load(j.Receipt.OperationId)
+				r, err := p.store.Load(j.Receipt.OperationID)
 				if err != nil || r.State != job.StateComplete {
 					t.Fatalf("completed record changed: %+v %v", r, err)
 				}
 				cancel, _ := p.Bind("alice").CancelWork(s.Identity)
-				if cancel.Outcome != "already_terminal" {
+				if cancel.Outcome.String() != "already_terminal" {
 					t.Fatal(cancel)
 				}
 			}
@@ -256,7 +256,7 @@ func TestAdmissionLimits(t *testing.T) {
 			s.Spec = []byte(`{"broken":`)
 		}
 		v, _ := p.Bind(scope).Submit(s)
-		if v.Outcome != want {
+		if v.Outcome.String() != want {
 			t.Fatalf("%s: %+v", which, v)
 		}
 	}
@@ -278,7 +278,7 @@ func TestSymlinkEvidence(t *testing.T) {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
 	v, _ := p.Bind("alice").Reconcile(s.Identity)
-	if v.Outcome != "unknown" {
+	if v.Outcome.String() != "unknown" {
 		t.Fatal(v)
 	}
 	if _, err := Open(root, "logical-owner"); err == nil {
@@ -308,15 +308,15 @@ func TestGeneratedClientLostReplyThenServiceRestart(t *testing.T) {
 	p = openTest(t, root)
 	client = api.NewRecoverableAcceptanceClient(&api.RecoverableAcceptanceDispatcher{Handler: p.Bind("alice")})
 	v, err := client.Reconcile(s.Identity)
-	if err != nil || v.Outcome != "accepted" || jobs(t, root) != 1 {
+	if err != nil || v.Outcome.String() != "accepted" || jobs(t, root) != 1 {
 		t.Fatalf("recovery: %+v %v", v, err)
 	}
-	r, err := p.store.Load(v.Receipt.OperationId)
+	r, err := p.store.Load(v.Receipt.OperationID)
 	if err != nil || r.Intent != nil {
 		t.Fatalf("wait failure cancelled work: %+v %v", r, err)
 	}
 	duplicate, err := client.Submit(s)
-	if err != nil || duplicate.Receipt == nil || duplicate.Receipt.OperationId != v.Receipt.OperationId || jobs(t, root) != 1 {
+	if err != nil || duplicate.Receipt == nil || duplicate.Receipt.OperationID != v.Receipt.OperationID || jobs(t, root) != 1 {
 		t.Fatalf("wire duplicate: %+v %v", duplicate, err)
 	}
 }
@@ -334,7 +334,7 @@ func TestCorruptEvidenceAndMissingPublishedJobNeverCreateReplacement(t *testing.
 					t.Fatal(err)
 				}
 			case "job":
-				if err := os.Remove(filepath.Join(root, "jobs", r.OperationId+".json")); err != nil {
+				if err := os.Remove(filepath.Join(root, "jobs", r.OperationID+".json")); err != nil {
 					t.Fatal(err)
 				}
 			case "operation-path":
@@ -344,14 +344,14 @@ func TestCorruptEvidenceAndMissingPublishedJobNeverCreateReplacement(t *testing.
 				if err := json.Unmarshal(data, &j); err != nil {
 					t.Fatal(err)
 				}
-				j.Receipt.OperationId = "../outside"
+				j.Receipt.OperationID = "../outside"
 				data, _ = json.Marshal(j)
 				if err := os.WriteFile(path, data, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			v, _ := p.Bind("alice").Reconcile(s.Identity)
-			if v.Outcome != "unknown" {
+			if v.Outcome.String() != "unknown" {
 				t.Fatal(v)
 			}
 			if _, err := Open(root, "logical-owner"); err == nil {
@@ -370,27 +370,27 @@ func TestGuaranteeRefusalOldEpochAndCancellation(t *testing.T) {
 	s := submission(p, "unsupported")
 	s.RequiredGuarantees = []string{"power-loss@1"}
 	v, _ := p.Bind("alice").Submit(s)
-	if v.Outcome != "definitely_not_accepted" {
+	if v.Outcome.String() != "definitely_not_accepted" {
 		t.Fatal(v)
 	}
 	s.RequiredGuarantees = nil
 	v, _ = p.Bind("alice").Submit(s)
-	if v.Outcome != "definitely_not_accepted" {
+	if v.Outcome.String() != "definitely_not_accepted" {
 		t.Fatal("seal reopened")
 	}
 	s = submission(p, "old")
 	s.Identity.HistoryEpoch = "forgotten-epoch"
 	v, _ = p.Bind("alice").Submit(s)
-	if v.Outcome != "unknown" || jobs(t, root) != 0 {
+	if v.Outcome.String() != "unknown" || jobs(t, root) != 0 {
 		t.Fatal(v)
 	}
 	s = submission(p, "cancel")
 	r := accept(t, p.Bind("alice"), s)
 	c, err := p.Bind("alice").CancelWork(s.Identity)
-	if err != nil || c.Outcome != "requested" {
+	if err != nil || c.Outcome.String() != "requested" {
 		t.Fatalf("cancel: %+v %v", c, err)
 	}
-	stored, err := p.store.Load(r.OperationId)
+	stored, err := p.store.Load(r.OperationID)
 	if err != nil || stored.Intent == nil || stored.Intent.Want != job.WantCancel {
 		t.Fatalf("intent: %+v %v", stored, err)
 	}

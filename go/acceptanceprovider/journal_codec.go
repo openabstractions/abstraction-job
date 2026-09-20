@@ -12,8 +12,9 @@ import (
 // Journals keep the private on-disk shape they had before request attempts
 // existed. A zero attempt and an unlost result are omitted, so a journal for an
 // original request is byte-compatible with providers that decode journals
-// strictly and predate attempts. Only a retry attempt or a recorded JOB-A10 loss
-// writes a field such a provider refuses, and it refuses that one journal.
+// strictly and predate attempts. Only a retry attempt, a recorded JOB-A10 loss or
+// a stored JOB-A12 label writes a field such a provider refuses, and it refuses
+// that one journal.
 type journalIdentity struct {
 	Key          string
 	HistoryEpoch string
@@ -47,6 +48,8 @@ type journalDocument struct {
 	WorkRequires []string `json:",omitempty"`
 	Origin       string   `json:",omitempty"`
 	ResultLost   bool     `json:",omitempty"`
+	Label        string   `json:",omitempty"`
+	LabelDerived bool     `json:",omitempty"`
 }
 
 func toJournalIdentity(id api.RequestIdentity) journalIdentity {
@@ -59,12 +62,12 @@ func (id journalIdentity) api() api.RequestIdentity {
 
 func (j journal) MarshalJSON() ([]byte, error) {
 	doc := journalDocument{Version: j.Version, Scope: j.Scope, Identity: toJournalIdentity(j.Identity), Phase: j.Phase, Reason: j.Reason,
-		WorkSpec: j.WorkSpec, WorkRequires: j.WorkRequires, Origin: j.Origin, ResultLost: j.ResultLost}
+		WorkSpec: j.WorkSpec, WorkRequires: j.WorkRequires, Origin: j.Origin, ResultLost: j.ResultLost, Label: j.Label, LabelDerived: j.LabelDerived}
 	if s := j.Arguments; s != nil {
 		doc.Arguments = &journalSubmission{Identity: toJournalIdentity(s.Identity), Kind: s.Kind, Spec: s.Spec, RequiredGuarantees: s.RequiredGuarantees}
 	}
 	if r := j.Receipt; r != nil {
-		doc.Receipt = &journalReceipt{Identity: toJournalIdentity(r.Identity), LogicalOwner: r.LogicalOwner, OperationId: r.OperationId,
+		doc.Receipt = &journalReceipt{Identity: toJournalIdentity(r.Identity), LogicalOwner: r.LogicalOwner, OperationId: r.OperationID,
 			AcceptedGuarantees: r.AcceptedGuarantees, HistoryRetentionMs: r.HistoryRetentionMs}
 	}
 	return json.Marshal(doc)
@@ -83,12 +86,12 @@ func (j *journal) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("acceptance: trailing journal data")
 	}
 	*j = journal{Version: doc.Version, Scope: doc.Scope, Identity: doc.Identity.api(), Phase: doc.Phase, Reason: doc.Reason,
-		WorkSpec: doc.WorkSpec, WorkRequires: doc.WorkRequires, Origin: doc.Origin, ResultLost: doc.ResultLost}
+		WorkSpec: doc.WorkSpec, WorkRequires: doc.WorkRequires, Origin: doc.Origin, ResultLost: doc.ResultLost, Label: doc.Label, LabelDerived: doc.LabelDerived}
 	if s := doc.Arguments; s != nil {
 		j.Arguments = &api.Submission{Identity: s.Identity.api(), Kind: s.Kind, Spec: s.Spec, RequiredGuarantees: s.RequiredGuarantees}
 	}
 	if r := doc.Receipt; r != nil {
-		j.Receipt = &api.Receipt{Identity: r.Identity.api(), LogicalOwner: r.LogicalOwner, OperationId: r.OperationId,
+		j.Receipt = &api.Receipt{Identity: r.Identity.api(), LogicalOwner: r.LogicalOwner, OperationID: r.OperationId,
 			AcceptedGuarantees: r.AcceptedGuarantees, HistoryRetentionMs: r.HistoryRetentionMs}
 	}
 	return nil

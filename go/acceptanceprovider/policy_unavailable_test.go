@@ -14,7 +14,7 @@ type frames struct {
 }
 
 func (f frames) ExchangeFrame(frame []byte) ([]byte, error) {
-	return f.p.dispatchFrame(frame, f.scope, f.permit)
+	return f.p.dispatchFrame(frame, f.scope, f.permit, true)
 }
 
 func granting(a access) func(string, string) access {
@@ -27,25 +27,25 @@ func TestPolicyUnavailableObservationResultAndInventory(t *testing.T) {
 	accept(t, api.NewRecoverableAcceptanceClient(frames{p, "alice", granting(accessAllowed)}), s)
 
 	outage := frames{p, "alice", granting(accessUnavailable)}
-	if v, err := api.NewOperationControlClient(outage).ObserveWork(s.Identity); err != nil || v.Outcome != "unavailable" || v.Snapshot != nil {
+	if v, err := api.NewOperationControlClient(outage).ObserveWork(s.Identity); err != nil || v.Outcome.String() != "unavailable" || v.Snapshot != nil {
 		t.Fatalf("observe during outage: %+v %v", v, err)
 	}
-	if v, err := api.NewOperationControlClient(outage).ReadResult(s.Identity, 0, 16); err != nil || v.Outcome != "unavailable" || v.Chunk != nil {
+	if v, err := api.NewOperationControlClient(outage).ReadResult(s.Identity, 0, 16); err != nil || v.Outcome.String() != "unavailable" || v.Chunk != nil {
 		t.Fatalf("read during outage: %+v %v", v, err)
 	}
-	if v, err := api.NewJobInventoryClient(outage).ListWork("", 8); err != nil || v.Outcome != "unavailable" || len(v.Snapshots) != 0 || v.Next != "" || v.Complete {
+	if v, err := api.NewJobInventoryClient(outage).ListWork("", 8); err != nil || v.Outcome.String() != "unavailable" || len(v.Snapshots) != 0 || v.Next != "" || v.Complete {
 		t.Fatalf("inventory during outage: %+v %v", v, err)
 	}
 
 	denied := frames{p, "alice", granting(accessDenied)}
-	if v, err := api.NewOperationControlClient(denied).ObserveWork(s.Identity); err != nil || v.Outcome != "forbidden" {
+	if v, err := api.NewOperationControlClient(denied).ObserveWork(s.Identity); err != nil || v.Outcome.String() != "forbidden" {
 		t.Fatalf("denied observe: %+v %v", v, err)
 	}
-	if v, err := api.NewJobInventoryClient(denied).ListWork("", 8); err != nil || v.Outcome != "forbidden" {
+	if v, err := api.NewJobInventoryClient(denied).ListWork("", 8); err != nil || v.Outcome.String() != "forbidden" {
 		t.Fatalf("denied inventory: %+v %v", v, err)
 	}
 	allowed := frames{p, "alice", granting(accessAllowed)}
-	if v, err := api.NewOperationControlClient(allowed).ObserveWork(s.Identity); err != nil || v.Outcome != "observed" {
+	if v, err := api.NewOperationControlClient(allowed).ObserveWork(s.Identity); err != nil || v.Outcome.String() != "observed" {
 		t.Fatalf("observe after outage: %+v %v", v, err)
 	}
 }
@@ -57,13 +57,13 @@ func TestPolicyUnavailableLeavesNoEffect(t *testing.T) {
 	outage := api.NewRecoverableAcceptanceClient(frames{p, "alice", granting(accessUnavailable)})
 
 	v, err := outage.Submit(s)
-	if err != nil || v.Outcome != "unavailable" || v.Receipt != nil {
+	if err != nil || v.Outcome.String() != "unavailable" || v.Receipt != nil {
 		t.Fatalf("submit during outage: %+v %v", v, err)
 	}
-	if v, err := outage.Reconcile(s.Identity); err != nil || v.Outcome != "unavailable" {
+	if v, err := outage.Reconcile(s.Identity); err != nil || v.Outcome.String() != "unavailable" {
 		t.Fatalf("reconcile during outage: %+v %v", v, err)
 	}
-	if v, err := outage.CancelWork(s.Identity); err != nil || v.Outcome != "unavailable" {
+	if v, err := outage.CancelWork(s.Identity); err != nil || v.Outcome.String() != "unavailable" {
 		t.Fatalf("cancel during outage: %+v %v", v, err)
 	}
 	if _, err := outage.GetHistoryWindow(); err == nil {
@@ -79,14 +79,14 @@ func TestPolicyUnavailableLeavesNoEffect(t *testing.T) {
 
 	// A later outage returns unavailable for the accepted identity too, and an
 	// evaluated refusal stays forbidden.
-	if v, err := outage.Submit(s); err != nil || v.Outcome != "unavailable" || v.Receipt != nil {
+	if v, err := outage.Submit(s); err != nil || v.Outcome.String() != "unavailable" || v.Receipt != nil {
 		t.Fatalf("duplicate during outage: %+v %v", v, err)
 	}
 	denied := api.NewRecoverableAcceptanceClient(frames{p, "alice", granting(accessDenied)})
-	if v, err := denied.Submit(s); err != nil || v.Outcome != "forbidden" {
+	if v, err := denied.Submit(s); err != nil || v.Outcome.String() != "forbidden" {
 		t.Fatalf("denied submit: %+v %v", v, err)
 	}
-	if again := accept(t, allowed, s); again.OperationId != first.OperationId {
-		t.Fatalf("outage changed the operation: %s then %s", first.OperationId, again.OperationId)
+	if again := accept(t, allowed, s); again.OperationID != first.OperationID {
+		t.Fatalf("outage changed the operation: %s then %s", first.OperationID, again.OperationID)
 	}
 }

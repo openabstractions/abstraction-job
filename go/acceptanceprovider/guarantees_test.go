@@ -47,7 +47,7 @@ func TestExecutionGuaranteesPersistThroughLostReply(t *testing.T) {
 		return nil
 	}
 	r, err := p.Bind("alice").Submit(s)
-	if err != nil || r.Outcome != "unknown" {
+	if err != nil || r.Outcome.String() != "unknown" {
 		t.Fatalf("lost reply: %+v %v", r, err)
 	}
 	p, err = OpenWithExecutor(root, "owner", e)
@@ -58,7 +58,7 @@ func TestExecutionGuaranteesPersistThroughLostReply(t *testing.T) {
 	if !slices.Contains(receipt.AcceptedGuarantees, testExecutionPromise) {
 		t.Fatal("receipt lost execution guarantee")
 	}
-	record, err := p.store.Load(receipt.OperationId)
+	record, err := p.store.Load(receipt.OperationID)
 	if err != nil || !slices.Equal(record.Requires, e.requires) || jobs(t, root) != 1 {
 		t.Fatalf("prepared requirements lost: %+v %v", record, err)
 	}
@@ -75,7 +75,7 @@ func TestExecutionGuaranteesPersistThroughLostReply(t *testing.T) {
 	if slices.Contains(plainReceipt.AcceptedGuarantees, testExecutionPromise) {
 		t.Fatal("unrequested promise accepted without preparation")
 	}
-	path := filepath.Join(root, "jobs", receipt.OperationId+".json")
+	path := filepath.Join(root, "jobs", receipt.OperationID+".json")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -112,12 +112,12 @@ func TestUnsupportedExecutionGuaranteeSealsBeforePreparation(t *testing.T) {
 	s := submission(p, "unsupported")
 	s.RequiredGuarantees = []string{"example.execution/unsupported@1"}
 	r, err := p.Bind("alice").Submit(s)
-	if err != nil || r.Outcome != "definitely_not_accepted" || count != 0 || jobs(t, root) != 0 {
+	if err != nil || r.Outcome.String() != "definitely_not_accepted" || count != 0 || jobs(t, root) != 0 {
 		t.Fatalf("unsupported requirement: %+v %v prepares=%d", r, err, count)
 	}
 	s.RequiredGuarantees = []string{testExecutionPromise}
 	r, err = p.Bind("alice").Submit(s)
-	if err != nil || r.Outcome != "definitely_not_accepted" || count != 0 {
+	if err != nil || r.Outcome.String() != "definitely_not_accepted" || count != 0 {
 		t.Fatalf("sealed identity became eligible: %+v %v", r, err)
 	}
 }

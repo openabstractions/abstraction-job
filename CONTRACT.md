@@ -103,8 +103,10 @@ classified `permanent` belongs to an operation in state `failed`, and the
 provider will not try that operation again. A `retryable` failure accompanies
 work the provider will try again. `WorkFailure.cause` names the provider's typed
 reason when known: `digest_mismatch`, `oversize`, `short_transfer`,
-`unauthorized`, `not_found`, `refused`, `server_error`, `transport` or `other`.
-An absent cause is unreported. A reader treats an unrecognized cause as `other`.
+`unauthorized`, `not_found`, `refused`, `server_error`, `transport`, `credential`
+or `other`. `credential` means a named credential could not be applied; the
+message carries the applier's outcome, and the class is `retryable` exactly when
+that outcome is `unavailable`. An absent cause is unreported. A reader treats an unrecognized cause as `other`.
 Clients never derive classification or cause from message text.
 
 **[JOB-A9] An unobtainable policy decision is unavailable.** When a provider
@@ -145,6 +147,93 @@ under JOB-A10. The value is a minimum, and bytes may stay readable longer. It
 applies per provider, and a caller restoring a binding reads it again from the
 history window. A negative value is invalid.
 
+**[JOB-A12] An operation carries a display label outside its identity.**
+`Submission.label` is optional display text the caller gives the operation. The
+provider trims leading and trailing white space; a label that is empty after
+trimming is absent. A present label is 1 to 256 bytes of valid UTF-8 on one line:
+no code point below U+0020, no U+007F, and no U+2028 or U+2029. A label outside
+these limits makes Submit return `invalid`, and the provider journals, accepts
+and seals nothing for that call. When the caller supplies no label, the provider
+of the submission's kind may derive one at acceptance from what it reads safely
+from the specification. A derived label obeys the same limits and never carries a
+credential: the `download` kind uses the first source's host and its last
+non-empty path segment, joined by ` · ` (U+00B7 between spaces), and drops the
+scheme, userinfo, port, query and fragment. A source with no path segment yields
+the host alone. An unknown kind, or a specification the provider cannot read,
+leaves the label absent.
+
+The provider stores the label once, at acceptance, and it never changes
+afterwards. `OperationSnapshot.label` reports it through ObserveWork and
+ListWork, stable across observation and restarts, and `label_derived` is true
+exactly when the provider derived it. The label is outside JOB-A2 equality and
+the JOB-M1 immutable fields. A duplicate Submit whose label differs returns the
+original receipt, and observation keeps the stored label. Each attempt (JOB-A7)
+stores the label its own acceptance received. The label has
+the snapshot's own visibility. It is never a rights resource, a policy decision
+never receives it, and the service's own logs and audit name the operation id
+instead. A caller-supplied label is the caller's own text. The label is display
+text: it is never a path, a result file name or a unit grouping several
+operations.
+
+**[JOB-A13] Account-wide inventory and cross-scope cancellation are decided per
+call.** A caller's own work is scoped by ownership: its scope observes, lists,
+reads and cancels what that scope submitted, and no rule is consulted for it.
+`abstraction.job/operator@1` serves the two actions that cross scopes.
+`ListAccountWork` lists every scope's accepted operations under the rule
+`abstraction.job/inventory.read`. `CancelOperation` records cancellation intent
+on any operation by its receipt operation id under the rule
+`abstraction.job/acceptance.cancel`. Both rules name the resource
+`abstraction.job/acceptance@1`. The provider asks its configured decision on
+every call and caches no permit. With no configured decision every operator call
+is `forbidden`. A decision that cannot be obtained is `unavailable` and reads or
+changes nothing (JOB-A9). A cursor from `ListAccountWork` never continues a
+`ListWork` enumeration, and the reverse. An operator snapshot carries no caller
+scope, program or provider path. Submit is decided under the rule
+`abstraction.job/acceptance.submit` where a host configures one.
+
+**[JOB-A14] The job rights actions are closed.** `resource_actions` names
+`acceptance.submit`, `acceptance.cancel` and `inventory.read`. They are the job
+capability's own, and a host registers them into its rights decision policy. The
+next name this contract would reserve is `abstraction.job/result.read`, for
+reading another scope's result bytes, which version 1 refuses.
+
+**[JOB-A15] Unfinished work reports what holds it.** A kind's specification may
+carry conditions on when its work may move, and a provider that honours one
+records the condition that holds the work under an extension key of that kind,
+such as `abstraction.download/waiting@1`. `OperationSnapshot.waiting` reports
+the word the kind's provider reads from that key: 1 to 64 bytes of lowercase
+ASCII letters, digits, `_`, `-`, `.` and `:`, such as `network:metered`. It is
+empty when nothing holds the work, and always empty for terminal work. Waiting
+work is accepted and live, normally `pending`; it carries no failure, and the
+word never classifies one. The word is advisory display and a caller may branch
+on it, but it authorizes nothing. Caller exit leaves waiting work waiting, and
+CancelWork cancels it as any other live work. A provider relaying a remote
+operation reports the remote word verbatim. A reader treats an unrecognized word
+as an unnamed wait.
+
+A provider restarting with accepted work whose guarantee depends on something
+that cannot answer yet, such as a network cost source that has not started,
+opens its store and keeps that work accepted. The work waits, and its word names
+the missing dependency, such as `network:unavailable`. The provider offers the
+guarantee to new submissions only while the dependency answers, and the waiting
+work moves once it does. Other work proceeds meanwhile. A provider whose profile
+no longer knows a guarantee still refuses the store under the storage checks
+below.
+
+**[JOB-A16] An executor may refuse admission for the caller.** Before a
+provider journals, accepts or seals a new identity, the executor of its kind may
+decide that it can never serve this submission for this caller as submitted,
+for example because the submission names a credential the caller may not apply.
+Submit then returns `invalid` with the executor's reason, and the provider
+journals, accepts and seals nothing. The reason is a stable word the kind
+defines: the `download` kind uses `credential:<outcome>:<name>`, where outcome
+is the credentials applier's word. The same identity is admissible once the cause
+is repaired. An executor that cannot obtain its decision makes Submit return
+`unavailable` under JOB-A9. The check runs only for an identity with no journal:
+a duplicate Submit of accepted work returns its receipt without asking, and
+Reconcile never asks. Work the executor admitted may still end with the same
+refusal at execution, when the cause changed in between.
+
 The executable [acceptance corpus](testdata/acceptance.json) and Go
 `abstraction/job/acceptance` decision tests check these semantic distinctions.
 The decision helper consumes trusted owner evidence; its booleans are not wire
@@ -172,16 +261,19 @@ no acceptance mapping for unjournaled records.
 **Storage features.** The private owner header lists the journal encodings a
 store has used in `Features`. `abstraction.job/journal-attempts@1` marks
 journals for retry attempts (JOB-A7). `abstraction.job/journal-result-lost@1`
-marks journals that record a lost result (JOB-A10). The provider writes a feature
+marks journals that record a lost result (JOB-A10).
+`abstraction.job/journal-labels@1` marks journals that store a display label
+(JOB-A12). The provider writes a feature
 into the header atomically and durably before the first journal that needs it,
 and never removes one. Journals for original requests and results that were
-never lost use no feature; their bytes match providers that predate features.
+never lost, without a label, use no feature; their bytes match providers that
+predate features.
 CheckManaged, OpenManaged, Open and OpenWithExecutor refuse a header with a
 feature they do not support, naming it and matching ErrIncompatibleStorage,
 before they create directories, locks or journals. A provider released before
 features refuses the `Features` field itself in the same check. A runtime
-downgrade therefore fails its storage preflight by name, after the first retry
-or recorded loss, and leaves the store unchanged.
+downgrade therefore fails its storage preflight by name, after the first retry,
+recorded loss or stored label, and leaves the store unchanged.
 
 An installation may keep the explicitly selected legacy provider available while
 new submissions use a separate managed service root. Conversion of existing
@@ -539,11 +631,11 @@ recall survives release and expiry** [JOB-R6] — so a later reader can tell
 new holding and carries no recall [JOB-R7]; the issuer recalls the new holder
 if it still wants the resource, which is the policy loop WDDM runs too.
 
-```bash
-jobctl recall <id> --epoch N --reason "doubled: lemonade holds it" [--grace SECONDS] [--by who]
+```go
+store.Recall(id, epoch, "doubled: lemonade holds it", by, grace)
 ```
 
-`--epoch` is the one the caller saw, not one it holds: a third party recalling
+`epoch` is the one the caller saw, not one it holds: a third party recalling
 a residency it has only read. The residency broker in
 [`model/`](https://github.com/openabstractions/abstraction-model) is the first issuer and the first holder.
 
@@ -686,8 +778,9 @@ written, every member in the order it arrived — inside `spec`, `checkpoint` an
 every `extensions` value, all the way down. A writer that reads `1.50` and
 writes `1.5`, or reads `"a\/b"` and writes `"a/b"`, has imposed its own policy on
 somebody else's document, and the next reader downstream sees the changed one.
-`scripts/verdict-conformance.sh` hands one record carrying all of it to all three
-writers and compares what each carried against what it was handed.
+Until the Python and C++ stores were removed in 0.1.8,
+`scripts/verdict-conformance.sh` handed one record carrying all of it to three
+writers and compared what each carried against what it was handed.
 
 **An opaque field contains one syntactically valid JSON value [JOB-E8]. The
 reader validates its syntax and retains its original encoded bytes. It does not
@@ -1061,23 +1154,22 @@ The check-before-starting and the sweep exception are **one rule in two places**
 and an implementation needs both. Only sweeping restarts a download seconds after
 a person stopped it; only checking leaves the record unreachable forever.
 
-On the command line, in every implementation:
+In the store interface:
 
-```bash
-jobctl intent <id> <run|pause|cancel> [--by who]
+```go
+store.SetIntent(id, want, by) // want is run, pause or cancel
 ```
 
-No `--epoch`, and that absence is the feature.
+No epoch, and that absence is the feature.
 
 ### Who moves the state
 
-`jobctl` and the store together produce exactly two of the six states:
+The store produces exactly two of the six states:
 **`pending`** on submit, and **`running`** on a successful claim [JOB-S1].
 Nothing else in this layer ever sets one.
 
 `transferred`, `complete` and `failed` are written by **the lease holder**,
-through the ordinary epoch-checked update [JOB-S2] — `jobctl finish --epoch N
---state transferred|complete|failed` is that write, and nothing else. This layer cannot
+through the ordinary epoch-checked update [JOB-S2], and nothing else. This layer cannot
 decide them, because deciding them means knowing whether the work is done, and
 `spec` and `checkpoint` are opaque here. Only the kind above knows.
 
@@ -1139,17 +1231,11 @@ Kubernetes and Azure both spell it `Succeeded`, and Celery `SUCCESS`.
 
 ## What is proven, and what is not
 
-```bash
-bash scripts/xlang-job.sh
-```
+The cross-language relay (`scripts/xlang-job.sh`, `scripts/conformance.sh`)
+was removed with the Python and C++ stores in 0.1.8; its transcripts stay as
+evidence.
 
-Or, across every implementation that exists:
-
-```bash
-bash scripts/conformance.sh          # add JOBCTL_CPP=... for a C++ one
-```
-
-**Proven** ([`docs/results/XLANG2.txt`](https://github.com/openabstractions/abstractions/blob/main/docs/results/XLANG2.txt)) — a job is
+**Proven** before that removal ([`docs/results/XLANG2.txt`](https://github.com/openabstractions/abstractions/blob/main/docs/results/XLANG2.txt)) — a job is
 created in Go with a spec **neither tool understands**, worked on in Go, abandoned
 without release, found as an orphan by **Python**, adopted at epoch 2, resumed
 from the checkpoint its predecessor proved, finished in Python, and read back in
@@ -1175,15 +1261,15 @@ is a kill during a real multi-gigabyte transfer, which needs the service tier.
 ### The transcript, exactly
 
 ```bash
-bash scripts/behaviour-conformance.sh   # add REPLAY_CPP=... for a C++ one
+bash scripts/behaviour-conformance.sh
 ```
 
-`conformance.sh` passes one record round a relay and proves the implementations
-can continue each other's work. It cannot prove they would each have done the
-same thing alone: whoever reaches a branch second inherits the first one's
-answer. So `behaviour-conformance.sh` gives every implementation the same
-scripted operations and its own store, and compares the transcripts byte for
-byte. A scenario lives in `abstraction-download/testdata/scenarios/`, one operation per
+A relay between implementations proves they can continue each other's work. It
+cannot prove they would each have done the same thing alone: whoever reaches a
+branch second inherits the first one's answer. So `behaviour-conformance.sh`
+gives every implementation the same scripted operations and its own store, and
+compares the transcripts byte for byte. Since 0.1.8 the Go driver is the one
+registered implementation, judged against the contract pages. A scenario lives in `abstraction-download/testdata/scenarios/`, one operation per
 line, and a driver named `replay` runs it.
 
 Each line comes back as `NN <the operation> -> <verdict> <fields>`.
@@ -1333,39 +1419,17 @@ Full surveys, with sources: [`openabstractions/research`, `async/`](https://gith
 ## Where a store comes from
 
 Nothing above this line says where a root is; every rule on this page governs
-what is inside one. That silence shipped: an installer put `dl` and `jobctl` on
-one machine's `PATH`, `dl` found the store and `jobctl` refused for want of an
-environment variable nothing sets, and the first install ever performed died
-there.
-
-**A store root is discovered, not demanded.** A tool handed no root resolves one,
-and never refuses for want of being told:
-
-1. its own override, if it has one — `JOB_STORE` for `jobctl`, `MODELGET_STORE`
-   for `jobd`. That rung exists for a harness pointing several implementations at
-   one directory, and for a container;
-2. `ABSTRACTION_STORE`;
-3. `store` in the per-user `abstraction/config.json`, at the location the OS
-   designates — `%APPDATA%` on Windows, `~/Library/Application Support` on macOS,
-   `$XDG_CONFIG_HOME` or `~/.config` elsewhere;
-4. `<home>/.abstraction`, whether or not it exists yet.
-
-**A tool that cannot open the root it resolved names that root and says which
-rung produced it.** The failure that removes is a person who cannot find out
-which directory a tool was looking at, and so cannot find the file to edit.
+what is inside one. The installed runtime opens its managed job root,
+`<state-dir>/jobs`, and `openabstractions jobs migrate-legacy` converts legacy
+records found there. No shipped tool discovers any other store since `dl`,
+`jobd` and `jobctl` were removed in 0.1.8; the discovery rungs they followed
+(`JOB_STORE`, `MODELGET_STORE`, `ABSTRACTION_STORE`, the per-user
+configuration's `store`, then `<home>/.abstraction`) are recorded in
+docs/REMOVED.md in the abstractions repository. A program that embeds the store
+names its root.
 
 This carries no invariant tag, because no sequence of store calls can observe it:
-every harness on this page is handed a root. Its test is the `verify` job of the
-release workflow in `openabstractions/service-jobd`, which installs the package,
-fetches one file with `dl`, and requires `jobctl list` to name the record `dl`
-just wrote — once with the store redirected, then again with nothing set at all.
-
-Discovery is the subject of
-[`abstraction-config`](https://github.com/openabstractions/abstraction-config),
-and `job` reimplements the order above in each language rather than depending on
-it. That duplication is a known cost, not a design, and the copies already
-differ: `config.LegacyJobStore` also reads a machine-wide file and an older
-`~/.modelget`, and no `jobctl` does.
+every harness on this page is handed a root.
 
 ---
 
@@ -1374,10 +1438,9 @@ differ: `config.LegacyJobStore` also reads a machine-wide file and an older
 ```
 job/
   go/         Go implementation      go test ./...
-    cmd/jobctl/   command-line driver
-  python/     Python implementation  python -m unittest
-    jobctl.py     the same driver
 ```
 
-Standard library only, both sides. An abstraction that needs a dependency to read
+The Python and C++ file-store implementations and the `jobctl` drivers were
+removed in 0.1.8 (docs/REMOVED.md in the abstractions repository); the Go
+store is the runtime job provider's persistence. Standard library only. An abstraction that needs a dependency to read
 a JSON file has misjudged its own weight.

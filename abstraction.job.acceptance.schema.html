@@ -9,10 +9,76 @@
 <nav class="site"><a class="name" href="index.html">Open Abstractions</a>
 <a href="index.html">Overview</a> <a href="cases.html">Cases</a> <a href="reference.html">Reference</a> <a href="evidence.html">Evidence</a> <a href="coverage.html">Coverage</a> <a href="adopt.html">Adopt</a>
 <a class="right" href="https://github.com/openabstractions">github.com/openabstractions</a></nav>
-<p class="meta" style="margin-top:10px"><a href="#encoding">Encoding</a> · <a href="#types">Types</a> · <a href="#structs">Structs</a> · <a href="#enums">Enumerations</a> · <a href="#constants">Constants</a> · <a href="#vocabulary">Vocabulary</a> · <a href="#refusals">Refusals</a> · <a href="#protocol">Protocol</a></p>
+
 
 <h1>Schema</h1>
-<p class="lead">One definition; this page and every encoder are emitted from it. Nothing below is written by hand, and each rule tag links the construct to the profile that admits it.</p>
+<p class="lead">Use this reference to inspect fields, methods, accepted values and failure outcomes. For setup and working examples, start with the <a href="reference.html">API guide</a>.</p>
+<p>Definition: <code>abstraction.job.acceptance</code></p>
+<nav aria-label="Schema sections" class="meta"><a href="#service-RecoverableAcceptance">RecoverableAcceptance</a> · <a href="#service-OperationControl">OperationControl</a> · <a href="#service-JobInventory">JobInventory</a> · <a href="#service-JobOperator">JobOperator</a> · <a href="#types">Types</a> · <a href="#structs">Fields</a> · <a href="#enums">Enumerations</a> · <a href="#constants">Constants</a> · <a href="#encoding">Encoding</a> · <a href="#refusals">Refusals</a></nav>
+<h2 id="service-RecoverableAcceptance">Service <code>RecoverableAcceptance</code> <span class="tag">[DEF-S1]</span></h2>
+<p>Version 1 recoverable acceptance vocabulary, local or remote. Providers must implement atomic recovery and downstream deduplication before advertising those guarantees. Legacy Store is not implicitly upgraded.</p>
+<p>Wire identity: <code>abstraction.job/acceptance@1</code></p>
+<p>Handler error codes, declared by <code>acceptance_error_codes</code>: <code>forbidden</code>. Generated bindings name each as a ServiceErrorCode member beside the dispatcher's own codes.</p>
+<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
+<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
+<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
+<p>Obtain the logical owner and history epoch before first submission; creates no work.</p>
+<h3><code>GetHistoryWindow</code></h3><p><code>request-response</code> <code>HistoryWindow</code></p><ul>
+</ul>
+<p>Atomically associate authenticated request identity, arguments, operation and guarantees before acknowledging. Duplicate equal arguments recover the original receipt. No weaker provider fallback on unknown.</p>
+<h3><code>Submit</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
+<li>Argument 1: <code>Submission</code> <code>submission</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Authorized lookup at the original logical owner after lost request, lost reply or caller restart. A definite negative seals the identity against delayed submissions. Unavailable evidence gives unknown.</p>
+<h3><code>Reconcile</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Authorized explicit work cancellation. Cancelling a transport wait is never this operation and never relinquishes accepted work ownership.</p>
+<h3><code>CancelWork</code></h3><p><code>request-response</code> <code>CancellationResult</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+</ul>
+<h2 id="service-OperationControl">Service <code>OperationControl</code> <span class="tag">[DEF-S1]</span></h2>
+<p>Observation and result access use the same authenticated caller scope and request identity as RecoverableAcceptance despite their separate service wire identity. Existing acceptance methods and wire contract remain unchanged.</p>
+<p>Wire identity: <code>abstraction.job/operations@1</code></p>
+<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
+<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
+<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
+<p>Observe in the original authenticated acceptance scope. Absent identities remain unsealed; may recover an already accepted journal.</p>
+<h3><code>ObserveWork</code></h3><p><code>request-response</code> <code>ObservationResult</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Read complete immutable bytes without exposing paths. Offset must be nonnegative; max_bytes must be in 1..65536. Data obeys ResultChunk bounds. Absence, failure, incomplete work and transport errors are never EOF. This read never seals an absent identity.</p>
+<h3><code>ReadResult</code></h3><p><code>request-response</code> <code>ResultRead</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+<li>Argument 2: <code>i64</code> <code>offset</code> (required, including zero/false/empty)</li>
+<li>Argument 3: <code>i64</code> <code>max_bytes</code> (required, including zero/false/empty)</li>
+</ul>
+<h2 id="service-JobInventory">Service <code>JobInventory</code> <span class="tag">[DEF-S1]</span></h2>
+<p>Bounded own-scope inventory on the acceptance provider endpoint. Authorization is independent of cursor text and uses the existing native caller scope. Listing does not authorize cross-scope Observe/Cancel or expose private provider paths.</p>
+<p>Wire identity: <code>abstraction.job/inventory@1</code></p>
+<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
+<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
+<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
+<p>List only the authenticated acceptance scope. Empty cursor starts a bounded enumeration; limit is 1..64 snapshots. Opaque cursors are bound to this provider instance and caller. Sessions expire after 30 seconds idle and restart yields gap; at most 32 sessions exist. Each call scans at most 256 directory entries and 16MiB provider bytes, with a 512KiB compact-JSON snapshot accounting budget (frame encoding overhead is additional). Empty scan pages still advance. Repeating the latest input cursor with the same limit replays its page; older cursors return gap. A lost initial empty-cursor reply can be restarted explicitly; no global scan or cross-caller authority is implied. Partial reads may return unavailable rather than falsely complete. No subscription or retention protocol is supplied.</p>
+<h3><code>ListWork</code></h3><p><code>request-response</code> <code>InventoryPage</code></p><ul>
+<li>Argument 1: <code>string</code> <code>cursor</code> (required, including zero/false/empty)</li>
+<li>Argument 2: <code>i64</code> <code>limit</code> (required, including zero/false/empty)</li>
+</ul>
+<h2 id="service-JobOperator">Service <code>JobOperator</code> <span class="tag">[DEF-S1]</span></h2>
+<p>Account-wide inventory and cross-scope cancellation on the acceptance provider endpoint, for the person acting through an operator program. A provider serves it only with a configured rights decision per call; without one every call is forbidden. A caller&#39;s own work stays on RecoverableAcceptance, OperationControl and JobInventory under ownership (JOB-A13).</p>
+<p>Wire identity: <code>abstraction.job/operator@1</code></p>
+<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
+<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
+<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
+<p>List accepted operations of every caller scope of this provider, under the same bounds, cursor, session, replay and gap rules as JobInventory.ListWork. A cursor is bound to the caller and to this account-wide listing. Each call is decided by the rule abstraction.job/inventory.read on abstraction.job/acceptance@1 (JOB-A13); forbidden and unavailable pages carry no snapshots. Snapshots expose no provider paths and no caller scope.</p>
+<h3><code>ListAccountWork</code></h3><p><code>request-response</code> <code>InventoryPage</code></p><ul>
+<li>Argument 1: <code>string</code> <code>cursor</code> (required, including zero/false/empty)</li>
+<li>Argument 2: <code>i64</code> <code>limit</code> (required, including zero/false/empty)</li>
+</ul>
+<p>Record cancellation intent on the operation with this receipt operation id, whichever scope accepted it. The id is 1..128 bytes of lowercase ASCII letters, digits and &#39;-&#39;. Each call is decided by the rule abstraction.job/acceptance.cancel on abstraction.job/acceptance@1 (JOB-A13). The intent records the caller&#39;s scope. Observe the operation through its submitter or ListAccountWork for its terminal state.</p>
+<h3><code>CancelOperation</code></h3><p><code>request-response</code> <code>OperatorCancellation</code></p><ul>
+<li>Argument 1: <code>string</code> <code>operation_id</code> (required, including zero/false/empty)</li>
+</ul>
 <h2 id="encoding">Encoding <span class="tag">[DEF-E1]</span></h2>
 <div class="wrap"><table>
 <thead><tr><th>setting</th><th>value</th><th>rule</th></tr></thead>
@@ -30,7 +96,7 @@
 <div class="wrap"><table>
 <thead><tr><th>kind</th><th>types</th></tr></thead>
 <tbody>
-<tr><td>built in</td><td><code>CancellationOutcome</code> <code>FailureCause</code> <code>FailureClass</code> <code>InventoryOutcome</code> <code>ObservationOutcome</code> <code>Outcome</code> <code>ResultOutcome</code> <code>WorkState</code> <code>binary</code> <code>bool</code> <code>i64</code> <code>string</code></td></tr>
+<tr><td>built in</td><td><code>AcceptanceOutcome</code> <code>CancellationOutcome</code> <code>FailureCause</code> <code>FailureClass</code> <code>InventoryOutcome</code> <code>ObservationOutcome</code> <code>OperatorCancellationOutcome</code> <code>ResultOutcome</code> <code>WorkState</code> <code>binary</code> <code>bool</code> <code>i64</code> <code>string</code></td></tr>
 <tr><td>declared below</td><td><code>OperationSnapshot</code> <code>Receipt</code> <code>RequestIdentity</code> <code>ResultChunk</code> <code>WorkFailure</code> <code>WorkProgress</code></td></tr>
 <tr><td>container <span class="tag">[DEF-T3]</span></td><td><code>list&lt;string&gt;</code></td></tr>
 <tr><td>repeated record <span class="tag">[DEF-A9]</span></td><td><code>list&lt;OperationSnapshot&gt;</code></td></tr>
@@ -55,6 +121,7 @@
 <tr><td>2</td><td><code>kind</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
 <tr><td>3</td><td><code>spec</code></td><td><code>binary</code></td><td>required</td><td>—</td></tr>
 <tr><td>4</td><td><code>required_guarantees</code></td><td><code>list&lt;string&gt;</code></td><td>required</td><td>—</td></tr>
+<tr><td>5</td><td><code>label</code></td><td><code>string</code></td><td>optional · omitted when absent</td><td>—</td></tr>
 </tbody></table></div>
 <h3 id="struct-Receipt"><code>Receipt</code></h3>
 <p class="meta">unknown fields <code>refuse</code></p>
@@ -72,7 +139,7 @@
 <div class="wrap"><table>
 <thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>outcome</code></td><td><code>Outcome</code></td><td>required</td><td>—</td></tr>
+<tr><td>1</td><td><code>outcome</code></td><td><code>AcceptanceOutcome</code></td><td>required</td><td>—</td></tr>
 <tr><td>2</td><td><code>receipt</code></td><td><code>Receipt</code></td><td>optional · omitted when absent</td><td>—</td></tr>
 <tr><td>3</td><td><code>reason</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
 </tbody></table></div>
@@ -120,6 +187,9 @@
 <tr><td>3</td><td><code>progress</code></td><td><code>WorkProgress</code></td><td>required</td><td>—</td></tr>
 <tr><td>4</td><td><code>cancellation_requested</code></td><td><code>bool</code></td><td>required</td><td>—</td></tr>
 <tr><td>5</td><td><code>failure</code></td><td><code>WorkFailure</code></td><td>optional · omitted when absent</td><td>—</td></tr>
+<tr><td>6</td><td><code>label</code></td><td><code>string</code></td><td>optional · omitted when absent</td><td>—</td></tr>
+<tr><td>7</td><td><code>label_derived</code></td><td><code>bool</code></td><td>optional · omitted when zero</td><td>—</td></tr>
+<tr><td>8</td><td><code>waiting</code></td><td><code>string</code></td><td>optional · omitted when zero</td><td>—</td></tr>
 </tbody></table></div>
 <h3 id="struct-ObservationResult"><code>ObservationResult</code></h3>
 <p class="meta">unknown fields <code>refuse</code></p>
@@ -158,112 +228,134 @@
 <tr><td>3</td><td><code>next</code></td><td><code>string</code></td><td>required</td><td>—</td></tr>
 <tr><td>4</td><td><code>complete</code></td><td><code>bool</code></td><td>required</td><td>—</td></tr>
 </tbody></table></div>
+<h3 id="struct-OperatorCancellation"><code>OperatorCancellation</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>outcome</code></td><td><code>OperatorCancellationOutcome</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
 <h2 id="enums">Enumerations <span class="tag">[DEF-T5]</span></h2>
-<p>Enum fields carry JSON strings containing exact member names, never numeric IDs. Unknown names are preserved with grant and refused as bad_enum with refuse on read and write. Optional absent fields preserve presence separately from an empty string.</p>
+<p>Enum fields carry JSON strings containing exact member wire spellings, never numeric IDs. Unknown names are preserved with grant and refused as bad_enum with refuse on read and write. Optional absent fields preserve presence separately from an empty string.</p>
 <p class="meta">An enumeration is a closed vocabulary of wire names, and each one says on its own what a reader does with a member it has never heard of <span class="tag">[DEF-A5]</span>.</p>
-<h3 id="enum-Outcome"><code>Outcome</code></h3>
+<h3 id="enum-AcceptanceOutcome"><code>AcceptanceOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>accepted</code></td></tr>
-<tr><td>2</td><td><code>definitely_not_accepted</code></td></tr>
-<tr><td>3</td><td><code>unknown</code></td></tr>
-<tr><td>4</td><td><code>key_conflict</code></td></tr>
-<tr><td>5</td><td><code>forbidden</code></td></tr>
-<tr><td>6</td><td><code>invalid</code></td></tr>
-<tr><td>7</td><td><code>unavailable</code></td></tr>
+<tr><td>1</td><td><code>accepted</code></td><td><code>accepted</code></td></tr>
+<tr><td>2</td><td><code>definitely_not_accepted</code></td><td><code>definitely_not_accepted</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>4</td><td><code>key_conflict</code></td><td><code>key_conflict</code></td></tr>
+<tr><td>5</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>6</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+<tr><td>7</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-CancellationOutcome"><code>CancellationOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>requested</code></td></tr>
-<tr><td>2</td><td><code>already_terminal</code></td></tr>
-<tr><td>3</td><td><code>unknown</code></td></tr>
-<tr><td>4</td><td><code>forbidden</code></td></tr>
-<tr><td>5</td><td><code>unsupported</code></td></tr>
-<tr><td>6</td><td><code>unavailable</code></td></tr>
+<tr><td>1</td><td><code>requested</code></td><td><code>requested</code></td></tr>
+<tr><td>2</td><td><code>already_terminal</code></td><td><code>already_terminal</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>4</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>5</td><td><code>unsupported</code></td><td><code>unsupported</code></td></tr>
+<tr><td>6</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-WorkState"><code>WorkState</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>pending</code></td></tr>
-<tr><td>2</td><td><code>running</code></td></tr>
-<tr><td>3</td><td><code>transferred</code></td></tr>
-<tr><td>4</td><td><code>complete</code></td></tr>
-<tr><td>5</td><td><code>failed</code></td></tr>
-<tr><td>6</td><td><code>cancelled</code></td></tr>
+<tr><td>1</td><td><code>pending</code></td><td><code>pending</code></td></tr>
+<tr><td>2</td><td><code>running</code></td><td><code>running</code></td></tr>
+<tr><td>3</td><td><code>transferred</code></td><td><code>transferred</code></td></tr>
+<tr><td>4</td><td><code>complete</code></td><td><code>complete</code></td></tr>
+<tr><td>5</td><td><code>failed</code></td><td><code>failed</code></td></tr>
+<tr><td>6</td><td><code>cancelled</code></td><td><code>cancelled</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-FailureClass"><code>FailureClass</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>retryable</code></td></tr>
-<tr><td>2</td><td><code>permanent</code></td></tr>
-<tr><td>3</td><td><code>unknown</code></td></tr>
+<tr><td>1</td><td><code>retryable</code></td><td><code>retryable</code></td></tr>
+<tr><td>2</td><td><code>permanent</code></td><td><code>permanent</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-FailureCause"><code>FailureCause</code></h3>
 <p class="meta">a member this reader does not know is <code>grant</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>other</code></td></tr>
-<tr><td>2</td><td><code>digest_mismatch</code></td></tr>
-<tr><td>3</td><td><code>oversize</code></td></tr>
-<tr><td>4</td><td><code>short_transfer</code></td></tr>
-<tr><td>5</td><td><code>unauthorized</code></td></tr>
-<tr><td>6</td><td><code>not_found</code></td></tr>
-<tr><td>7</td><td><code>refused</code></td></tr>
-<tr><td>8</td><td><code>server_error</code></td></tr>
-<tr><td>9</td><td><code>transport</code></td></tr>
-<tr><td>10</td><td><code>result_lost</code></td></tr>
+<tr><td>1</td><td><code>other</code></td><td><code>other</code></td></tr>
+<tr><td>2</td><td><code>digest_mismatch</code></td><td><code>digest_mismatch</code></td></tr>
+<tr><td>3</td><td><code>oversize</code></td><td><code>oversize</code></td></tr>
+<tr><td>4</td><td><code>short_transfer</code></td><td><code>short_transfer</code></td></tr>
+<tr><td>5</td><td><code>unauthorized</code></td><td><code>unauthorized</code></td></tr>
+<tr><td>6</td><td><code>not_found</code></td><td><code>not_found</code></td></tr>
+<tr><td>7</td><td><code>refused</code></td><td><code>refused</code></td></tr>
+<tr><td>8</td><td><code>server_error</code></td><td><code>server_error</code></td></tr>
+<tr><td>9</td><td><code>transport</code></td><td><code>transport</code></td></tr>
+<tr><td>10</td><td><code>result_lost</code></td><td><code>result_lost</code></td></tr>
+<tr><td>11</td><td><code>credential</code></td><td><code>credential</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-ObservationOutcome"><code>ObservationOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>observed</code></td></tr>
-<tr><td>2</td><td><code>unknown</code></td></tr>
-<tr><td>3</td><td><code>forbidden</code></td></tr>
-<tr><td>4</td><td><code>invalid</code></td></tr>
-<tr><td>5</td><td><code>definitely_not_accepted</code></td></tr>
-<tr><td>6</td><td><code>unavailable</code></td></tr>
+<tr><td>1</td><td><code>observed</code></td><td><code>observed</code></td></tr>
+<tr><td>2</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>3</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>4</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+<tr><td>5</td><td><code>definitely_not_accepted</code></td><td><code>definitely_not_accepted</code></td></tr>
+<tr><td>6</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-ResultOutcome"><code>ResultOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>data</code></td></tr>
-<tr><td>2</td><td><code>not_ready</code></td></tr>
-<tr><td>3</td><td><code>unavailable</code></td></tr>
-<tr><td>4</td><td><code>unsupported</code></td></tr>
-<tr><td>5</td><td><code>unknown</code></td></tr>
-<tr><td>6</td><td><code>forbidden</code></td></tr>
-<tr><td>7</td><td><code>invalid</code></td></tr>
+<tr><td>1</td><td><code>data</code></td><td><code>data</code></td></tr>
+<tr><td>2</td><td><code>not_ready</code></td><td><code>not_ready</code></td></tr>
+<tr><td>3</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
+<tr><td>4</td><td><code>unsupported</code></td><td><code>unsupported</code></td></tr>
+<tr><td>5</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>6</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>7</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-InventoryOutcome"><code>InventoryOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>
 <div class="wrap"><table>
-<thead><tr><th>id</th><th>member</th></tr></thead>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
 <tbody>
-<tr><td>1</td><td><code>page</code></td></tr>
-<tr><td>2</td><td><code>gap</code></td></tr>
-<tr><td>3</td><td><code>forbidden</code></td></tr>
-<tr><td>4</td><td><code>invalid</code></td></tr>
-<tr><td>5</td><td><code>unavailable</code></td></tr>
+<tr><td>1</td><td><code>page</code></td><td><code>page</code></td></tr>
+<tr><td>2</td><td><code>gap</code></td><td><code>gap</code></td></tr>
+<tr><td>3</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>4</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+<tr><td>5</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
+</tbody></table></div>
+<h3 id="enum-OperatorCancellationOutcome"><code>OperatorCancellationOutcome</code></h3>
+<p class="meta">a member this reader does not know is <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>requested</code></td><td><code>requested</code></td></tr>
+<tr><td>2</td><td><code>already_terminal</code></td><td><code>already_terminal</code></td></tr>
+<tr><td>3</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>4</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>5</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+<tr><td>6</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
 </tbody></table></div>
 <h2 id="constants">Constants <span class="tag">[DEF-A6]</span></h2>
 <div class="wrap"><table>
 <thead><tr><th>name</th><th>type</th><th>value</th></tr></thead>
 <tbody>
 <tr><td><code>admission_guarantees</code></td><td><code>list&lt;string&gt;</code></td><td><code>abstraction.job/caller-exit@1, abstraction.job/service-restart@1, abstraction.job/reconciliation@1</code></td></tr>
+<tr><td><code>acceptance_error_codes</code></td><td><code>list&lt;string&gt;</code></td><td><code>forbidden</code></td></tr>
+<tr><td><code>resource_actions</code></td><td><code>list&lt;string&gt;</code></td><td><code>abstraction.job/acceptance.submit, abstraction.job/acceptance.cancel, abstraction.job/inventory.read</code></td></tr>
 </tbody></table></div>
 <h2 id="refusals">Refusal words <span class="tag">[DEF-R1]</span></h2>
 <div class="wrap"><table>
@@ -282,54 +374,6 @@
 <tr><td>11</td><td><code>bad_enum</code></td><td><code>structure</code></td></tr>
 <tr><td>12</td><td><code>trailing_bytes</code></td><td><code>document</code></td></tr>
 </tbody></table></div>
-<h2 id="service-RecoverableAcceptance">Service <code>RecoverableAcceptance</code> <span class="tag">[DEF-S1]</span></h2>
-<p>Version 1 recoverable acceptance vocabulary, local or remote. Providers must implement atomic recovery and downstream deduplication before advertising those guarantees. Legacy Store is not implicitly upgraded.</p>
-<p>Wire identity: <code>abstraction.job/acceptance@1</code></p>
-<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
-<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
-<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
-<p>Obtain the logical owner and history epoch before first submission; creates no work.</p>
-<h3><code>GetHistoryWindow</code></h3><p><code>request-response</code> <code>HistoryWindow</code></p><ul>
-</ul>
-<p>Atomically associate authenticated request identity, arguments, operation and guarantees before acknowledging. Duplicate equal arguments recover the original receipt. No weaker provider fallback on unknown.</p>
-<h3><code>Submit</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
-<li>Argument 1: <code>Submission</code> <code>submission</code> (required, including zero/false/empty)</li>
-</ul>
-<p>Authorized lookup at the original logical owner after lost request, lost reply or caller restart. A definite negative seals the identity against delayed submissions. Unavailable evidence gives unknown.</p>
-<h3><code>Reconcile</code></h3><p><code>request-response</code> <code>AcceptanceResult</code></p><ul>
-<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
-</ul>
-<p>Authorized explicit work cancellation. Cancelling a transport wait is never this operation and never relinquishes accepted work ownership.</p>
-<h3><code>CancelWork</code></h3><p><code>request-response</code> <code>CancellationResult</code></p><ul>
-<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
-</ul>
-<h2 id="service-OperationControl">Service <code>OperationControl</code> <span class="tag">[DEF-S1]</span></h2>
-<p>Observation and result access use the same authenticated caller scope and request identity as RecoverableAcceptance despite their separate service wire identity. Existing acceptance methods and wire contract remain unchanged.</p>
-<p>Wire identity: <code>abstraction.job/operations@1</code></p>
-<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
-<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
-<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
-<p>Observe in the original authenticated acceptance scope. Absent identities remain unsealed; may recover an already accepted journal.</p>
-<h3><code>ObserveWork</code></h3><p><code>request-response</code> <code>ObservationResult</code></p><ul>
-<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
-</ul>
-<p>Read complete immutable bytes without exposing paths. Offset must be nonnegative; max_bytes must be in 1..65536. Data obeys ResultChunk bounds. Absence, failure, incomplete work and transport errors are never EOF. This read never seals an absent identity.</p>
-<h3><code>ReadResult</code></h3><p><code>request-response</code> <code>ResultRead</code></p><ul>
-<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
-<li>Argument 2: <code>i64</code> <code>offset</code> (required, including zero/false/empty)</li>
-<li>Argument 3: <code>i64</code> <code>max_bytes</code> (required, including zero/false/empty)</li>
-</ul>
-<h2 id="service-JobInventory">Service <code>JobInventory</code> <span class="tag">[DEF-S1]</span></h2>
-<p>Bounded own-scope inventory on the acceptance provider endpoint. Authorization is independent of cursor text and uses the existing native caller scope. Listing does not authorize cross-scope Observe/Cancel or expose private provider paths.</p>
-<p>Wire identity: <code>abstraction.job/inventory@1</code></p>
-<p>Multiple services share this namespace. Generated ServiceName (Go) and service_name (C++/Python) validate the request envelope and version before returning its service identity for routing. The selected generated dispatcher validates the method and typed arguments; the selector does not authorize callers or interpret method payloads.</p>
-<p>Frames carry version, service, method and typed arguments. Transport owns framing, associated exchanges, deadlines and connections. Unknown version/service/method and malformed arguments are rejected before invoking a handler. One-way WriteFrame success means local submission, not remote acceptance or persistence.</p>
-<p>Request-response methods use ExchangeFrame. Replies carry version, service, method, ok and payload; success payload contains typed value (or an empty object for void). Error payload contains nonempty code and message, which may be empty. ServiceError preserves unknown codes. Unexpected handler failures become handler_error without private details; invalid results become invalid_result. Clients validate reply identity and result before exposing it. A malformed frame or transport failure remains a local error; the transport must associate each response with its exchange. C++ dispatchers are pure protocol bindings, not listening servers.</p>
-<p>List only the authenticated acceptance scope. Empty cursor starts a bounded enumeration; limit is 1..64 snapshots. Opaque cursors are bound to this provider instance and caller. Sessions expire after 30 seconds idle and restart yields gap; at most 32 sessions exist. Each call scans at most 256 directory entries and 16MiB provider bytes, with a 512KiB compact-JSON snapshot accounting budget (frame encoding overhead is additional). Empty scan pages still advance. Repeating the latest input cursor with the same limit replays its page; older cursors return gap. A lost initial empty-cursor reply can be restarted explicitly; no global scan or cross-caller authority is implied. Partial reads may return unavailable rather than falsely complete. No subscription or retention protocol is supplied.</p>
-<h3><code>ListWork</code></h3><p><code>request-response</code> <code>InventoryPage</code></p><ul>
-<li>Argument 1: <code>string</code> <code>cursor</code> (required, including zero/false/empty)</li>
-<li>Argument 2: <code>i64</code> <code>limit</code> (required, including zero/false/empty)</li>
-</ul>
 
 <footer>
 <p><a href="index.html">Overview</a> · <a href="cases.html">Cases</a> · <a href="reference.html">Reference</a> · <a href="evidence.html">Evidence</a> · <a href="coverage.html">Coverage</a> · <a href="adopt.html">Adopt</a> ·

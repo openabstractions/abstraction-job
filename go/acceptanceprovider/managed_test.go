@@ -29,7 +29,7 @@ func TestManagedCompetingOpenersAndRestartKeepIdentity(t *testing.T) {
 	}
 	s := submission(a.p, "retained")
 	accepted, err := a.p.Bind("caller").Submit(s)
-	if err != nil || accepted.Outcome != "accepted" {
+	if err != nil || accepted.Outcome.String() != "accepted" {
 		t.Fatal(accepted, err)
 	}
 	reopened, err := OpenManaged(root, executor)
@@ -40,7 +40,7 @@ func TestManagedCompetingOpenersAndRestartKeepIdentity(t *testing.T) {
 		t.Fatal("restart changed identity")
 	}
 	reconciled, err := reopened.Bind("caller").Reconcile(s.Identity)
-	if err != nil || reconciled.Receipt == nil || reconciled.Receipt.OperationId != accepted.Receipt.OperationId || reconciled.Receipt.LogicalOwner != reopened.LogicalOwner() {
+	if err != nil || reconciled.Receipt == nil || reconciled.Receipt.OperationID != accepted.Receipt.OperationID || reconciled.Receipt.LogicalOwner != reopened.LogicalOwner() {
 		t.Fatal(reconciled, err)
 	}
 }

@@ -342,9 +342,9 @@ func (p *Provider) legacyJournal(a LegacyAssignment) ([]byte, *journal, error) {
 		return nil, nil, err
 	}
 	j := &journal{Version: p.config.Version, Scope: a.CallerScope, Identity: id, Phase: "published", Arguments: &s, Origin: legacyMigrationOrigin,
-		Receipt: &api.Receipt{Identity: id, LogicalOwner: p.config.Owner, OperationId: a.OperationID, AcceptedGuarantees: accepted, HistoryRetentionMs: p.config.RetentionMs}}
+		Receipt: &api.Receipt{Identity: id, LogicalOwner: p.config.Owner, OperationID: a.OperationID, AcceptedGuarantees: accepted, HistoryRetentionMs: p.config.RetentionMs}}
 	if p.executor != nil {
-		work, requires, err := p.prepareOrigin(a.OperationID, s, legacyMigrationOrigin)
+		work, requires, err := p.prepareOrigin(a.CallerScope, a.OperationID, s, legacyMigrationOrigin)
 		if err != nil || len(work) > MaxSpecBytes || !json.Valid(work) {
 			return nil, nil, errors.New("executor refused legacy submission")
 		}
@@ -363,7 +363,7 @@ func (p *Provider) legacyJournal(a LegacyAssignment) ([]byte, *journal, error) {
 
 func compatible(record *job.Record, j *journal) bool {
 	var a, b bytes.Buffer
-	return record.ID == j.Receipt.OperationId && record.Kind == j.Arguments.Kind &&
+	return record.ID == j.Receipt.OperationID && record.Kind == j.Arguments.Kind &&
 		json.Compact(&a, record.Spec) == nil && json.Compact(&b, j.workSpec()) == nil && bytes.Equal(a.Bytes(), b.Bytes()) &&
 		slices.Equal(record.Requires, j.WorkRequires)
 }

@@ -45,7 +45,7 @@ func TestJournalsStayReadableByPreAttemptProviders(t *testing.T) {
 	original := submission(p, "compat")
 	first := accept(t, c, original)
 	sealed := submission(p, "compat-sealed")
-	if v, err := c.Reconcile(sealed.Identity); err != nil || v.Outcome != "definitely_not_accepted" {
+	if v, err := c.Reconcile(sealed.Identity); err != nil || v.Outcome.String() != "definitely_not_accepted" {
 		t.Fatalf("seal: %+v %v", v, err)
 	}
 	journalBytes := func(id api.RequestIdentity) []byte {
@@ -69,7 +69,7 @@ func TestJournalsStayReadableByPreAttemptProviders(t *testing.T) {
 		}
 	}
 
-	endOperation(t, p, first.OperationId, job.StateFailed)
+	endOperation(t, p, first.OperationID, job.StateFailed)
 	retried := retry(original, 1)
 	accept(t, c, retried)
 	var old preAttemptJournal

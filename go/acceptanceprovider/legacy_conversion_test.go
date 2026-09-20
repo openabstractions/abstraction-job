@@ -348,31 +348,31 @@ func TestLegacyMigrationConvertsDrainedStatesKeepingBytesAndResults(t *testing.T
 		id := api.RequestIdentity{Key: a.Key, HistoryEpoch: result.HistoryEpoch}
 		record := records[a.OperationID]
 		observed, err := p.BindOperations(a.CallerScope).ObserveWork(id)
-		if err != nil || observed.Outcome != "observed" || observed.Snapshot.Receipt.OperationId != a.OperationID || observed.Snapshot.State != string(record.State) ||
+		if err != nil || observed.Outcome.String() != "observed" || observed.Snapshot.Receipt.OperationID != a.OperationID || observed.Snapshot.State.String() != string(record.State) ||
 			observed.Snapshot.Progress.Done != record.Progress.Done || observed.Snapshot.Progress.Total != record.Progress.Total {
 			t.Fatalf("observe %s: %+v %v", a.OperationID, observed, err)
 		}
 		reconciled, err := p.Bind(a.CallerScope).Reconcile(id)
-		if err != nil || reconciled.Outcome != "accepted" || reconciled.Receipt.OperationId != a.OperationID || reconciled.Receipt.LogicalOwner != result.LogicalOwner {
+		if err != nil || reconciled.Outcome.String() != "accepted" || reconciled.Receipt.OperationID != a.OperationID || reconciled.Receipt.LogicalOwner != result.LogicalOwner {
 			t.Fatalf("reconcile %s: %+v %v", a.OperationID, reconciled, err)
 		}
-		if other, err := p.BindOperations("owner-program@1:someone-else").ObserveWork(id); err != nil || other.Outcome != "unknown" {
+		if other, err := p.BindOperations("owner-program@1:someone-else").ObserveWork(id); err != nil || other.Outcome.String() != "unknown" {
 			t.Fatalf("another caller observed migrated work: %+v %v", other, err)
 		}
 		read, err := p.BindOperations(a.CallerScope).ReadResult(id, 0, MaxResultBytes)
 		switch record.State {
 		case job.StateComplete:
 			want, _ := os.ReadFile(filepath.Join(root, "results", a.OperationID))
-			if err != nil || read.Outcome != "data" || string(read.Chunk.Data) != string(want) || !read.Chunk.Eof {
+			if err != nil || read.Outcome.String() != "data" || string(read.Chunk.Data) != string(want) || !read.Chunk.EOF {
 				t.Fatalf("result %s: %+v %v", a.OperationID, read, err)
 			}
 		default:
-			if err != nil || read.Outcome != "unavailable" {
+			if err != nil || read.Outcome.String() != "unavailable" {
 				t.Fatalf("terminal non-result %s: %+v %v", a.OperationID, read, err)
 			}
 		}
 		page, err := p.BindInventory(a.CallerScope).ListWork("", 64)
-		if err != nil || !page.Complete || len(page.Snapshots) != 1 || page.Snapshots[0].Receipt.OperationId != a.OperationID {
+		if err != nil || !page.Complete || len(page.Snapshots) != 1 || page.Snapshots[0].Receipt.OperationID != a.OperationID {
 			t.Fatalf("inventory %s: %+v %v", a.OperationID, page, err)
 		}
 		reopened, err := legacy.Load(a.OperationID)
@@ -422,7 +422,7 @@ func TestLegacyMigrationConvertsDrainedStatesKeepingBytesAndResults(t *testing.T
 	defer fresh.CloseInventory()
 	s := api.Submission{Identity: api.RequestIdentity{Key: "new-after-migration", HistoryEpoch: result.HistoryEpoch}, Kind: "legacy-download", Spec: []byte(`{"source":"new"}`), RequiredGuarantees: []string{legacyProcessExit}}
 	accepted, err := fresh.Bind("owner-program@1:new-caller").Submit(s)
-	if err != nil || accepted.Outcome != "accepted" {
+	if err != nil || accepted.Outcome.String() != "accepted" {
 		t.Fatal(accepted, err)
 	}
 	var admitted journal

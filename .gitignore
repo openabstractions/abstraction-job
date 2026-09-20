@@ -20,10 +20,6 @@ CMakeFiles/
 *.pdb
 *.ilk
 
-# Go
-/go/jobctl
-/go/jobctl.exe
-
 # Editors and OS
 .vscode/
 .idea/

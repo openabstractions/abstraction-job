@@ -45,6 +45,25 @@ type FailureReporter interface {
 	OperationFailure(*job.Record) *api.WorkFailure
 }
 
+// WaitingReporter reads the word a kind's provider records for unfinished work
+// held by a condition its submission set [JOB-A15].
+type WaitingReporter interface {
+	OperationWaiting(*job.Record) string
+}
+
+// waitingWord accepts 1 to 64 bytes of a-z, 0-9, _, -, . and :.
+func waitingWord(word string) bool {
+	if len(word) == 0 || len(word) > 64 {
+		return false
+	}
+	for _, c := range []byte(word) {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.' || c == ':') {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *Provider) BindOperations(scope string) api.OperationControl {
 	if len(scope) > MaxCallerScopeBytes || !utf8.ValidString(scope) {
 		scope = ""
@@ -54,49 +73,49 @@ func (p *Provider) BindOperations(scope string) api.OperationControl {
 
 // operation observes existing evidence. Unknown identities stay available for
 // their first submission; observing absence never creates a negative seal.
-func (b *bound) operation(id api.RequestIdentity) (*api.Receipt, *job.Record, string) {
+func (b *bound) operation(id api.RequestIdentity) (*journal, *job.Record, api.ObservationOutcome) {
 	if b.scope == "" {
-		return nil, nil, "forbidden"
+		return nil, nil, api.ObservationOutcomeForbidden
 	}
 	if id.Key == "" || id.HistoryEpoch == "" || len(id.Key) > 1024 || len(id.HistoryEpoch) > 1024 || !utf8.ValidString(id.Key) || !utf8.ValidString(id.HistoryEpoch) {
-		return nil, nil, "invalid"
+		return nil, nil, api.ObservationOutcomeInvalid
 	}
 	p := b.provider
 	if id.HistoryEpoch != p.config.Epoch {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	path := p.requestPath(b.scope, id)
 	if regularFile(path) != nil {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	data, err := cas.ReadLimit(path, maxOperationRecordBytes)
 	if err != nil {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	j, err := p.decodeJournal(data)
 	if err != nil || j.Scope != b.scope || j.Identity != id {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	if j.Phase == "sealed" {
-		return nil, nil, "definitely_not_accepted"
+		return nil, nil, api.ObservationOutcomeDefinitelyNotAccepted
 	}
 	// Finish an interrupted acceptance under the same journal lock and stable ID.
 	if err := p.materialize(path); err != nil {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
-	record, err := p.loadOperationRecord(j.Receipt.OperationId)
+	record, err := p.loadOperationRecord(j.Receipt.OperationID)
 	if err != nil {
-		return nil, nil, "unknown"
+		return nil, nil, api.ObservationOutcomeUnknown
 	}
-	return j.Receipt, record, "observed"
+	return j, record, api.ObservationOutcomeObserved
 }
 
 func (b *bound) ObserveWork(id api.RequestIdentity) (api.ObservationResult, error) {
-	receipt, record, outcome := b.operation(id)
-	if outcome != "observed" {
+	accepted, record, outcome := b.operation(id)
+	if outcome != api.ObservationOutcomeObserved {
 		return api.ObservationResult{Outcome: outcome}, nil
 	}
-	return api.ObservationResult{Outcome: "observed", Snapshot: operationSnapshot(receipt, record, b.provider.executor, b.provider.resultLost(b.scope, id))}, nil
+	return api.ObservationResult{Outcome: api.ObservationOutcomeObserved, Snapshot: operationSnapshot(accepted, record, b.provider.executor, b.provider.resultLost(b.scope, id))}, nil
 }
 
 // ErrResultLost is returned by a ResultReader when a complete operation's
@@ -132,56 +151,58 @@ func (p *Provider) recordResultLost(scope string, id api.RequestIdentity) error 
 	})
 }
 
-func operationSnapshot(receipt *api.Receipt, record *job.Record, executor Executor, lost bool) *api.OperationSnapshot {
-	snapshot := &api.OperationSnapshot{Receipt: *receipt, State: string(record.State),
+func operationSnapshot(accepted *journal, record *job.Record, executor Executor, lost bool) *api.OperationSnapshot {
+	snapshot := &api.OperationSnapshot{Receipt: *accepted.Receipt, State: publicWorkState(record.State), Label: accepted.Label, LabelDerived: accepted.LabelDerived,
 		Progress:              api.WorkProgress{Done: record.Progress.Done, Total: record.Progress.Total},
 		CancellationRequested: record.Intent != nil && record.Intent.Want == job.WantCancel}
 	if lost {
 		// A recorded loss projects the complete record as typed terminal failure.
-		snapshot.State = string(job.StateFailed)
-		snapshot.Failure = &api.WorkFailure{Classification: "permanent", Message: "operation result lost", Cause: "result_lost"}
+		snapshot.State = api.WorkStateFailed
+		snapshot.Failure = &api.WorkFailure{Classification: api.FailureClassPermanent, Message: "operation result lost", Cause: api.FailureCauseResultLost}
 		return snapshot
+	}
+	if reporter, ok := executor.(WaitingReporter); ok && !record.State.Terminal() {
+		if word := reporter.OperationWaiting(record); waitingWord(word) {
+			snapshot.Waiting = word
+		}
 	}
 	if reporter, ok := executor.(FailureReporter); ok {
 		snapshot.Failure = reporter.OperationFailure(record)
 	} else if record.Error != "" || record.State == job.StateFailed {
-		snapshot.Failure = &api.WorkFailure{Classification: "unknown", Message: "operation reported a failure"}
+		snapshot.Failure = &api.WorkFailure{Classification: api.FailureClassUnknown, Message: "operation reported a failure"}
 	}
 	return snapshot
 }
 
 func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.ResultRead, error) {
 	if b.scope == "" {
-		return api.ResultRead{Outcome: "forbidden"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeForbidden}, nil
 	}
 	if offset < 0 || maxBytes < 1 || maxBytes > MaxResultBytes {
-		return api.ResultRead{Outcome: "invalid"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeInvalid}, nil
 	}
-	receipt, record, outcome := b.operation(id)
-	if outcome != "observed" {
-		if outcome == "definitely_not_accepted" {
-			outcome = "unknown"
-		}
-		return api.ResultRead{Outcome: outcome}, nil
+	accepted, record, outcome := b.operation(id)
+	if outcome != api.ObservationOutcomeObserved {
+		return api.ResultRead{Outcome: resultOutcome(outcome)}, nil
 	}
 	reader, ok := b.provider.executor.(ResultReader)
 	if !ok {
-		return api.ResultRead{Outcome: "unsupported"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnsupported}, nil
 	}
 	switch record.State {
 	case job.StateComplete:
 	case job.StateFailed, job.StateCancelled:
-		return api.ResultRead{Outcome: "unavailable"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	default:
-		return api.ResultRead{Outcome: "not_ready"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeNotReady}, nil
 	}
 	if b.provider.resultLost(b.scope, id) {
 		// Reappearing bytes are never served under a lost identity [JOB-A10].
-		return api.ResultRead{Outcome: "unavailable"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	}
 	data, total, err := reader.ReadOperationResult(b.provider.root, record, offset, maxBytes)
 	if errors.Is(err, ErrResultRange) {
-		return api.ResultRead{Outcome: "invalid"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeInvalid}, nil
 	}
 	if errors.Is(err, ErrResultLost) {
 		// A failed record write leaves the operation complete and the reply the
@@ -189,12 +210,46 @@ func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.
 		if err := b.provider.recordResultLost(b.scope, id); err != nil {
 			b.provider.reportError(errors.Join(errResultLostNotRecorded, err))
 		}
-		return api.ResultRead{Outcome: "unavailable"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	}
 	if err != nil || total < 0 || offset > total || int64(len(data)) > maxBytes || int64(len(data)) > total-offset || (len(data) == 0 && offset < total) {
-		return api.ResultRead{Outcome: "unavailable"}, nil
+		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	}
-	return api.ResultRead{Outcome: "data", Chunk: &api.ResultChunk{Receipt: *receipt, Offset: offset, Total: total, Data: data, Eof: offset+int64(len(data)) == total}}, nil
+	return api.ResultRead{Outcome: api.ResultOutcomeData, Chunk: &api.ResultChunk{Receipt: *accepted.Receipt, Offset: offset, Total: total, Data: data, EOF: offset+int64(len(data)) == total}}, nil
+}
+
+func publicWorkState(state job.State) api.WorkState {
+	switch state {
+	case job.StatePending:
+		return api.WorkStatePending
+	case job.StateRunning:
+		return api.WorkStateRunning
+	case job.StateTransferred:
+		return api.WorkStateTransferred
+	case job.StateComplete:
+		return api.WorkStateComplete
+	case job.StateFailed:
+		return api.WorkStateFailed
+	case job.StateCancelled:
+		return api.WorkStateCancelled
+	default:
+		return 0
+	}
+}
+
+func resultOutcome(outcome api.ObservationOutcome) api.ResultOutcome {
+	switch outcome {
+	case api.ObservationOutcomeForbidden:
+		return api.ResultOutcomeForbidden
+	case api.ObservationOutcomeInvalid:
+		return api.ResultOutcomeInvalid
+	case api.ObservationOutcomeUnavailable:
+		return api.ResultOutcomeUnavailable
+	case api.ObservationOutcomeUnknown, api.ObservationOutcomeDefinitelyNotAccepted:
+		return api.ResultOutcomeUnknown
+	default:
+		return 0
+	}
 }
 
 // Service observation uses the same persisted-record bound as inventory.

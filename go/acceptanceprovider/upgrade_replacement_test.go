@@ -73,11 +73,11 @@ func readWholeResult(t *testing.T, p *Provider, scope string, identity api.Reque
 			t.Fatalf("read result: %+v %v", result, err)
 		}
 		chunk := result.Chunk
-		if chunk.Receipt.OperationId != receipt.OperationId || chunk.Receipt.LogicalOwner != receipt.LogicalOwner || chunk.Offset != int64(len(got)) {
+		if chunk.Receipt.OperationID != receipt.OperationID || chunk.Receipt.LogicalOwner != receipt.LogicalOwner || chunk.Offset != int64(len(got)) {
 			t.Fatalf("result chunk changed identity or offset: %+v", chunk)
 		}
 		got = append(got, chunk.Data...)
-		if chunk.Eof {
+		if chunk.EOF {
 			return got
 		}
 	}
@@ -86,7 +86,7 @@ func readWholeResult(t *testing.T, p *Provider, scope string, identity api.Reque
 func sameReceipt(t *testing.T, step string, p *Provider, scope string, identity api.RequestIdentity, want api.Receipt) {
 	t.Helper()
 	v, err := p.Bind(scope).Reconcile(identity)
-	if err != nil || v.Receipt == nil || v.Receipt.OperationId != want.OperationId || v.Receipt.LogicalOwner != want.LogicalOwner {
+	if err != nil || v.Receipt == nil || v.Receipt.OperationID != want.OperationID || v.Receipt.LogicalOwner != want.LogicalOwner {
 		t.Fatalf("%s changed the receipt: %+v %v", step, v, err)
 	}
 }
@@ -140,7 +140,7 @@ func TestAcceptedWorkSurvivesFailedUpgradeSteps(t *testing.T) {
 	completed, pending := submission(p, "completed-before-upgrade"), submission(p, "pending-during-upgrade")
 	completedReceipt := accept(t, p.Bind("app"), completed)
 	pendingReceipt := accept(t, p.Bind("app"), pending)
-	completeOperation(t, p, completedReceipt.OperationId)
+	completeOperation(t, p, completedReceipt.OperationID)
 	want := readWholeResult(t, p, "app", completed.Identity, completedReceipt)
 	if !bytes.Equal(want, installed.body) {
 		t.Fatal("installed result differs from its executor")
@@ -192,10 +192,10 @@ func TestAcceptedWorkSurvivesFailedUpgradeSteps(t *testing.T) {
 	if got := readWholeResult(t, restored, "app", completed.Identity, completedReceipt); !bytes.Equal(got, want) {
 		t.Fatal("rollback changed completed result bytes")
 	}
-	if duplicate := accept(t, restored.Bind("app"), pending); duplicate.OperationId != pendingReceipt.OperationId {
+	if duplicate := accept(t, restored.Bind("app"), pending); duplicate.OperationID != pendingReceipt.OperationID {
 		t.Fatal("rollback accepted the pending submission a second time")
 	}
-	completeOperation(t, restored, pendingReceipt.OperationId)
+	completeOperation(t, restored, pendingReceipt.OperationID)
 	if got := readWholeResult(t, restored, "app", pending.Identity, pendingReceipt); !bytes.Equal(got, installed.body) {
 		t.Fatal("work accepted before the upgrade completed with different bytes")
 	}

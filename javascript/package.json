@@ -13,7 +13,8 @@
     "url": "https://github.com/openabstractions/abstraction-job/issues"
   },
   "type": "module",
-  "exports": "./js/abstraction/job/acceptance/rec.mjs",
+  "types": "./js/abstraction/job/acceptance/index.d.mts",
+  "exports": {".": {"types": "./js/abstraction/job/acceptance/index.d.mts", "default": "./js/abstraction/job/acceptance/index.mjs"}},
   "files": [
     "js"
   ],

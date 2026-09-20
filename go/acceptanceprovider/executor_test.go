@@ -44,7 +44,7 @@ func TestExecutionPreparationRecoversEveryAdmissionBoundary(t *testing.T) {
 				}
 				return nil
 			}
-			if result, err := p.Bind("alice").Submit(s); err != nil || result.Outcome != "unknown" {
+			if result, err := p.Bind("alice").Submit(s); err != nil || result.Outcome.String() != "unknown" {
 				t.Fatalf("fault response: %+v %v", result, err)
 			}
 			if !fired {
@@ -55,11 +55,11 @@ func TestExecutionPreparationRecoversEveryAdmissionBoundary(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := accept(t, p.Bind("alice"), s)
-			rec, err := p.store.Load(r.OperationId)
+			rec, err := p.store.Load(r.OperationID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			expected, _ := executor.Prepare(r.OperationId, s.Kind, s.Spec)
+			expected, _ := executor.Prepare(r.OperationID, s.Kind, s.Spec)
 			var got, want any
 			if json.Unmarshal(rec.Spec, &got) != nil || json.Unmarshal(expected, &want) != nil {
 				t.Fatal("invalid prepared payload")

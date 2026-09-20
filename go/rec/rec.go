@@ -187,31 +187,38 @@ func esc(out []byte, s string) []byte {
 	return append(out, '"')
 }
 
-var VerdictNames = []string{"not_found", "lease_held", "stale_epoch", "conflict", "lease_expired", "terminal", "invalid", "unknown_schema", "unknown_op", "not_supported", "other"}
+// Verdict is an open vocabulary: a reader keeps a word it has never heard, so
+// a value may be none of the constants below. Verdict(word) and string(v)
+// convert between the raw word and the vocabulary.
+type Verdict string
 
-const VerdictNotFound = "not_found"
+const (
+	VerdictNotFound      Verdict = "not_found"
+	VerdictLeaseHeld     Verdict = "lease_held"
+	VerdictStaleEpoch    Verdict = "stale_epoch"
+	VerdictConflict      Verdict = "conflict"
+	VerdictLeaseExpired  Verdict = "lease_expired"
+	VerdictTerminal      Verdict = "terminal"
+	VerdictInvalid       Verdict = "invalid"
+	VerdictUnknownSchema Verdict = "unknown_schema"
+	VerdictUnknownOp     Verdict = "unknown_op"
+	VerdictNotSupported  Verdict = "not_supported"
+	VerdictOther         Verdict = "other"
+)
 
-const VerdictLeaseHeld = "lease_held"
+// VerdictValues returns every member of Verdict in declaration order, in a new slice.
+func VerdictValues() []Verdict {
+	return []Verdict{VerdictNotFound, VerdictLeaseHeld, VerdictStaleEpoch, VerdictConflict, VerdictLeaseExpired, VerdictTerminal, VerdictInvalid, VerdictUnknownSchema, VerdictUnknownOp, VerdictNotSupported, VerdictOther}
+}
 
-const VerdictStaleEpoch = "stale_epoch"
-
-const VerdictConflict = "conflict"
-
-const VerdictLeaseExpired = "lease_expired"
-
-const VerdictTerminal = "terminal"
-
-const VerdictInvalid = "invalid"
-
-const VerdictUnknownSchema = "unknown_schema"
-
-const VerdictUnknownOp = "unknown_op"
-
-const VerdictNotSupported = "not_supported"
-
-const VerdictOther = "other"
-
-const VerdictUnknown = "grant"
+// Known reports whether v is a member of Verdict.
+func (v Verdict) Known() bool {
+	switch v {
+	case VerdictNotFound, VerdictLeaseHeld, VerdictStaleEpoch, VerdictConflict, VerdictLeaseExpired, VerdictTerminal, VerdictInvalid, VerdictUnknownSchema, VerdictUnknownOp, VerdictNotSupported, VerdictOther:
+		return true
+	}
+	return false
+}
 
 var VerdictTranscript = map[string]string{
 	"not_found":      "not-found",
@@ -258,7 +265,7 @@ type Lease struct {
 
 type Delegation struct {
 	System     string
-	ExternalId string
+	ExternalID string
 	Delivered  bool
 }
 
@@ -276,7 +283,7 @@ type Envelope struct {
 type Record struct {
 	Content    []string
 	Critical   []string
-	Id         string
+	ID         string
 	Kind       string
 	Envelope   *Envelope
 	State      string
@@ -295,10 +302,10 @@ type Record struct {
 
 type Request struct {
 	Op     string
-	Id     string
+	ID     string
 	Owner  string
 	Epoch  int64
-	TtlMs  int64
+	TTLMs  int64
 	Want   string
 	By     string
 	Reason string
@@ -309,7 +316,7 @@ type Request struct {
 type Response struct {
 	Kind       string
 	Error      string
-	Id         string
+	ID         string
 	Record     Raw
 	Records    []Raw
 	Bool       bool
@@ -468,7 +475,7 @@ func encDelegation(out []byte, v *Delegation, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "external_id")
 	out = append(out, ':', ' ')
-	out = esc(out, v.ExternalId)
+	out = esc(out, v.ExternalID)
 	if v.Delivered {
 		out = append(out, ',')
 		out = append(out, '\n')
@@ -554,7 +561,7 @@ func encRecord(out []byte, v *Record, depth int) []byte {
 	out = pad(out, depth+1)
 	out = esc(out, "id")
 	out = append(out, ':', ' ')
-	out = esc(out, v.Id)
+	out = esc(out, v.ID)
 	out = append(out, ',')
 	out = append(out, '\n')
 	out = pad(out, depth+1)
@@ -1190,7 +1197,7 @@ func lexicalTimestamp(s string) bool {
 
 // [DEF-G2] rfc3339-micros: what a writer emits. Exactly six fractional digits,
 // upper-case separators, UTC.
-func MicrosTimestamp(s string) bool {
+func microsTimestamp(s string) bool {
 	return len(s) == 27 && normalizedTimestamp(s) == s
 }
 
@@ -1200,7 +1207,7 @@ func (r *reader) timestamp() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !WideTimestamp(s) {
+	if !wideTimestamp(s) {
 		r.pos = at
 		return "", r.refuse("bad_timestamp")
 	}
@@ -1301,7 +1308,7 @@ func normalizedTimestamp(s string) string {
 	}
 	return string(out)
 }
-func WideTimestamp(s string) bool { return normalizedTimestamp(s) != "" }
+func wideTimestamp(s string) bool { return normalizedTimestamp(s) != "" }
 func writeTimestamp(s string) string {
 	result := normalizedTimestamp(s)
 	if result == "" {
@@ -1723,7 +1730,7 @@ func (r *reader) decodeDelegation() (*Delegation, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.ExternalId = x
+				v.ExternalID = x
 			case "delivered":
 				if seen&4 != 0 {
 					return nil, r.refuse("duplicate_field")
@@ -1960,7 +1967,7 @@ func (r *reader) decodeRecord() (*Record, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.Id = x
+				v.ID = x
 			case "kind":
 				if seen&8 != 0 {
 					return nil, r.refuse("duplicate_field")
@@ -2169,7 +2176,7 @@ func (r *reader) decodeRequest() (*Request, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.Id = x
+				v.ID = x
 			case "owner":
 				if seen&4 != 0 {
 					return nil, r.refuse("duplicate_field")
@@ -2199,7 +2206,7 @@ func (r *reader) decodeRequest() (*Request, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.TtlMs = x
+				v.TTLMs = x
 			case "want":
 				if seen&32 != 0 {
 					return nil, r.refuse("duplicate_field")
@@ -2330,7 +2337,7 @@ func (r *reader) decodeResponse() (*Response, error) {
 				if err != nil {
 					return nil, err
 				}
-				v.Id = x
+				v.ID = x
 			case "record":
 				if seen&8 != 0 {
 					return nil, r.refuse("duplicate_field")
@@ -2443,7 +2450,7 @@ func (r *reader) derive(v *Record) error {
 	if (v.Intent != nil) != in["abstraction.job/intent@1"] {
 		return r.refuse("content_mismatch")
 	}
-	if (Member(v.Checkpoint, "verified")) != in["abstraction.download/ranges@1"] {
+	if (member(v.Checkpoint, "verified")) != in["abstraction.download/ranges@1"] {
 		return r.refuse("content_mismatch")
 	}
 	if (v.Delegation != nil) != in["abstraction.job/delegation@1"] {
@@ -2467,7 +2474,7 @@ func (r *reader) derive(v *Record) error {
 // [DEF-A8] Whether an opaque value is an object naming this member with
 // something other than null. The key is decoded, so two spellings of one name
 // are one name; the value is neither decoded nor judged.
-func Member(v Raw, name string) bool {
+func member(v Raw, name string) bool {
 	r := &reader{buf: []byte(v)}
 	r.ws()
 	if r.at() != '{' {
@@ -2499,12 +2506,12 @@ func Member(v Raw, name string) bool {
 	return false
 }
 
-// Refusals is in the order two of them are chosen between.
+// refusals is in the order two of them are chosen between.
 
-var Refusals = []string{"malformed", "bad_string", "number_spelling", "wrong_type", "bad_timestamp", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "trailing_bytes", "unknown_critical", "not_a_subset", "content_mismatch"}
+var refusals = []string{"malformed", "bad_string", "number_spelling", "wrong_type", "bad_timestamp", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "trailing_bytes", "unknown_critical", "not_a_subset", "content_mismatch"}
 
-func RefusalRank(word string) int {
-	for i, w := range Refusals {
+func refusalRank(word string) int {
+	for i, w := range refusals {
 		if w == word {
 			return i
 		}
@@ -2625,11 +2632,11 @@ func encWireRequest(out []byte, v *Request) []byte {
 	out = esc(out, "op")
 	out = append(out, ':')
 	out = esc(out, v.Op)
-	if v.Id != "" {
+	if v.ID != "" {
 		out = append(out, ',')
 		out = esc(out, "id")
 		out = append(out, ':')
-		out = esc(out, v.Id)
+		out = esc(out, v.ID)
 	}
 	if v.Owner != "" {
 		out = append(out, ',')
@@ -2643,11 +2650,11 @@ func encWireRequest(out []byte, v *Request) []byte {
 		out = append(out, ':')
 		out = num(out, v.Epoch)
 	}
-	if v.TtlMs != 0 {
+	if v.TTLMs != 0 {
 		out = append(out, ',')
 		out = esc(out, "ttl_ms")
 		out = append(out, ':')
-		out = num(out, v.TtlMs)
+		out = num(out, v.TTLMs)
 	}
 	if v.Want != "" {
 		out = append(out, ',')
@@ -2718,14 +2725,14 @@ func encWireResponse(out []byte, v *Response) []byte {
 		out = append(out, ':')
 		out = esc(out, v.Error)
 	}
-	if v.Id != "" {
+	if v.ID != "" {
 		if !first {
 			out = append(out, ',')
 		}
 		first = false
 		out = esc(out, "id")
 		out = append(out, ':')
-		out = esc(out, v.Id)
+		out = esc(out, v.ID)
 	}
 	if v.Record != "" {
 		if !first {

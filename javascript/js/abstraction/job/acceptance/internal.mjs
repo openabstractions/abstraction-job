@@ -4,7 +4,7 @@ const HEX = "0123456789abcdef";
 const ENC = new TextEncoder();
 const SHORT = { 0x22: '\\"', 0x5c: "\\\\", 0x08: "\\b", 0x0c: "\\f", 0x0a: "\\n", 0x0d: "\\r", 0x09: "\\t" };
 
-export class Out {
+class Out {
   constructor() { this.b = []; }
   byte(c) { this.b.push(c); }
   ascii(s) { for (let i = 0; i < s.length; i++) this.b.push(s.charCodeAt(i)); }
@@ -20,11 +20,11 @@ function escByte(out, c) {
 
 // Every integer the definition calls i64 is a BigInt here, because Number
 // rounds above 2^53 and two values in the conformance record are i64 extremes.
-export function num(out, n) { out.ascii(BigInt(n).toString()); }
+function num(out, n) { out.ascii(BigInt(n).toString()); }
 
-export function pad(out, depth) { for (let i = 0; i < depth * 2; i++) out.byte(0x20); }
+function pad(out, depth) { for (let i = 0; i < depth * 2; i++) out.byte(0x20); }
 
-export function strs(out, v, depth) {
+function strs(out, v, depth) {
   if (v.length === 0) { out.ascii("[]"); return; }
   out.ascii("[\n");
   for (let i = 0; i < v.length; i++) {
@@ -39,7 +39,7 @@ export function strs(out, v, depth) {
 
 const isWs = (c) => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
 
-export function raw(out, s, depth) {
+function raw(out, s, depth) {
   const b = typeof s === "string" ? ENC.encode(s) : s;
   let i = 0;
   while (i < b.length) {
@@ -91,7 +91,7 @@ function byteLess(a, b) {
   return x.length - y.length;
 }
 
-export function rawmap(out, m, depth) {
+function rawmap(out, m, depth) {
   const keys = Object.keys(m).sort(byteLess);
   if (keys.length === 0) { out.ascii("{}"); return; }
   out.ascii("{\n");
@@ -107,7 +107,7 @@ export function rawmap(out, m, depth) {
   out.byte(0x7d);
 }
 
-export function esc(out, s) {
+function esc(out, s) {
   out.byte(0x22);
   for (const c of ENC.encode(s)) escByte(out, c);
   out.byte(0x22);
@@ -152,7 +152,7 @@ function readBinary(r) {
   return result;
 }
 
-export function encList(out, v, depth, enc) {
+function writeList(out, v, depth, enc) {
   if (v.length === 0) { out.ascii("[]"); return; }
   out.ascii("[\n");
   for (let i = 0; i < v.length; i++) {
@@ -165,33 +165,107 @@ export function encList(out, v, depth, enc) {
   out.byte(0x5d);
 }
 
-export const OutcomeNames = ["accepted", "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable"];
-export const OutcomeUnknown = "refuse";
+export const AcceptanceOutcome = Object.freeze({
+  Accepted: "accepted",
+  DefinitelyNotAccepted: "definitely_not_accepted",
+  Unknown: "unknown",
+  KeyConflict: "key_conflict",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  Unavailable: "unavailable",
+});
 
-export const CancellationOutcomeNames = ["requested", "already_terminal", "unknown", "forbidden", "unsupported", "unavailable"];
-export const CancellationOutcomeUnknown = "refuse";
+export const CancellationOutcome = Object.freeze({
+  Requested: "requested",
+  AlreadyTerminal: "already_terminal",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Unsupported: "unsupported",
+  Unavailable: "unavailable",
+});
 
-export const WorkStateNames = ["pending", "running", "transferred", "complete", "failed", "cancelled"];
-export const WorkStateUnknown = "refuse";
+export const WorkState = Object.freeze({
+  Pending: "pending",
+  Running: "running",
+  Transferred: "transferred",
+  Complete: "complete",
+  Failed: "failed",
+  Cancelled: "cancelled",
+});
 
-export const FailureClassNames = ["retryable", "permanent", "unknown"];
-export const FailureClassUnknown = "refuse";
+export const FailureClass = Object.freeze({
+  Retryable: "retryable",
+  Permanent: "permanent",
+  Unknown: "unknown",
+});
 
-export const FailureCauseNames = ["other", "digest_mismatch", "oversize", "short_transfer", "unauthorized", "not_found", "refused", "server_error", "transport", "result_lost"];
-export const FailureCauseUnknown = "grant";
+export const FailureCause = Object.freeze({
+  Other: "other",
+  DigestMismatch: "digest_mismatch",
+  Oversize: "oversize",
+  ShortTransfer: "short_transfer",
+  Unauthorized: "unauthorized",
+  NotFound: "not_found",
+  Refused: "refused",
+  ServerError: "server_error",
+  Transport: "transport",
+  ResultLost: "result_lost",
+  Credential: "credential",
+});
 
-export const ObservationOutcomeNames = ["observed", "unknown", "forbidden", "invalid", "definitely_not_accepted", "unavailable"];
-export const ObservationOutcomeUnknown = "refuse";
+export const ObservationOutcome = Object.freeze({
+  Observed: "observed",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  DefinitelyNotAccepted: "definitely_not_accepted",
+  Unavailable: "unavailable",
+});
 
-export const ResultOutcomeNames = ["data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"];
-export const ResultOutcomeUnknown = "refuse";
+export const ResultOutcome = Object.freeze({
+  Data: "data",
+  NotReady: "not_ready",
+  Unavailable: "unavailable",
+  Unsupported: "unsupported",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+});
 
-export const InventoryOutcomeNames = ["page", "gap", "forbidden", "invalid", "unavailable"];
-export const InventoryOutcomeUnknown = "refuse";
+export const InventoryOutcome = Object.freeze({
+  Page: "page",
+  Gap: "gap",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  Unavailable: "unavailable",
+});
+
+export const OperatorCancellationOutcome = Object.freeze({
+  Requested: "requested",
+  AlreadyTerminal: "already_terminal",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  Unavailable: "unavailable",
+});
+
+export const ServiceErrorCode = Object.freeze({
+  HandlerError: "handler_error",
+  InvalidResult: "invalid_result",
+  UnknownVersion: "unknown_version",
+  UnknownService: "unknown_service",
+  UnknownMethod: "unknown_method",
+  WrongMode: "wrong_mode",
+  Forbidden: "forbidden",
+});
 
 export const admissionGuarantees = ["abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"];
 
-export function enc_requestidentity(out, v, depth) {
+export const acceptanceErrorCodes = ["forbidden"];
+
+export const resourceActions = ["abstraction.job/acceptance.submit", "abstraction.job/acceptance.cancel", "abstraction.job/inventory.read"];
+
+function writeRequestIdentity(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -203,7 +277,7 @@ export function enc_requestidentity(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "history_epoch");
   out.ascii(": ");
-  esc(out, v.history_epoch);
+  esc(out, v.historyEpoch);
   if (v.attempt !== 0n) {
     out.byte(0x2c);
     out.byte(0x0a);
@@ -217,13 +291,13 @@ export function enc_requestidentity(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_submission(out, v, depth) {
+function writeSubmission(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -241,49 +315,57 @@ export function enc_submission(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "required_guarantees");
   out.ascii(": ");
-  strs(out, v.required_guarantees, depth + 1);
+  strs(out, v.requiredGuarantees, depth + 1);
+  if (v.label !== "") {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "label");
+    out.ascii(": ");
+    esc(out, v.label);
+  }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_receipt(out, v, depth) {
+function writeReceipt(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "logical_owner");
   out.ascii(": ");
-  esc(out, v.logical_owner);
+  esc(out, v.logicalOwner);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "operation_id");
   out.ascii(": ");
-  esc(out, v.operation_id);
+  esc(out, v.operationId);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "accepted_guarantees");
   out.ascii(": ");
-  strs(out, v.accepted_guarantees, depth + 1);
+  strs(out, v.acceptedGuarantees, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "history_retention_ms");
   out.ascii(": ");
-  num(out, v.history_retention_ms);
+  num(out, v.historyRetentionMs);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_acceptanceresult(out, v, depth) {
+function writeAcceptanceResult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "accepted" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unknown" && v.outcome !== "key_conflict" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -298,7 +380,7 @@ export function enc_acceptanceresult(out, v, depth) {
     pad(out, depth + 1);
     esc(out, "receipt");
     out.ascii(": ");
-    enc_receipt(out, v.receipt, depth + 1);
+    writeReceipt(out, v.receipt, depth + 1);
   }
   out.byte(0x2c);
   out.byte(0x0a);
@@ -311,39 +393,39 @@ export function enc_acceptanceresult(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_historywindow(out, v, depth) {
+function writeHistoryWindow(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "logical_owner");
   out.ascii(": ");
-  esc(out, v.logical_owner);
+  esc(out, v.logicalOwner);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "history_epoch");
   out.ascii(": ");
-  esc(out, v.history_epoch);
+  esc(out, v.historyEpoch);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "minimum_retention_ms");
   out.ascii(": ");
-  num(out, v.minimum_retention_ms);
-  if (v.result_retention_ms !== 0n) {
+  num(out, v.minimumRetentionMs);
+  if (v.resultRetentionMs !== 0n) {
     out.byte(0x2c);
     out.byte(0x0a);
     pad(out, depth + 1);
     esc(out, "result_retention_ms");
     out.ascii(": ");
-    num(out, v.result_retention_ms);
+    num(out, v.resultRetentionMs);
   }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_cancellationresult(out, v, depth) {
+function writeCancellationResult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "unsupported" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -357,7 +439,7 @@ export function enc_cancellationresult(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_workprogress(out, v, depth) {
+function writeWorkProgress(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -375,7 +457,7 @@ export function enc_workprogress(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_workfailure(out, v, depth) {
+function writeWorkFailure(out, v, depth) {
     if (typeof v.classification !== "string") throw new Refusal("wrong_type",0);
     if (v.classification !== "retryable" && v.classification !== "permanent" && v.classification !== "unknown") { throw new Refusal("bad_enum",0); }
     if (v.cause !== "") {
@@ -406,7 +488,7 @@ export function enc_workfailure(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_operationsnapshot(out, v, depth) {
+function writeOperationSnapshot(out, v, depth) {
     if (typeof v.state !== "string") throw new Refusal("wrong_type",0);
     if (v.state !== "pending" && v.state !== "running" && v.state !== "transferred" && v.state !== "complete" && v.state !== "failed" && v.state !== "cancelled") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -414,7 +496,7 @@ export function enc_operationsnapshot(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "receipt");
   out.ascii(": ");
-  enc_receipt(out, v.receipt, depth + 1);
+  writeReceipt(out, v.receipt, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -426,27 +508,51 @@ export function enc_operationsnapshot(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "progress");
   out.ascii(": ");
-  enc_workprogress(out, v.progress, depth + 1);
+  writeWorkProgress(out, v.progress, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "cancellation_requested");
   out.ascii(": ");
-  out.ascii(v.cancellation_requested ? "true" : "false");
+  out.ascii(v.cancellationRequested ? "true" : "false");
   if (v.failure !== undefined && v.failure !== null) {
     out.byte(0x2c);
     out.byte(0x0a);
     pad(out, depth + 1);
     esc(out, "failure");
     out.ascii(": ");
-    enc_workfailure(out, v.failure, depth + 1);
+    writeWorkFailure(out, v.failure, depth + 1);
+  }
+  if (v.label !== "") {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "label");
+    out.ascii(": ");
+    esc(out, v.label);
+  }
+  if (v.labelDerived) {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "label_derived");
+    out.ascii(": ");
+    out.ascii(v.labelDerived ? "true" : "false");
+  }
+  if (v.waiting !== "") {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "waiting");
+    out.ascii(": ");
+    esc(out, v.waiting);
   }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_observationresult(out, v, depth) {
+function writeObservationResult(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "observed" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "definitely_not_accepted" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -461,20 +567,20 @@ export function enc_observationresult(out, v, depth) {
     pad(out, depth + 1);
     esc(out, "snapshot");
     out.ascii(": ");
-    enc_operationsnapshot(out, v.snapshot, depth + 1);
+    writeOperationSnapshot(out, v.snapshot, depth + 1);
   }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_resultchunk(out, v, depth) {
+function writeResultChunk(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "receipt");
   out.ascii(": ");
-  enc_receipt(out, v.receipt, depth + 1);
+  writeReceipt(out, v.receipt, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -504,7 +610,7 @@ export function enc_resultchunk(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_resultread(out, v, depth) {
+function writeResultRead(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "data" && v.outcome !== "not_ready" && v.outcome !== "unavailable" && v.outcome !== "unsupported" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -519,14 +625,14 @@ export function enc_resultread(out, v, depth) {
     pad(out, depth + 1);
     esc(out, "chunk");
     out.ascii(": ");
-    enc_resultchunk(out, v.chunk, depth + 1);
+    writeResultChunk(out, v.chunk, depth + 1);
   }
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_inventorypage(out, v, depth) {
+function writeInventoryPage(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "page" && v.outcome !== "gap" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
   out.byte(0x7b);
@@ -540,7 +646,7 @@ export function enc_inventorypage(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "snapshots");
   out.ascii(": ");
-  encList(out, v.snapshots, depth + 1, enc_operationsnapshot);
+  writeList(out, v.snapshots, depth + 1, writeOperationSnapshot);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -558,66 +664,80 @@ export function enc_inventorypage(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancegethistorywindowarguments(out, v, depth) {
+function writeOperatorCancellation(out, v, depth) {
+    if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
+    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "outcome");
+  out.ascii(": ");
+  esc(out, v.outcome);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOARecoverableAcceptanceGetHistoryWindowArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancesubmitarguments(out, v, depth) {
+function writeOARecoverableAcceptanceSubmitArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "submission");
   out.ascii(": ");
-  enc_submission(out, v.submission, depth + 1);
+  writeSubmission(out, v.submission, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancereconcilearguments(out, v, depth) {
+function writeOARecoverableAcceptanceReconcileArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancecancelworkarguments(out, v, depth) {
+function writeOARecoverableAcceptanceCancelWorkArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oaoperationcontrolobserveworkarguments(out, v, depth) {
+function writeOAOperationControlObserveWorkArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oaoperationcontrolreadresultarguments(out, v, depth) {
+function writeOAOperationControlReadResultArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "identity");
   out.ascii(": ");
-  enc_requestidentity(out, v.identity, depth + 1);
+  writeRequestIdentity(out, v.identity, depth + 1);
   out.byte(0x2c);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -629,13 +749,13 @@ export function enc_oaoperationcontrolreadresultarguments(out, v, depth) {
   pad(out, depth + 1);
   esc(out, "max_bytes");
   out.ascii(": ");
-  num(out, v.max_bytes);
+  num(out, v.maxBytes);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oajobinventorylistworkarguments(out, v, depth) {
+function writeOAJobInventoryListWorkArguments(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -653,7 +773,37 @@ export function enc_oajobinventorylistworkarguments(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_oaserviceframe(out, v, depth) {
+function writeOAJobOperatorListAccountWorkArguments(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "cursor");
+  out.ascii(": ");
+  esc(out, v.cursor);
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "limit");
+  out.ascii(": ");
+  num(out, v.limit);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAJobOperatorCancelOperationArguments(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "operation_id");
+  out.ascii(": ");
+  esc(out, v.operationId);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAServiceFrame(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -683,7 +833,7 @@ export function enc_oaserviceframe(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_oaservicereply(out, v, depth) {
+function writeOAServiceReply(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -719,7 +869,7 @@ export function enc_oaservicereply(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_oaserviceerror(out, v, depth) {
+function writeOAServiceError(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
@@ -737,85 +887,109 @@ export function enc_oaserviceerror(out, v, depth) {
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancegethistorywindowresult(out, v, depth) {
+function writeOARecoverableAcceptanceGetHistoryWindowResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_historywindow(out, v.value, depth + 1);
+  writeHistoryWindow(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancesubmitresult(out, v, depth) {
+function writeOARecoverableAcceptanceSubmitResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_acceptanceresult(out, v.value, depth + 1);
+  writeAcceptanceResult(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancereconcileresult(out, v, depth) {
+function writeOARecoverableAcceptanceReconcileResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_acceptanceresult(out, v.value, depth + 1);
+  writeAcceptanceResult(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oarecoverableacceptancecancelworkresult(out, v, depth) {
+function writeOARecoverableAcceptanceCancelWorkResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_cancellationresult(out, v.value, depth + 1);
+  writeCancellationResult(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oaoperationcontrolobserveworkresult(out, v, depth) {
+function writeOAOperationControlObserveWorkResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_observationresult(out, v.value, depth + 1);
+  writeObservationResult(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oaoperationcontrolreadresultresult(out, v, depth) {
+function writeOAOperationControlReadResultResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_resultread(out, v.value, depth + 1);
+  writeResultRead(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
 }
 
-export function enc_oajobinventorylistworkresult(out, v, depth) {
+function writeOAJobInventoryListWorkResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
   pad(out, depth + 1);
   esc(out, "value");
   out.ascii(": ");
-  enc_inventorypage(out, v.value, depth + 1);
+  writeInventoryPage(out, v.value, depth + 1);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAJobOperatorListAccountWorkResult(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "value");
+  out.ascii(": ");
+  writeInventoryPage(out, v.value, depth + 1);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAJobOperatorCancelOperationResult(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "value");
+  out.ascii(": ");
+  writeOperatorCancellation(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -823,7 +997,7 @@ export function enc_oajobinventorylistworkresult(out, v, depth) {
 
 export function encode(v) {
   const out = new Out();
-  enc_acceptanceresult(out, v, 0);
+  writeAcceptanceResult(out, v, 0);
   out.byte(0x0a);
   return out.bytes();
 }
@@ -1104,7 +1278,7 @@ class Reader {
   }
 }
 
-function decodeList(r, elem) {
+function readList(r, elem) {
   if (r.at() !== 0x5b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1131,21 +1305,24 @@ function decodeList(r, elem) {
 // number for the same key and epoch; zero is the original request. Attempt N+1
 // is eligible only after attempt N failed terminally or was sealed (JOB-A7).
 export function newRequestIdentity() {
-  return { key: "", history_epoch: "", attempt: 0n };
+  return { key: "", historyEpoch: "", attempt: 0n };
 }
 
 // Opaque kind-specific specification bytes, not a second tagged job Record.
 // Equality includes kind, exact spec bytes and the set of required guarantees.
-// Credentials are supplied at the authorized service boundary.
+// Credentials are supplied at the authorized service boundary. Label is the
+// caller's display text for the operation, 1 to 256 UTF-8 bytes after trimming
+// on one line; an empty label is absent, and an invalid one makes Submit
+// invalid. It is outside equality and fixed at acceptance (JOB-A12).
 export function newSubmission() {
-  return { identity: newRequestIdentity(), kind: "", spec: new Uint8Array(0), required_guarantees: [] };
+  return { identity: newRequestIdentity(), kind: "", spec: new Uint8Array(0), requiredGuarantees: [], label: "" };
 }
 
 // Recoverable acceptance evidence. Retention is a minimum duration from
 // original acceptance, never renewed by replay. Expiry does not end work,
 // transfer ownership or authorize duplicate execution. IDs confer no authority.
 export function newReceipt() {
-  return { identity: newRequestIdentity(), logical_owner: "", operation_id: "", accepted_guarantees: [], history_retention_ms: 0n };
+  return { identity: newRequestIdentity(), logicalOwner: "", operationId: "", acceptedGuarantees: [], historyRetentionMs: 0n };
 }
 
 // Accepted requires a receipt; other outcomes forbid one. Definite
@@ -1165,7 +1342,7 @@ export function newAcceptanceResult() {
 // completion, that complete result bytes stay readable; zero declares none
 // (JOB-A11).
 export function newHistoryWindow() {
-  return { logical_owner: "", history_epoch: "", minimum_retention_ms: 0n, result_retention_ms: 0n };
+  return { logicalOwner: "", historyEpoch: "", minimumRetentionMs: 0n, resultRetentionMs: 0n };
 }
 
 // Requested acknowledges cancellation intent, not stopped effects. Completion
@@ -1193,9 +1370,15 @@ export function newWorkFailure() {
 
 // Receipt binds original request and logical owner. Cancellation requested is
 // intent, not stopped effects. Progress and last-attempt failure are advisory;
-// no provider paths are exposed.
+// no provider paths are exposed, and the label is display text, never a path or
+// a result file name. Label is the stored display label: the caller's, or one
+// the kind's provider derived at acceptance, when label_derived is true. It is
+// absent when neither exists (JOB-A12). Waiting is the word the kind's provider
+// reports for accepted, unfinished work held by a condition the submission set,
+// such as network:metered; empty when nothing holds it. It is advisory and
+// never a failure (JOB-A15).
 export function newOperationSnapshot() {
-  return { receipt: newReceipt(), state: "", progress: newWorkProgress(), cancellation_requested: false, failure: null };
+  return { receipt: newReceipt(), state: "", progress: newWorkProgress(), cancellationRequested: false, failure: null, label: "", labelDerived: false, waiting: "" };
 }
 
 // Exactly observed carries a snapshot; all other outcomes forbid it. Absent
@@ -1236,75 +1419,101 @@ export function newInventoryPage() {
   return { outcome: "", snapshots: [], next: "", complete: false };
 }
 
-export function newOARecoverableAcceptanceGetHistoryWindowArguments() {
+// Requested acknowledges cancellation intent recorded on the named operation,
+// whichever scope accepted it; it is not stopped effects. Already_terminal
+// names an operation that ended. Unknown names no operation of this provider.
+// Invalid is a malformed operation id. Forbidden is an evaluated refusal of the
+// caller's rule. Unavailable records no intent because the decision or the
+// store could not be reached (JOB-A13).
+export function newOperatorCancellation() {
+  return { outcome: "" };
+}
+
+function newOARecoverableAcceptanceGetHistoryWindowArguments() {
   return { };
 }
 
-export function newOARecoverableAcceptanceSubmitArguments() {
+function newOARecoverableAcceptanceSubmitArguments() {
   return { submission: newSubmission() };
 }
 
-export function newOARecoverableAcceptanceReconcileArguments() {
+function newOARecoverableAcceptanceReconcileArguments() {
   return { identity: newRequestIdentity() };
 }
 
-export function newOARecoverableAcceptanceCancelWorkArguments() {
+function newOARecoverableAcceptanceCancelWorkArguments() {
   return { identity: newRequestIdentity() };
 }
 
-export function newOAOperationControlObserveWorkArguments() {
+function newOAOperationControlObserveWorkArguments() {
   return { identity: newRequestIdentity() };
 }
 
-export function newOAOperationControlReadResultArguments() {
-  return { identity: newRequestIdentity(), offset: 0n, max_bytes: 0n };
+function newOAOperationControlReadResultArguments() {
+  return { identity: newRequestIdentity(), offset: 0n, maxBytes: 0n };
 }
 
-export function newOAJobInventoryListWorkArguments() {
+function newOAJobInventoryListWorkArguments() {
   return { cursor: "", limit: 0n };
 }
 
-export function newOAServiceFrame() {
+function newOAJobOperatorListAccountWorkArguments() {
+  return { cursor: "", limit: 0n };
+}
+
+function newOAJobOperatorCancelOperationArguments() {
+  return { operationId: "" };
+}
+
+function newOAServiceFrame() {
   return { version: 0, service: "", method: "", arguments: "" };
 }
 
-export function newOAServiceReply() {
+function newOAServiceReply() {
   return { version: 0, service: "", method: "", ok: false, payload: "" };
 }
 
-export function newOAServiceError() {
+function newOAServiceError() {
   return { code: "", message: "" };
 }
 
-export function newOARecoverableAcceptanceGetHistoryWindowResult() {
+function newOARecoverableAcceptanceGetHistoryWindowResult() {
   return { value: newHistoryWindow() };
 }
 
-export function newOARecoverableAcceptanceSubmitResult() {
+function newOARecoverableAcceptanceSubmitResult() {
   return { value: newAcceptanceResult() };
 }
 
-export function newOARecoverableAcceptanceReconcileResult() {
+function newOARecoverableAcceptanceReconcileResult() {
   return { value: newAcceptanceResult() };
 }
 
-export function newOARecoverableAcceptanceCancelWorkResult() {
+function newOARecoverableAcceptanceCancelWorkResult() {
   return { value: newCancellationResult() };
 }
 
-export function newOAOperationControlObserveWorkResult() {
+function newOAOperationControlObserveWorkResult() {
   return { value: newObservationResult() };
 }
 
-export function newOAOperationControlReadResultResult() {
+function newOAOperationControlReadResultResult() {
   return { value: newResultRead() };
 }
 
-export function newOAJobInventoryListWorkResult() {
+function newOAJobInventoryListWorkResult() {
   return { value: newInventoryPage() };
 }
 
-function decode_requestidentity(r) {
+function newOAJobOperatorListAccountWorkResult() {
+  return { value: newInventoryPage() };
+}
+
+function newOAJobOperatorCancelOperationResult() {
+  return { value: newOperatorCancellation() };
+}
+
+function readRequestIdentity(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1327,7 +1536,7 @@ function decode_requestidentity(r) {
       } else if (key === "history_epoch") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.history_epoch = r.string();
+        v.historyEpoch = r.string();
       } else if (key === "attempt") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
@@ -1347,7 +1556,7 @@ function decode_requestidentity(r) {
   return v;
 }
 
-function decode_submission(r) {
+function readSubmission(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1366,7 +1575,7 @@ function decode_submission(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else if (key === "kind") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
@@ -1378,7 +1587,11 @@ function decode_submission(r) {
       } else if (key === "required_guarantees") {
         if (seen & 8) throw r.refuse("duplicate_field");
         seen |= 8;
-        v.required_guarantees = r.strList();
+        v.requiredGuarantees = r.strList();
+      } else if (key === "label") {
+        if (seen & 16) throw r.refuse("duplicate_field");
+        seen |= 16;
+        v.label = r.string();
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1394,7 +1607,7 @@ function decode_submission(r) {
   return v;
 }
 
-function decode_receipt(r) {
+function readReceipt(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1413,23 +1626,23 @@ function decode_receipt(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else if (key === "logical_owner") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.logical_owner = r.string();
+        v.logicalOwner = r.string();
       } else if (key === "operation_id") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
-        v.operation_id = r.string();
+        v.operationId = r.string();
       } else if (key === "accepted_guarantees") {
         if (seen & 8) throw r.refuse("duplicate_field");
         seen |= 8;
-        v.accepted_guarantees = r.strList();
+        v.acceptedGuarantees = r.strList();
       } else if (key === "history_retention_ms") {
         if (seen & 16) throw r.refuse("duplicate_field");
         seen |= 16;
-        v.history_retention_ms = r.integer(-9223372036854775808n, 9223372036854775807n);
+        v.historyRetentionMs = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1445,7 +1658,7 @@ function decode_receipt(r) {
   return v;
 }
 
-function decode_acceptanceresult(r) {
+function readAcceptanceResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1468,7 +1681,7 @@ function decode_acceptanceresult(r) {
       } else if (key === "receipt") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.receipt = decode_receipt(r);
+        v.receipt = readReceipt(r);
       } else if (key === "reason") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
@@ -1489,7 +1702,7 @@ function decode_acceptanceresult(r) {
   return v;
 }
 
-function decode_historywindow(r) {
+function readHistoryWindow(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1508,19 +1721,19 @@ function decode_historywindow(r) {
       if (key === "logical_owner") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.logical_owner = r.string();
+        v.logicalOwner = r.string();
       } else if (key === "history_epoch") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.history_epoch = r.string();
+        v.historyEpoch = r.string();
       } else if (key === "minimum_retention_ms") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
-        v.minimum_retention_ms = r.integer(-9223372036854775808n, 9223372036854775807n);
+        v.minimumRetentionMs = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else if (key === "result_retention_ms") {
         if (seen & 8) throw r.refuse("duplicate_field");
         seen |= 8;
-        v.result_retention_ms = r.integer(-9223372036854775808n, 9223372036854775807n);
+        v.resultRetentionMs = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1536,7 +1749,7 @@ function decode_historywindow(r) {
   return v;
 }
 
-function decode_cancellationresult(r) {
+function readCancellationResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1572,7 +1785,7 @@ function decode_cancellationresult(r) {
   return v;
 }
 
-function decode_workprogress(r) {
+function readWorkProgress(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1611,7 +1824,7 @@ function decode_workprogress(r) {
   return v;
 }
 
-function decode_workfailure(r) {
+function readWorkFailure(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1655,7 +1868,7 @@ function decode_workfailure(r) {
   return v;
 }
 
-function decode_operationsnapshot(r) {
+function readOperationSnapshot(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1674,7 +1887,7 @@ function decode_operationsnapshot(r) {
       if (key === "receipt") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.receipt = decode_receipt(r);
+        v.receipt = readReceipt(r);
       } else if (key === "state") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
@@ -1682,15 +1895,27 @@ function decode_operationsnapshot(r) {
       } else if (key === "progress") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
-        v.progress = decode_workprogress(r);
+        v.progress = readWorkProgress(r);
       } else if (key === "cancellation_requested") {
         if (seen & 8) throw r.refuse("duplicate_field");
         seen |= 8;
-        v.cancellation_requested = r.boolean();
+        v.cancellationRequested = r.boolean();
       } else if (key === "failure") {
         if (seen & 16) throw r.refuse("duplicate_field");
         seen |= 16;
-        v.failure = decode_workfailure(r);
+        v.failure = readWorkFailure(r);
+      } else if (key === "label") {
+        if (seen & 32) throw r.refuse("duplicate_field");
+        seen |= 32;
+        v.label = r.string();
+      } else if (key === "label_derived") {
+        if (seen & 64) throw r.refuse("duplicate_field");
+        seen |= 64;
+        v.labelDerived = r.boolean();
+      } else if (key === "waiting") {
+        if (seen & 128) throw r.refuse("duplicate_field");
+        seen |= 128;
+        v.waiting = r.string();
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1707,7 +1932,7 @@ function decode_operationsnapshot(r) {
   return v;
 }
 
-function decode_observationresult(r) {
+function readObservationResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1730,7 +1955,7 @@ function decode_observationresult(r) {
       } else if (key === "snapshot") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.snapshot = decode_operationsnapshot(r);
+        v.snapshot = readOperationSnapshot(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1747,7 +1972,7 @@ function decode_observationresult(r) {
   return v;
 }
 
-function decode_resultchunk(r) {
+function readResultChunk(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1766,7 +1991,7 @@ function decode_resultchunk(r) {
       if (key === "receipt") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.receipt = decode_receipt(r);
+        v.receipt = readReceipt(r);
       } else if (key === "offset") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
@@ -1798,7 +2023,7 @@ function decode_resultchunk(r) {
   return v;
 }
 
-function decode_resultread(r) {
+function readResultRead(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1821,7 +2046,7 @@ function decode_resultread(r) {
       } else if (key === "chunk") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.chunk = decode_resultchunk(r);
+        v.chunk = readResultChunk(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1838,7 +2063,7 @@ function decode_resultread(r) {
   return v;
 }
 
-function decode_inventorypage(r) {
+function readInventoryPage(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1861,7 +2086,7 @@ function decode_inventorypage(r) {
       } else if (key === "snapshots") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
-        v.snapshots = decodeList(r, decode_operationsnapshot);
+        v.snapshots = readList(r, readOperationSnapshot);
       } else if (key === "next") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
@@ -1886,7 +2111,43 @@ function decode_inventorypage(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancegethistorywindowarguments(r) {
+function readOperatorCancellation(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOperatorCancellation();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "outcome") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.outcome = r.string();
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+    if (v.outcome !== "requested" && v.outcome !== "already_terminal" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw r.refuse("bad_enum"); }
+  return v;
+}
+
+function readOARecoverableAcceptanceGetHistoryWindowArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1917,7 +2178,7 @@ function decode_oarecoverableacceptancegethistorywindowarguments(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancesubmitarguments(r) {
+function readOARecoverableAcceptanceSubmitArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1936,7 +2197,7 @@ function decode_oarecoverableacceptancesubmitarguments(r) {
       if (key === "submission") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.submission = decode_submission(r);
+        v.submission = readSubmission(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1952,7 +2213,7 @@ function decode_oarecoverableacceptancesubmitarguments(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancereconcilearguments(r) {
+function readOARecoverableAcceptanceReconcileArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -1971,7 +2232,7 @@ function decode_oarecoverableacceptancereconcilearguments(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -1987,7 +2248,7 @@ function decode_oarecoverableacceptancereconcilearguments(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancecancelworkarguments(r) {
+function readOARecoverableAcceptanceCancelWorkArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2006,7 +2267,7 @@ function decode_oarecoverableacceptancecancelworkarguments(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2022,7 +2283,7 @@ function decode_oarecoverableacceptancecancelworkarguments(r) {
   return v;
 }
 
-function decode_oaoperationcontrolobserveworkarguments(r) {
+function readOAOperationControlObserveWorkArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2041,7 +2302,7 @@ function decode_oaoperationcontrolobserveworkarguments(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2057,7 +2318,7 @@ function decode_oaoperationcontrolobserveworkarguments(r) {
   return v;
 }
 
-function decode_oaoperationcontrolreadresultarguments(r) {
+function readOAOperationControlReadResultArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2076,7 +2337,7 @@ function decode_oaoperationcontrolreadresultarguments(r) {
       if (key === "identity") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.identity = decode_requestidentity(r);
+        v.identity = readRequestIdentity(r);
       } else if (key === "offset") {
         if (seen & 2) throw r.refuse("duplicate_field");
         seen |= 2;
@@ -2084,7 +2345,7 @@ function decode_oaoperationcontrolreadresultarguments(r) {
       } else if (key === "max_bytes") {
         if (seen & 4) throw r.refuse("duplicate_field");
         seen |= 4;
-        v.max_bytes = r.integer(-9223372036854775808n, 9223372036854775807n);
+        v.maxBytes = r.integer(-9223372036854775808n, 9223372036854775807n);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2100,7 +2361,7 @@ function decode_oaoperationcontrolreadresultarguments(r) {
   return v;
 }
 
-function decode_oajobinventorylistworkarguments(r) {
+function readOAJobInventoryListWorkArguments(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2139,7 +2400,81 @@ function decode_oajobinventorylistworkarguments(r) {
   return v;
 }
 
-function decode_oaserviceframe(r) {
+function readOAJobOperatorListAccountWorkArguments(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAJobOperatorListAccountWorkArguments();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "cursor") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.cursor = r.string();
+      } else if (key === "limit") {
+        if (seen & 2) throw r.refuse("duplicate_field");
+        seen |= 2;
+        v.limit = r.integer(-9223372036854775808n, 9223372036854775807n);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 3) >>> 0) !== 3) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAJobOperatorCancelOperationArguments(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAJobOperatorCancelOperationArguments();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "operation_id") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.operationId = r.string();
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAServiceFrame(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2186,7 +2521,7 @@ function decode_oaserviceframe(r) {
   return v;
 }
 
-function decode_oaservicereply(r) {
+function readOAServiceReply(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2237,7 +2572,7 @@ function decode_oaservicereply(r) {
   return v;
 }
 
-function decode_oaserviceerror(r) {
+function readOAServiceError(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2276,7 +2611,7 @@ function decode_oaserviceerror(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancegethistorywindowresult(r) {
+function readOARecoverableAcceptanceGetHistoryWindowResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2295,7 +2630,7 @@ function decode_oarecoverableacceptancegethistorywindowresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_historywindow(r);
+        v.value = readHistoryWindow(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2311,7 +2646,7 @@ function decode_oarecoverableacceptancegethistorywindowresult(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancesubmitresult(r) {
+function readOARecoverableAcceptanceSubmitResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2330,7 +2665,7 @@ function decode_oarecoverableacceptancesubmitresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_acceptanceresult(r);
+        v.value = readAcceptanceResult(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2346,7 +2681,7 @@ function decode_oarecoverableacceptancesubmitresult(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancereconcileresult(r) {
+function readOARecoverableAcceptanceReconcileResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2365,7 +2700,7 @@ function decode_oarecoverableacceptancereconcileresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_acceptanceresult(r);
+        v.value = readAcceptanceResult(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2381,7 +2716,7 @@ function decode_oarecoverableacceptancereconcileresult(r) {
   return v;
 }
 
-function decode_oarecoverableacceptancecancelworkresult(r) {
+function readOARecoverableAcceptanceCancelWorkResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2400,7 +2735,7 @@ function decode_oarecoverableacceptancecancelworkresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_cancellationresult(r);
+        v.value = readCancellationResult(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2416,7 +2751,7 @@ function decode_oarecoverableacceptancecancelworkresult(r) {
   return v;
 }
 
-function decode_oaoperationcontrolobserveworkresult(r) {
+function readOAOperationControlObserveWorkResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2435,7 +2770,7 @@ function decode_oaoperationcontrolobserveworkresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_observationresult(r);
+        v.value = readObservationResult(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2451,7 +2786,7 @@ function decode_oaoperationcontrolobserveworkresult(r) {
   return v;
 }
 
-function decode_oaoperationcontrolreadresultresult(r) {
+function readOAOperationControlReadResultResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2470,7 +2805,7 @@ function decode_oaoperationcontrolreadresultresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_resultread(r);
+        v.value = readResultRead(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2486,7 +2821,7 @@ function decode_oaoperationcontrolreadresultresult(r) {
   return v;
 }
 
-function decode_oajobinventorylistworkresult(r) {
+function readOAJobInventoryListWorkResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
   r.pos++;
@@ -2505,7 +2840,77 @@ function decode_oajobinventorylistworkresult(r) {
       if (key === "value") {
         if (seen & 1) throw r.refuse("duplicate_field");
         seen |= 1;
-        v.value = decode_inventorypage(r);
+        v.value = readInventoryPage(r);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAJobOperatorListAccountWorkResult(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAJobOperatorListAccountWorkResult();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "value") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.value = readInventoryPage(r);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAJobOperatorCancelOperationResult(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAJobOperatorCancelOperationResult();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "value") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.value = readOperatorCancellation(r);
       } else {
         throw r.refuse("unknown_field");
       }
@@ -2524,16 +2929,16 @@ function decode_oajobinventorylistworkresult(r) {
 export function decode(data) {
   const r = new Reader(data);
   r.ws();
-  const v = decode_acceptanceresult(r);
+  const v = readAcceptanceResult(r);
   r.ws();
   if (r.pos < r.buf.length) throw r.refuse("trailing_bytes");
   return v;
 }
 
 // refusals is in the order two of them are chosen between.
-export const refusals = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"];
+const refusals = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"];
 
-export function refusalRank(word) {
+function refusalRank(word) {
   return refusals.indexOf(word);
 }
 
@@ -2591,26 +2996,29 @@ function _serviceCheck(kind, value, depth = 0) {
 }
 
 const _serviceRecords = Object.create(null);
-_serviceRecords["RequestIdentity"] = [["key","string","never"],["history_epoch","string","never"],["attempt","i64","zero"],];
-_serviceRecords["Submission"] = [["identity","RequestIdentity","never"],["kind","string","never"],["spec","binary","never"],["required_guarantees","list<string>","never"],];
-_serviceRecords["Receipt"] = [["identity","RequestIdentity","never"],["logical_owner","string","never"],["operation_id","string","never"],["accepted_guarantees","list<string>","never"],["history_retention_ms","i64","never"],];
+_serviceRecords["RequestIdentity"] = [["key","string","never"],["historyEpoch","string","never"],["attempt","i64","zero"],];
+_serviceRecords["Submission"] = [["identity","RequestIdentity","never"],["kind","string","never"],["spec","binary","never"],["requiredGuarantees","list<string>","never"],["label","string","absent"],];
+_serviceRecords["Receipt"] = [["identity","RequestIdentity","never"],["logicalOwner","string","never"],["operationId","string","never"],["acceptedGuarantees","list<string>","never"],["historyRetentionMs","i64","never"],];
 _serviceRecords["AcceptanceResult"] = [["outcome","string","never"],["receipt","Receipt","absent"],["reason","string","never"],];
-_serviceRecords["HistoryWindow"] = [["logical_owner","string","never"],["history_epoch","string","never"],["minimum_retention_ms","i64","never"],["result_retention_ms","i64","zero"],];
+_serviceRecords["HistoryWindow"] = [["logicalOwner","string","never"],["historyEpoch","string","never"],["minimumRetentionMs","i64","never"],["resultRetentionMs","i64","zero"],];
 _serviceRecords["CancellationResult"] = [["outcome","string","never"],];
 _serviceRecords["WorkProgress"] = [["done","i64","never"],["total","i64","never"],];
 _serviceRecords["WorkFailure"] = [["classification","string","never"],["message","string","never"],["cause","string","zero"],];
-_serviceRecords["OperationSnapshot"] = [["receipt","Receipt","never"],["state","string","never"],["progress","WorkProgress","never"],["cancellation_requested","bool","never"],["failure","WorkFailure","absent"],];
+_serviceRecords["OperationSnapshot"] = [["receipt","Receipt","never"],["state","string","never"],["progress","WorkProgress","never"],["cancellationRequested","bool","never"],["failure","WorkFailure","absent"],["label","string","absent"],["labelDerived","bool","zero"],["waiting","string","zero"],];
 _serviceRecords["ObservationResult"] = [["outcome","string","never"],["snapshot","OperationSnapshot","absent"],];
 _serviceRecords["ResultChunk"] = [["receipt","Receipt","never"],["offset","i64","never"],["total","i64","never"],["data","binary","never"],["eof","bool","never"],];
 _serviceRecords["ResultRead"] = [["outcome","string","never"],["chunk","ResultChunk","absent"],];
 _serviceRecords["InventoryPage"] = [["outcome","string","never"],["snapshots","list<OperationSnapshot>","never"],["next","string","never"],["complete","bool","never"],];
+_serviceRecords["OperatorCancellation"] = [["outcome","string","never"],];
 _serviceRecords["OARecoverableAcceptanceGetHistoryWindowArguments"] = [];
 _serviceRecords["OARecoverableAcceptanceSubmitArguments"] = [["submission","Submission","never"],];
 _serviceRecords["OARecoverableAcceptanceReconcileArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OARecoverableAcceptanceCancelWorkArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OAOperationControlObserveWorkArguments"] = [["identity","RequestIdentity","never"],];
-_serviceRecords["OAOperationControlReadResultArguments"] = [["identity","RequestIdentity","never"],["offset","i64","never"],["max_bytes","i64","never"],];
+_serviceRecords["OAOperationControlReadResultArguments"] = [["identity","RequestIdentity","never"],["offset","i64","never"],["maxBytes","i64","never"],];
 _serviceRecords["OAJobInventoryListWorkArguments"] = [["cursor","string","never"],["limit","i64","never"],];
+_serviceRecords["OAJobOperatorListAccountWorkArguments"] = [["cursor","string","never"],["limit","i64","never"],];
+_serviceRecords["OAJobOperatorCancelOperationArguments"] = [["operationId","string","never"],];
 _serviceRecords["OAServiceFrame"] = [["version","i32","never"],["service","string","never"],["method","string","never"],["arguments","json","never"],];
 _serviceRecords["OAServiceReply"] = [["version","i32","never"],["service","string","never"],["method","string","never"],["ok","bool","never"],["payload","json","never"],];
 _serviceRecords["OAServiceError"] = [["code","string","never"],["message","string","never"],];
@@ -2621,20 +3029,22 @@ _serviceRecords["OARecoverableAcceptanceCancelWorkResult"] = [["value","Cancella
 _serviceRecords["OAOperationControlObserveWorkResult"] = [["value","ObservationResult","never"],];
 _serviceRecords["OAOperationControlReadResultResult"] = [["value","ResultRead","never"],];
 _serviceRecords["OAJobInventoryListWorkResult"] = [["value","InventoryPage","never"],];
+_serviceRecords["OAJobOperatorListAccountWorkResult"] = [["value","InventoryPage","never"],];
+_serviceRecords["OAJobOperatorCancelOperationResult"] = [["value","OperatorCancellation","never"],];
 
 function _serviceRequest(service, method, argumentsBytes) {
-  return _serviceEncode(enc_oaserviceframe, {
+  return _serviceEncode(writeOAServiceFrame, {
     version:1, service, method, arguments:new TextDecoder("utf-8",{fatal:true}).decode(argumentsBytes)
   },0);
 }
 
 function _serviceResponse(frame, service, method) {
   if (!(frame instanceof Uint8Array)) throw new TypeError("transport frame must be Uint8Array");
-  const reply = _serviceDecode(decode_oaservicereply, frame, 0);
+  const reply = _serviceDecode(readOAServiceReply, frame, 0);
   if (reply.version !== 1) throw new DispatchError("unknown_version");
   if (reply.service !== service || reply.method !== method) throw new DispatchError("mismatched_response");
   if (!reply.ok) {
-    const error = _serviceDecode(decode_oaserviceerror, reply.payload, 1);
+    const error = _serviceDecode(readOAServiceError, reply.payload, 1);
     if (!error.code) throw new DispatchError("invalid_error");
     throw new ServiceError(error.code, error.message);
   }
@@ -2643,94 +3053,131 @@ function _serviceResponse(frame, service, method) {
 
 export class RecoverableAcceptanceClient {
   constructor(transport) { this._transport = transport; }
-  async GetHistoryWindow() {
-    const args = newOARecoverableAcceptanceGetHistoryWindowArguments();
-    _serviceCheck("OARecoverableAcceptanceGetHistoryWindowArguments", args);
-    const payload = _serviceEncode(enc_oarecoverableacceptancegethistorywindowarguments, args, 1);
-    _serviceDecode(decode_oarecoverableacceptancegethistorywindowarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/acceptance@1", "GetHistoryWindow", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/acceptance@1", "GetHistoryWindow");
-    const result = _serviceDecode(decode_oarecoverableacceptancegethistorywindowresult, reply, 1);
-    return result.value;
+
+  async getHistoryWindow() {
+    const _args = newOARecoverableAcceptanceGetHistoryWindowArguments();
+    _serviceCheck("OARecoverableAcceptanceGetHistoryWindowArguments", _args);
+    const _payload = _serviceEncode(writeOARecoverableAcceptanceGetHistoryWindowArguments, _args, 1);
+    _serviceDecode(readOARecoverableAcceptanceGetHistoryWindowArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/acceptance@1", "GetHistoryWindow", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/acceptance@1", "GetHistoryWindow");
+    const _result = _serviceDecode(readOARecoverableAcceptanceGetHistoryWindowResult, _reply, 1);
+    return _result.value;
   }
-  async Submit(arg0) {
-    const args = newOARecoverableAcceptanceSubmitArguments();
-    args["submission"] = arg0;
-    _serviceCheck("OARecoverableAcceptanceSubmitArguments", args);
-    const payload = _serviceEncode(enc_oarecoverableacceptancesubmitarguments, args, 1);
-    _serviceDecode(decode_oarecoverableacceptancesubmitarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/acceptance@1", "Submit", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/acceptance@1", "Submit");
-    const result = _serviceDecode(decode_oarecoverableacceptancesubmitresult, reply, 1);
-    return result.value;
+
+  async submit(submission) {
+    const _args = newOARecoverableAcceptanceSubmitArguments();
+    _args.submission = submission;
+    _serviceCheck("OARecoverableAcceptanceSubmitArguments", _args);
+    const _payload = _serviceEncode(writeOARecoverableAcceptanceSubmitArguments, _args, 1);
+    _serviceDecode(readOARecoverableAcceptanceSubmitArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/acceptance@1", "Submit", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/acceptance@1", "Submit");
+    const _result = _serviceDecode(readOARecoverableAcceptanceSubmitResult, _reply, 1);
+    return _result.value;
   }
-  async Reconcile(arg0) {
-    const args = newOARecoverableAcceptanceReconcileArguments();
-    args["identity"] = arg0;
-    _serviceCheck("OARecoverableAcceptanceReconcileArguments", args);
-    const payload = _serviceEncode(enc_oarecoverableacceptancereconcilearguments, args, 1);
-    _serviceDecode(decode_oarecoverableacceptancereconcilearguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/acceptance@1", "Reconcile", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/acceptance@1", "Reconcile");
-    const result = _serviceDecode(decode_oarecoverableacceptancereconcileresult, reply, 1);
-    return result.value;
+
+  async reconcile(identity) {
+    const _args = newOARecoverableAcceptanceReconcileArguments();
+    _args.identity = identity;
+    _serviceCheck("OARecoverableAcceptanceReconcileArguments", _args);
+    const _payload = _serviceEncode(writeOARecoverableAcceptanceReconcileArguments, _args, 1);
+    _serviceDecode(readOARecoverableAcceptanceReconcileArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/acceptance@1", "Reconcile", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/acceptance@1", "Reconcile");
+    const _result = _serviceDecode(readOARecoverableAcceptanceReconcileResult, _reply, 1);
+    return _result.value;
   }
-  async CancelWork(arg0) {
-    const args = newOARecoverableAcceptanceCancelWorkArguments();
-    args["identity"] = arg0;
-    _serviceCheck("OARecoverableAcceptanceCancelWorkArguments", args);
-    const payload = _serviceEncode(enc_oarecoverableacceptancecancelworkarguments, args, 1);
-    _serviceDecode(decode_oarecoverableacceptancecancelworkarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/acceptance@1", "CancelWork", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/acceptance@1", "CancelWork");
-    const result = _serviceDecode(decode_oarecoverableacceptancecancelworkresult, reply, 1);
-    return result.value;
+
+  async cancelWork(identity) {
+    const _args = newOARecoverableAcceptanceCancelWorkArguments();
+    _args.identity = identity;
+    _serviceCheck("OARecoverableAcceptanceCancelWorkArguments", _args);
+    const _payload = _serviceEncode(writeOARecoverableAcceptanceCancelWorkArguments, _args, 1);
+    _serviceDecode(readOARecoverableAcceptanceCancelWorkArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/acceptance@1", "CancelWork", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/acceptance@1", "CancelWork");
+    const _result = _serviceDecode(readOARecoverableAcceptanceCancelWorkResult, _reply, 1);
+    return _result.value;
   }
 }
 export const RecoverableAcceptanceService = Object.freeze({wireName:"abstraction.job/acceptance@1",Client:RecoverableAcceptanceClient});
 
 export class OperationControlClient {
   constructor(transport) { this._transport = transport; }
-  async ObserveWork(arg0) {
-    const args = newOAOperationControlObserveWorkArguments();
-    args["identity"] = arg0;
-    _serviceCheck("OAOperationControlObserveWorkArguments", args);
-    const payload = _serviceEncode(enc_oaoperationcontrolobserveworkarguments, args, 1);
-    _serviceDecode(decode_oaoperationcontrolobserveworkarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/operations@1", "ObserveWork", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/operations@1", "ObserveWork");
-    const result = _serviceDecode(decode_oaoperationcontrolobserveworkresult, reply, 1);
-    return result.value;
+
+  async observeWork(identity) {
+    const _args = newOAOperationControlObserveWorkArguments();
+    _args.identity = identity;
+    _serviceCheck("OAOperationControlObserveWorkArguments", _args);
+    const _payload = _serviceEncode(writeOAOperationControlObserveWorkArguments, _args, 1);
+    _serviceDecode(readOAOperationControlObserveWorkArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operations@1", "ObserveWork", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operations@1", "ObserveWork");
+    const _result = _serviceDecode(readOAOperationControlObserveWorkResult, _reply, 1);
+    return _result.value;
   }
-  async ReadResult(arg0,arg1,arg2) {
-    const args = newOAOperationControlReadResultArguments();
-    args["identity"] = arg0;
-    args["offset"] = arg1;
-    args["max_bytes"] = arg2;
-    _serviceCheck("OAOperationControlReadResultArguments", args);
-    const payload = _serviceEncode(enc_oaoperationcontrolreadresultarguments, args, 1);
-    _serviceDecode(decode_oaoperationcontrolreadresultarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/operations@1", "ReadResult", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/operations@1", "ReadResult");
-    const result = _serviceDecode(decode_oaoperationcontrolreadresultresult, reply, 1);
-    return result.value;
+
+  async readResult(identity, offset, maxBytes) {
+    const _args = newOAOperationControlReadResultArguments();
+    _args.identity = identity;
+    _args.offset = offset;
+    _args.maxBytes = maxBytes;
+    _serviceCheck("OAOperationControlReadResultArguments", _args);
+    const _payload = _serviceEncode(writeOAOperationControlReadResultArguments, _args, 1);
+    _serviceDecode(readOAOperationControlReadResultArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operations@1", "ReadResult", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operations@1", "ReadResult");
+    const _result = _serviceDecode(readOAOperationControlReadResultResult, _reply, 1);
+    return _result.value;
   }
 }
 export const OperationControlService = Object.freeze({wireName:"abstraction.job/operations@1",Client:OperationControlClient});
 
 export class JobInventoryClient {
   constructor(transport) { this._transport = transport; }
-  async ListWork(arg0,arg1) {
-    const args = newOAJobInventoryListWorkArguments();
-    args["cursor"] = arg0;
-    args["limit"] = arg1;
-    _serviceCheck("OAJobInventoryListWorkArguments", args);
-    const payload = _serviceEncode(enc_oajobinventorylistworkarguments, args, 1);
-    _serviceDecode(decode_oajobinventorylistworkarguments, payload, 1);
-    const request = _serviceRequest("abstraction.job/inventory@1", "ListWork", payload);
-    const reply = _serviceResponse(await this._transport.exchangeFrame(request), "abstraction.job/inventory@1", "ListWork");
-    const result = _serviceDecode(decode_oajobinventorylistworkresult, reply, 1);
-    return result.value;
+
+  async listWork(cursor, limit) {
+    const _args = newOAJobInventoryListWorkArguments();
+    _args.cursor = cursor;
+    _args.limit = limit;
+    _serviceCheck("OAJobInventoryListWorkArguments", _args);
+    const _payload = _serviceEncode(writeOAJobInventoryListWorkArguments, _args, 1);
+    _serviceDecode(readOAJobInventoryListWorkArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/inventory@1", "ListWork", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/inventory@1", "ListWork");
+    const _result = _serviceDecode(readOAJobInventoryListWorkResult, _reply, 1);
+    return _result.value;
   }
 }
 export const JobInventoryService = Object.freeze({wireName:"abstraction.job/inventory@1",Client:JobInventoryClient});
+
+export class JobOperatorClient {
+  constructor(transport) { this._transport = transport; }
+
+  async listAccountWork(cursor, limit) {
+    const _args = newOAJobOperatorListAccountWorkArguments();
+    _args.cursor = cursor;
+    _args.limit = limit;
+    _serviceCheck("OAJobOperatorListAccountWorkArguments", _args);
+    const _payload = _serviceEncode(writeOAJobOperatorListAccountWorkArguments, _args, 1);
+    _serviceDecode(readOAJobOperatorListAccountWorkArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operator@1", "ListAccountWork", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operator@1", "ListAccountWork");
+    const _result = _serviceDecode(readOAJobOperatorListAccountWorkResult, _reply, 1);
+    return _result.value;
+  }
+
+  async cancelOperation(operationId) {
+    const _args = newOAJobOperatorCancelOperationArguments();
+    _args.operationId = operationId;
+    _serviceCheck("OAJobOperatorCancelOperationArguments", _args);
+    const _payload = _serviceEncode(writeOAJobOperatorCancelOperationArguments, _args, 1);
+    _serviceDecode(readOAJobOperatorCancelOperationArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operator@1", "CancelOperation", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operator@1", "CancelOperation");
+    const _result = _serviceDecode(readOAJobOperatorCancelOperationResult, _reply, 1);
+    return _result.value;
+  }
+}
+export const JobOperatorService = Object.freeze({wireName:"abstraction.job/operator@1",Client:JobOperatorClient});

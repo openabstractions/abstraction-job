@@ -1,5 +1,14 @@
 # abstraction-job
 
+Keep long work running after the application closes or the service restarts.
+The job service accepts the work, reports progress and retains the result for
+recovery. A timeout ends only the application's wait; cancelling the work is a
+separate request.
+
+For safe retry after a lost reply, the application keeps the original request
+identity, service binding and receipt. It then observes or reconciles that same
+operation instead of submitting a duplicate.
+
 ## Application service path
 
 Normal applications use resolved durable jobs and generated download requests
@@ -33,7 +42,7 @@ if err == nil && observed.Outcome == acceptance.ObservationOutcomeObserved &&
 	next := id
 	next.Attempt++
 	result, err := jobs.Submit(ctx, acceptance.Submission{Identity: next, Kind: kind, Spec: spec})
-	if err == nil && result.Outcome == acceptance.OutcomeUnavailable {
+	if err == nil && result.Outcome == acceptance.AcceptanceOutcomeUnavailable {
 		// No decision was reached; present the same attempt again later.
 	}
 }
@@ -61,9 +70,11 @@ separate lifecycle guarantees. Their historical conformance describes that
 provider profile. It does not qualify current service packages or every platform.
 
 
-**Legacy provider profile.** Recorded cross-language conformance passes (Go, Python, C++) and the example
-below runs as shown. No version number is typed on this page: a tag is the only
-thing that cannot drift, so
+**Legacy provider profile.** The Go file store is the runtime job provider's
+persistence, and the example below runs as shown. The Python and C++ file stores
+were removed on 2026-09-15; the parent project's `docs/REMOVED.md` records them.
+No version number is typed on this page: a tag is the only thing that cannot
+drift, so
 [the tag list](https://github.com/openabstractions/abstraction-job/tags) is the
 answer to "which release".
 
@@ -91,9 +102,9 @@ and the conformance suite that judges implementations of this contract.
 `go get` with no version takes the newest; pin the exact tag you tested against.
 **Go 1.26 or later is required.**
 
-**Python** is in this repository and on no package index —
-[what to install, import and call](python/README.md). **C++** is here too, with
-no tagged release; see Requirements.
+Python and C++ applications use the generated acceptance vocabulary under
+`py/` and `cpp/` through the job service; see
+[Recoverable acceptance service contract](#recoverable-acceptance-service-contract).
 
 Whether to adopt this at all, what it costs and what is not proven:
 [Adopting](CONTRIBUTING.md#adopting).
@@ -144,11 +155,7 @@ can be another process, another language, or this machine after a reboot.
 ## API
 
 **`Store`** is the whole interface; `NewFileStore(root)` is the implementation
-that ships. `jobctl`, present in all three languages, drives a store from a
-shell, and finds one rather than asking to be told — its own `JOB_STORE`, then
-`ABSTRACTION_STORE`, then the machine's `abstraction/config.json`, then
-`~/.abstraction`. See
-[CONTRACT.md § Where a store comes from](CONTRACT.md#where-a-store-comes-from).
+that ships.
 
 | call | what it does |
 |---|---|
@@ -194,57 +201,19 @@ carries an API stability promise.
 ## Requirements
 
 **Go** 1.26 or later, depending on this project's `cas` and `watch` layers and
-nothing else. **Python** 3.9 or later, standard library only, on no package
-index — the install line, the example and the API are on
-[`python/README.md`](python/README.md).
+nothing else.
 
-**C++** 17, standard library only: `cpp/src/json.cpp` is this layer's JSON
-reader and there is no third-party dependency. `cpp/CMakeLists.txt` builds it,
-runs its tests and installs a `find_package` package:
+**C++** 17 and **Python** 3.9 or later for the generated acceptance vocabulary,
+standard library only. `cpp/CMakeLists.txt` installs the header-only
+`abstraction_job_acceptance` package:
 
     cmake -S cpp -B build -DCMAKE_INSTALL_PREFIX=<prefix>
-    cmake --build build && ctest --test-dir build
     cmake --install build
 
 and then, in yours:
 
-    find_package(abstraction_job 0.1 CONFIG REQUIRED)
-    target_link_libraries(your_target PRIVATE abstraction::job)
-
-`add_subdirectory(cpp)` gives the same `abstraction::job`, so vendoring and
-installing are interchangeable at the call site.
-
-`src/store.cpp` includes `<abstraction/cas.h>` and `job/watch.h` includes
-`<abstraction/watch/watch.h>`, so that build needs
-[`abstraction-cas`](https://github.com/openabstractions/abstraction-cas) and
-[`abstraction-watch`](https://github.com/openabstractions/abstraction-watch):
-either installed already and on `CMAKE_PREFIX_PATH`, or cloned beside this
-repository, in which case they are compiled in and travel in this package.
-Nothing is fetched while CMake configures — a build that reaches the network is
-a dependency you did not choose, and handing you one would be the thing this
-layer exists to stop.
-
-Without a build system, clone those two beside this repository and name the
-files:
-
-    g++ -std=c++17 -I cpp/include \
-      -I ../abstraction-cas/cpp/include -I ../abstraction-watch/cpp/include \
-      cpp/test/test_job_record.cpp cpp/src/json.cpp cpp/src/record.cpp \
-      cpp/src/ranges.cpp cpp/src/store.cpp cpp/src/awake.cpp \
-      ../abstraction-cas/cpp/src/cas.cpp -o test_job_record
-
-That is this layer's own test, so running it is how you check that your compiler
-agrees with ours. Measured 2026-09-09 with g++ 15.2 and with MSVC 19.51, which
-takes the same file list under `/std:c++17` and `/I`. Replace the test with your
-own translation unit to get a program. `cpp/src/discovery.cpp` is outside that
-list; it is needed only to talk to a running `jobd`.
-
-The timestamps a C++ record may carry are limited by the build's
-`std::chrono::system_clock` — 1677 to 2262 on libstdc++, wider on MSVC — and an
-instant outside that is refused as `bad_timestamp`, never wrapped. All three
-languages read the same record, re-encode it identically, and carry a spec none
-of them has a type for
-([`CONFORM1.txt`](https://github.com/openabstractions/abstractions/blob/main/docs/results/CONFORM1.txt)).
+    find_package(abstraction_job_acceptance 0.1 CONFIG REQUIRED)
+    target_link_libraries(your_target PRIVATE abstraction::job_acceptance)
 
 ## Licence
 

@@ -7,8 +7,8 @@ result/observation support, and `resolve_job_inventory()` for read-only listing.
 All use shared native IPC. No Python provider or file-backed client is supplied.
 
 Keep the explicit key, history epoch, logical owner, endpoint, complete required
-guarantees and full request before submitting. GetHistoryWindow pins an owner;
-Submit/Reconcile verify receipts against it. A lost reply is unresolved and must
+guarantees and full request before submitting. get_history_window pins an owner;
+submit/reconcile verify receipts against it. A lost reply is unresolved and must
 be reconciled at the retained binding. Jobs.restore_installed restores caller-retained context using independent
 installed-runtime trust. For an explicitly configured host, Jobs.restore accepts
 an independent server expectation. Retain that expectation on recovery. Acceptance and inventory are distinct contracts;
@@ -29,7 +29,7 @@ its own scope. Reconciling an identity the caller's scope never accepted returns
 `definitely_not_accepted` and seals that identity for the caller.
 
 For continuity across reinstall, run the application on an interpreter at a
-stable absolute path. Before `Submit`, persist the identity, the complete
+stable absolute path. Before `submit`, persist the identity, the complete
 submission, the endpoint, the required guarantees and the logical owner outside
 the installation directory. After reinstall,
 `Jobs.restore_installed(endpoint, owner, required_guarantees=...)` restores the
@@ -38,10 +38,10 @@ runtime has no transfer of work between program scopes.
 
 Configurable timeouts and absolute monotonic deadlines bound waiting. A binding's
 with_waiting() supplies a fresh deadline/cancellation policy while sharing its
-fixed owner and endpoint. Cancellation stops waiting only. CancelWork explicitly
+fixed owner and endpoint. Cancellation stops waiting only. cancel_work explicitly
 requests work cancellation; its acknowledgment does not prove effects stopped.
 
-ReadResult accepts offsets and 1..65536-byte limits. CopyResult keeps one chunk
+read_result accepts offsets and 1..65536-byte limits. copy_result keeps one chunk
 at a time, pins total and operation ID across chunks, and returns written bytes.
 On failure it raises ResultCopyError with confirmed and cause. A writer exception
 may have written an unreported prefix of its current call; confirmed then counts

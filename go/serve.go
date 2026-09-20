@@ -43,7 +43,7 @@ func serveOne(conn net.Conn, store Store) {
 	}
 	req, err := wire.DecodeRequest(line)
 	if err != nil {
-		reply(conn, wire.Response{Kind: wire.VerdictInvalid, Error: err.Error()})
+		reply(conn, wire.Response{Kind: string(wire.VerdictInvalid), Error: err.Error()})
 		return
 	}
 	reply(conn, apply(store, *req))
@@ -60,10 +60,10 @@ func apply(store Store, req wire.Request) wire.Response {
 		if err != nil {
 			return fail(err)
 		}
-		return wire.Response{Id: id}
+		return wire.Response{ID: id}
 
 	case "load":
-		r, err := store.Load(req.Id)
+		r, err := store.Load(req.ID)
 		return one(r, err)
 
 	case "list":
@@ -75,32 +75,32 @@ func apply(store Store, req wire.Request) wire.Response {
 		return many(rs, err)
 
 	case "claimable":
-		r, err := store.Load(req.Id)
+		r, err := store.Load(req.ID)
 		if err != nil {
 			return fail(err)
 		}
 		return wire.Response{Bool: store.Claimable(r)}
 
 	case "claim":
-		r, err := store.Claim(req.Id, req.Owner, time.Duration(req.TtlMs)*time.Millisecond)
+		r, err := store.Claim(req.ID, req.Owner, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
 	case "renew":
-		r, err := store.Renew(req.Id, req.Epoch, time.Duration(req.TtlMs)*time.Millisecond)
+		r, err := store.Renew(req.ID, req.Epoch, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
 	case "release":
-		if err := store.Release(req.Id, req.Epoch); err != nil {
+		if err := store.Release(req.ID, req.Epoch); err != nil {
 			return fail(err)
 		}
 		return wire.Response{}
 
 	case "set_intent":
-		r, err := store.SetIntent(req.Id, Want(req.Want), req.By)
+		r, err := store.SetIntent(req.ID, Want(req.Want), req.By)
 		return one(r, err)
 
 	case "recall":
-		r, err := store.Recall(req.Id, req.Epoch, req.Reason, req.By, time.Duration(req.TtlMs)*time.Millisecond)
+		r, err := store.Recall(req.ID, req.Epoch, req.Reason, req.By, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
 	case "write":
@@ -111,7 +111,7 @@ func apply(store Store, req wire.Request) wire.Response {
 		if len(req.Base) == 0 {
 			return fail(fmt.Errorf("%w: a write must present the record it was computed from", ErrInvalid))
 		}
-		r, err := store.Update(req.Id, req.Epoch, func(rec *Record) error {
+		r, err := store.Update(req.ID, req.Epoch, func(rec *Record) error {
 			// The epoch is not enough here, and believing it was is what this
 			// check repairs. An epoch does not move when its holder writes, so
 			// two writers under ONE lease — a reporter and a checkpointer in the
@@ -126,7 +126,7 @@ func apply(store Store, req wire.Request) wire.Response {
 				return err
 			}
 			if !same {
-				return fmt.Errorf("%w: %s", ErrConflict, req.Id)
+				return fmt.Errorf("%w: %s", ErrConflict, req.ID)
 			}
 			// [JOB-M1] and [JOB-V4], said out loud rather than arranged.
 			// Leaving these fields out of the enumeration below is enough to

@@ -39,10 +39,10 @@ func outcomeOf(t *testing.T) func(api.AcceptanceResult, error) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if v.Outcome != "accepted" && v.Receipt != nil {
+		if v.Outcome.String() != "accepted" && v.Receipt != nil {
 			t.Fatalf("receipt on %s", v.Outcome)
 		}
-		return v.Outcome
+		return v.Outcome.String()
 	}
 }
 
@@ -66,7 +66,7 @@ func TestRetryAttemptRequiresTerminalFailure(t *testing.T) {
 	if got := outcomeOf(t)(c.Submit(retry(original, -1))); got != "invalid" {
 		t.Fatalf("negative attempt: %s", got)
 	}
-	endOperation(t, p, first.OperationId, job.StateComplete)
+	endOperation(t, p, first.OperationID, job.StateComplete)
 	if got := outcomeOf(t)(c.Submit(retry(original, 1))); got != "invalid" {
 		t.Fatalf("retry of completed work: %s", got)
 	}
@@ -81,7 +81,7 @@ func TestRetryAttemptAfterTerminalFailure(t *testing.T) {
 	c := p.Bind("alice")
 	original := submission(p, "failed-key")
 	first := accept(t, c, original)
-	endOperation(t, p, first.OperationId, job.StateFailed)
+	endOperation(t, p, first.OperationID, job.StateFailed)
 
 	changed := retry(original, 1)
 	changed.Spec = []byte(`{"source":"other"}`)
@@ -101,7 +101,7 @@ func TestRetryAttemptAfterTerminalFailure(t *testing.T) {
 			defer wg.Done()
 			v, err := p.Bind("alice").Submit(retry(original, 1))
 			if err == nil && v.Receipt != nil {
-				ids <- v.Receipt.OperationId
+				ids <- v.Receipt.OperationID
 			}
 		}()
 	}
@@ -115,7 +115,7 @@ func TestRetryAttemptAfterTerminalFailure(t *testing.T) {
 			t.Fatalf("duplicate attempt created %s and %s", second, id)
 		}
 	}
-	if second == "" || second == first.OperationId {
+	if second == "" || second == first.OperationID {
 		t.Fatalf("retry operation %q reused the failed operation", second)
 	}
 	if jobs(t, root) != 2 {
@@ -125,10 +125,10 @@ func TestRetryAttemptAfterTerminalFailure(t *testing.T) {
 	// Each attempt keeps its own receipt, including across provider restart.
 	p = openTest(t, root)
 	c = p.Bind("alice")
-	if v, err := c.Reconcile(original.Identity); err != nil || v.Receipt == nil || v.Receipt.OperationId != first.OperationId {
+	if v, err := c.Reconcile(original.Identity); err != nil || v.Receipt == nil || v.Receipt.OperationID != first.OperationID {
 		t.Fatalf("original attempt after restart: %+v %v", v, err)
 	}
-	if v, err := c.Submit(retry(original, 1)); err != nil || v.Receipt == nil || v.Receipt.OperationId != second || v.Receipt.Identity.Attempt != 1 {
+	if v, err := c.Submit(retry(original, 1)); err != nil || v.Receipt == nil || v.Receipt.OperationID != second || v.Receipt.Identity.Attempt != 1 {
 		t.Fatalf("retry after restart: %+v %v", v, err)
 	}
 	if v, err := p.Bind("bob").Reconcile(retry(original, 1).Identity); err != nil || v.Receipt != nil {

@@ -4,12 +4,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
-    "acceptance_rec", ROOT / "py/abstraction/job/acceptance/rec.py")
+    "acceptance_codec", ROOT / "py/abstraction/job/acceptance/_codec.py")
 rec = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = rec
 spec.loader.exec_module(rec)
 
 

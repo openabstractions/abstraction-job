@@ -105,7 +105,7 @@ func TestIdentityBoundConnectionLostReplyAndRestart(t *testing.T) {
 	p = openTest(t, root)
 	var result api.AcceptanceResult
 	serverErr = localExchange(t, p, auth, false, func(client *api.RecoverableAcceptanceClient) { result, clientErr = client.Reconcile(s.Identity) })
-	if serverErr != nil || clientErr != nil || result.Outcome != "accepted" || jobs(t, root) != 1 {
+	if serverErr != nil || clientErr != nil || result.Outcome.String() != "accepted" || jobs(t, root) != 1 {
 		t.Fatalf("reconnect: %+v %v %v", result, clientErr, serverErr)
 	}
 	scope := <-observed
@@ -113,7 +113,7 @@ func TestIdentityBoundConnectionLostReplyAndRestart(t *testing.T) {
 		t.Fatal("authenticated scope changed across reconnect")
 	}
 	stored, _ := p.Bind(scope).Reconcile(s.Identity)
-	if stored.Receipt == nil || stored.Receipt.OperationId != result.Receipt.OperationId {
+	if stored.Receipt == nil || stored.Receipt.OperationID != result.Receipt.OperationID {
 		t.Fatal("wire operation not bound to observed caller")
 	}
 }
@@ -130,7 +130,7 @@ func TestDeniedConnectionDoesNotMutate(t *testing.T) {
 			if clientErr == nil || !errors.Is(serverErr, identity.ErrNotProven) {
 				t.Fatalf("proof refusal: %v %v", clientErr, serverErr)
 			}
-		} else if serverErr != nil || clientErr != nil || result.Outcome != "forbidden" {
+		} else if serverErr != nil || clientErr != nil || result.Outcome.String() != "forbidden" {
 			t.Fatalf("deny: %+v %v %v", result, clientErr, serverErr)
 		}
 	}

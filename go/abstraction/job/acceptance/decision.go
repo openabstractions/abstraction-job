@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode/utf8"
 )
 
 // Evidence is supplied only by an authorized owner transaction, never decoded
@@ -44,43 +46,43 @@ type AttemptEvidence struct {
 // outcome means eligible. A nonempty outcome must be returned without writing
 // acceptance or seal evidence for id, so a later presentation can succeed.
 func AttemptEligibility(id RequestIdentity, submitted *Submission, e AttemptEvidence) AcceptanceResult {
-	refuse := func(outcome, reason string) AcceptanceResult {
+	refuse := func(outcome AcceptanceOutcome, reason string) AcceptanceResult {
 		return AcceptanceResult{Outcome: outcome, Reason: reason}
 	}
 	if id.Attempt < 0 {
-		return refuse("invalid", "attempt must be nonnegative")
+		return refuse(AcceptanceOutcomeInvalid, "attempt must be nonnegative")
 	}
 	if id.Attempt == 0 {
 		return AcceptanceResult{}
 	}
 	switch e.Previous {
 	case "absent":
-		return refuse("invalid", "previous attempt absent")
+		return refuse(AcceptanceOutcomeInvalid, "previous attempt absent")
 	case "sealed":
 	case "accepted":
 		switch e.State {
 		case "failed":
 		case "":
-			return refuse("unknown", "previous attempt state unavailable")
+			return refuse(AcceptanceOutcomeUnknown, "previous attempt state unavailable")
 		case "pending", "running", "transferred", "complete", "cancelled":
-			return refuse("invalid", "previous attempt has not failed terminally")
+			return refuse(AcceptanceOutcomeInvalid, "previous attempt has not failed terminally")
 		default:
-			return refuse("unknown", "contradictory previous attempt state")
+			return refuse(AcceptanceOutcomeUnknown, "contradictory previous attempt state")
 		}
 	default:
-		return refuse("unknown", "contradictory previous attempt evidence")
+		return refuse(AcceptanceOutcomeUnknown, "contradictory previous attempt evidence")
 	}
 	if submitted == nil {
 		return AcceptanceResult{}
 	}
 	if e.LatestAccepted == nil {
 		if e.Previous == "accepted" {
-			return refuse("unknown", "previous attempt arguments unavailable")
+			return refuse(AcceptanceOutcomeUnknown, "previous attempt arguments unavailable")
 		}
 		return AcceptanceResult{}
 	}
 	if !sameArguments(*submitted, *e.LatestAccepted) {
-		return refuse("key_conflict", "retry arguments differ from the accepted attempt")
+		return refuse(AcceptanceOutcomeKeyConflict, "retry arguments differ from the accepted attempt")
 	}
 	return AcceptanceResult{}
 }
@@ -101,8 +103,34 @@ func ValidateSubmission(v Submission) error {
 	if !validIdentity(v.Identity) || v.Kind == "" {
 		return fmt.Errorf("identity and kind required")
 	}
+	if _, err := NormalizeLabel(v.Label); err != nil {
+		return err
+	}
 	_, err := guaranteeSet(v.RequiredGuarantees)
 	return err
+}
+
+// MaxLabelBytes is the largest display label in UTF-8 bytes [JOB-A12].
+const MaxLabelBytes = 256
+
+// NormalizeLabel trims a display label and checks its limits [JOB-A12]. The
+// result is empty when the label is absent. A label that is not valid UTF-8,
+// is longer than MaxLabelBytes after trimming, or holds a code point below
+// U+0020, U+007F, U+2028 or U+2029 is refused.
+func NormalizeLabel(label string) (string, error) {
+	if !utf8.ValidString(label) {
+		return "", fmt.Errorf("label is not valid UTF-8")
+	}
+	label = strings.TrimSpace(label)
+	if len(label) > MaxLabelBytes {
+		return "", fmt.Errorf("label exceeds %d bytes", MaxLabelBytes)
+	}
+	for _, r := range label {
+		if r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029 {
+			return "", fmt.Errorf("label must be one line of printable text")
+		}
+	}
+	return label, nil
 }
 
 func sameArguments(a, b Submission) bool {
@@ -117,19 +145,19 @@ func ValidateResult(v AcceptanceResult, id RequestIdentity, owner string) error 
 	if !validIdentity(id) || owner == "" {
 		return fmt.Errorf("identity and owner required")
 	}
-	if v.Outcome != "accepted" {
+	if v.Outcome != AcceptanceOutcomeAccepted {
 		if v.Receipt != nil {
 			return fmt.Errorf("receipt on nonaccepted outcome")
 		}
 		switch v.Outcome {
-		case "definitely_not_accepted", "unknown", "key_conflict", "forbidden", "invalid", "unavailable":
+		case AcceptanceOutcomeDefinitelyNotAccepted, AcceptanceOutcomeUnknown, AcceptanceOutcomeKeyConflict, AcceptanceOutcomeForbidden, AcceptanceOutcomeInvalid, AcceptanceOutcomeUnavailable:
 			return nil
 		default:
 			return fmt.Errorf("unknown acceptance outcome")
 		}
 	}
 	r := v.Receipt
-	if r == nil || r.Identity != id || r.LogicalOwner != owner || r.OperationId == "" || r.HistoryRetentionMs <= 0 {
+	if r == nil || r.Identity != id || r.LogicalOwner != owner || r.OperationID == "" || r.HistoryRetentionMs <= 0 {
 		return fmt.Errorf("invalid or mismatched acceptance receipt")
 	}
 	_, err := guaranteeSet(r.AcceptedGuarantees)
@@ -140,62 +168,62 @@ func ValidateResult(v AcceptanceResult, id RequestIdentity, owner string) error 
 // submitted may be nil for reconciliation after the receipt was lost. The caller
 // scope comes from authentication; identity strings are never authority.
 func ReconcileEvidence(callerScope, owner string, id RequestIdentity, submitted *Submission, e Evidence) AcceptanceResult {
-	result := func(outcome, reason string) AcceptanceResult {
+	result := func(outcome AcceptanceOutcome, reason string) AcceptanceResult {
 		return AcceptanceResult{Outcome: outcome, Reason: reason}
 	}
 	if callerScope == "" || callerScope != e.CallerScope {
-		return result("forbidden", "authenticated scope unavailable or not authorized")
+		return result(AcceptanceOutcomeForbidden, "authenticated scope unavailable or not authorized")
 	}
 	if e.DecisionUnavailable {
-		return result("unavailable", "policy decision unavailable; the same identity may be presented again")
+		return result(AcceptanceOutcomeUnavailable, "policy decision unavailable; the same identity may be presented again")
 	}
 	if !validIdentity(id) || owner == "" {
-		return result("invalid", "identity and owner required")
+		return result(AcceptanceOutcomeInvalid, "identity and owner required")
 	}
 	if submitted != nil && (ValidateSubmission(*submitted) != nil || submitted.Identity != id) {
-		return result("invalid", "invalid submission")
+		return result(AcceptanceOutcomeInvalid, "invalid submission")
 	}
 	if e.Identity != id || !e.HistoryAvailable || e.HistoryExpired {
-		return result("unknown", "history unavailable or expired")
+		return result(AcceptanceOutcomeUnknown, "history unavailable or expired")
 	}
 	if e.Receipt != nil {
 		if e.SealedNonAcceptance {
-			return result("unknown", "contradictory owner evidence")
+			return result(AcceptanceOutcomeUnknown, "contradictory owner evidence")
 		}
 		r := *e.Receipt
 		r.AcceptedGuarantees = slices.Clone(r.AcceptedGuarantees)
-		v := AcceptanceResult{Outcome: "accepted", Receipt: &r, Reason: "original acceptance"}
+		v := AcceptanceResult{Outcome: AcceptanceOutcomeAccepted, Receipt: &r, Reason: "original acceptance"}
 		if ValidateResult(v, id, owner) != nil {
-			return result("unknown", "invalid owner receipt")
+			return result(AcceptanceOutcomeUnknown, "invalid owner receipt")
 		}
 		if e.Arguments != nil {
 			if e.Arguments.Identity != id || ValidateSubmission(*e.Arguments) != nil {
-				return result("unknown", "invalid retained arguments")
+				return result(AcceptanceOutcomeUnknown, "invalid retained arguments")
 			}
 			for _, g := range e.Arguments.RequiredGuarantees {
 				if !slices.Contains(r.AcceptedGuarantees, g) {
-					return result("unknown", "receipt weakens required guarantees")
+					return result(AcceptanceOutcomeUnknown, "receipt weakens required guarantees")
 				}
 			}
 		}
 		if submitted != nil {
 			if e.Arguments == nil {
-				return result("unknown", "argument evidence unavailable")
+				return result(AcceptanceOutcomeUnknown, "argument evidence unavailable")
 			}
 			if !sameArguments(*submitted, *e.Arguments) {
-				return result("key_conflict", "identity reused with different arguments")
+				return result(AcceptanceOutcomeKeyConflict, "identity reused with different arguments")
 			}
 		}
 		return v
 	}
 	if e.SealedNonAcceptance {
-		return result("definitely_not_accepted", "identity sealed against acceptance")
+		return result(AcceptanceOutcomeDefinitelyNotAccepted, "identity sealed against acceptance")
 	}
-	return result("unknown", "no authoritative sealed acceptance history")
+	return result(AcceptanceOutcomeUnknown, "no authoritative sealed acceptance history")
 }
 
 // CanResolveFresh must only consume an authenticated, semantically validated
 // owner response. Transport errors and local cancellation never produce one.
 func CanResolveFresh(v AcceptanceResult) bool {
-	return v.Outcome == "definitely_not_accepted" && v.Receipt == nil
+	return v.Outcome == AcceptanceOutcomeDefinitelyNotAccepted && v.Receipt == nil
 }

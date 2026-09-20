@@ -66,6 +66,10 @@ type journal struct {
 	Origin string `json:",omitempty"`
 	// ResultLost records JOB-A10: a published operation's result bytes are gone.
 	ResultLost bool `json:",omitempty"`
+	// Label is the JOB-A12 display label stored once at acceptance, and
+	// LabelDerived marks one the executor derived. Arguments never carry it.
+	Label        string `json:",omitempty"`
+	LabelDerived bool   `json:",omitempty"`
 }
 
 const legacyMigrationOrigin = "abstraction.job/legacy-migration@1"
@@ -126,6 +130,14 @@ type GuaranteedExecutor interface {
 	PrepareWithGuarantees(operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
 }
 
+// LabelDeriver derives a display label for a submission whose caller supplied
+// none [JOB-A12]. It reads only what is safe to show a person, never a
+// credential, query or private path. An empty result, or one outside the label
+// limits, leaves the label absent. It runs before acceptance and has no effects.
+type LabelDeriver interface {
+	DeriveLabel(kind string, spec []byte) string
+}
+
 // LegacyPreparer reproduces work recorded before service ownership. It is used
 // only for journals written by MigrateLegacy; Submit never reaches it, so a new
 // caller cannot obtain legacy preparation. The same determinism rules as Prepare
@@ -134,23 +146,64 @@ type LegacyPreparer interface {
 	PrepareLegacy(operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
 }
 
+// RecoverableExecutor names the execution guarantees its profile keeps meaning
+// for accepted work across restarts, including a guarantee whose dependency
+// cannot answer now, such as a network cost source that has not started. The
+// provider offers new submissions only ExecutionGuarantees, and recovers
+// journals requiring any guarantee named here. Accepted work whose dependency
+// is absent stays accepted and waits for it, and the executor reports that
+// wait [JOB-A15]. Preparation must not depend on the dependency either.
+type RecoverableExecutor interface {
+	RecoveryGuarantees() []string
+}
+
+// AdmissionChecker refuses a submission its executor can never serve for the
+// submitting caller, before the provider journals, accepts or seals anything
+// [JOB-A16]. The provider asks it only for an identity with no journal whose
+// guarantees it supports. It returns "" to admit, "invalid" with the
+// executor's reason for a refusal the caller can repair (the same identity is
+// admissible afterwards), or "unavailable" when the executor could not obtain
+// its decision [JOB-A9]. It has no effects.
+type AdmissionChecker interface {
+	CheckAdmission(scope, kind string, spec []byte, required []string) (api.AcceptanceOutcome, string)
+}
+
 // SupportedGuarantees is the vocabulary this configured provider can negotiate.
 func (p *Provider) SupportedGuarantees() []string {
 	values := Guarantees()
 	if e, ok := p.executor.(GuaranteedExecutor); ok {
-		for _, g := range e.ExecutionGuarantees() {
-			if g != "" && len(g) <= 256 && utf8.ValidString(g) && !slices.Contains(values, g) {
-				values = append(values, g)
-			}
+		values = appendGuarantees(values, e.ExecutionGuarantees())
+	}
+	return values
+}
+
+// recoverableGuarantees is the vocabulary accepted work may require when the
+// provider reopens it: what it offers now and what its profile recovers.
+func (p *Provider) recoverableGuarantees() []string {
+	values := p.SupportedGuarantees()
+	if e, ok := p.executor.(RecoverableExecutor); ok {
+		values = appendGuarantees(values, e.RecoveryGuarantees())
+	}
+	return values
+}
+
+func appendGuarantees(values, more []string) []string {
+	for _, g := range more {
+		if g != "" && len(g) <= 256 && utf8.ValidString(g) && !slices.Contains(values, g) {
+			values = append(values, g)
 		}
 	}
 	return values
 }
 
 func (p *Provider) acceptedGuarantees(required []string) ([]string, error) {
+	return acceptedFrom(p.SupportedGuarantees(), required)
+}
+
+func acceptedFrom(supported, required []string) ([]string, error) {
 	values := Guarantees()
 	for _, g := range required {
-		if !slices.Contains(p.SupportedGuarantees(), g) {
+		if !slices.Contains(supported, g) {
 			return nil, fmt.Errorf("unsupported guarantee: %s", g)
 		}
 		if !slices.Contains(values, g) {
@@ -160,12 +213,38 @@ func (p *Provider) acceptedGuarantees(required []string) ([]string, error) {
 	return values, nil
 }
 
-func (p *Provider) prepare(id string, s api.Submission) ([]byte, []string, error) {
+// ScopedPreparer prepares work with the authenticated caller scope that
+// submitted it, for an executor that acts for that caller after admission, for
+// example by applying a credential the submission names. scope is the
+// provider's opaque caller namespace and grants nothing by itself. It replaces
+// Prepare and PrepareWithGuarantees for new submissions under the same
+// determinism rules; recovery passes the journaled scope, so the same scope and
+// arguments must produce the same work and requirements.
+type ScopedPreparer interface {
+	PrepareScoped(scope, operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
+}
+
+func (p *Provider) prepare(scope, id string, s api.Submission) ([]byte, []string, error) {
 	extra := []string{}
 	for _, g := range s.RequiredGuarantees {
 		if !slices.Contains(Guarantees(), g) {
 			extra = append(extra, g)
 		}
+	}
+	if e, ok := p.executor.(ScopedPreparer); ok {
+		work, requires, err := e.PrepareScoped(scope, id, s.Kind, bytes.Clone(s.Spec), slices.Clone(extra))
+		if len(requires) > 64 {
+			return nil, nil, errors.New("too many execution requirements")
+		}
+		for _, g := range requires {
+			if g == "" || len(g) > 256 || !utf8.ValidString(g) {
+				return nil, nil, errors.New("invalid execution requirement")
+			}
+		}
+		if len(requires) == 0 {
+			requires = nil
+		}
+		return bytes.Clone(work), slices.Clone(requires), err
 	}
 	if len(extra) != 0 {
 		e, ok := p.executor.(GuaranteedExecutor)
@@ -190,9 +269,9 @@ func (p *Provider) prepare(id string, s api.Submission) ([]byte, []string, error
 	return bytes.Clone(work), nil, err
 }
 
-func (p *Provider) prepareOrigin(id string, s api.Submission, origin string) ([]byte, []string, error) {
+func (p *Provider) prepareOrigin(scope, id string, s api.Submission, origin string) ([]byte, []string, error) {
 	if origin == "" {
-		return p.prepare(id, s)
+		return p.prepare(scope, id, s)
 	}
 	if origin != legacyMigrationOrigin {
 		return nil, nil, errors.New("unknown work origin")
@@ -414,7 +493,7 @@ func (b *bound) attemptEvidence(id api.RequestIdentity) api.AttemptEvidence {
 	if j.Phase != "sealed" {
 		e.Previous = "accepted"
 		if p.materialize(path) == nil {
-			if record, err := p.loadOperationRecord(j.Receipt.OperationId); err == nil {
+			if record, err := p.loadOperationRecord(j.Receipt.OperationID); err == nil {
 				e.State = string(record.State)
 			}
 		}
@@ -479,8 +558,11 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	if j.Origin != "" && j.Origin != legacyMigrationOrigin {
 		return nil, fmt.Errorf("acceptance: unsupported work origin")
 	}
+	if label, err := api.NormalizeLabel(j.Label); err != nil || label != j.Label || (j.LabelDerived && j.Label == "") {
+		return nil, fmt.Errorf("acceptance: invalid recovery label")
+	}
 	if j.Phase == "sealed" {
-		if j.Arguments != nil || j.Receipt != nil || len(j.WorkSpec) != 0 || len(j.WorkRequires) != 0 || j.Origin != "" || j.ResultLost {
+		if j.Arguments != nil || j.Receipt != nil || len(j.WorkSpec) != 0 || len(j.WorkRequires) != 0 || j.Origin != "" || j.ResultLost || j.Label != "" {
 			return nil, fmt.Errorf("acceptance: contradictory seal")
 		}
 		return &j, nil
@@ -488,19 +570,21 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	if (j.Phase != "prepared" && j.Phase != "published") || j.Arguments == nil || j.Receipt == nil {
 		return nil, fmt.Errorf("acceptance: invalid recovery phase")
 	}
-	if len(j.Receipt.OperationId) > 128 {
+	if len(j.Receipt.OperationID) > 128 {
 		return nil, fmt.Errorf("acceptance: invalid operation identifier")
 	}
-	for _, c := range j.Receipt.OperationId {
+	for _, c := range j.Receipt.OperationID {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c == '-') {
 			return nil, fmt.Errorf("acceptance: invalid operation identifier")
 		}
 	}
 	v := api.ReconcileEvidence(j.Scope, p.config.Owner, j.Identity, nil, api.Evidence{CallerScope: j.Scope, Identity: j.Identity, Arguments: j.Arguments, Receipt: j.Receipt, HistoryAvailable: true})
-	if v.Outcome != "accepted" || j.Receipt.HistoryRetentionMs != p.config.RetentionMs {
+	if v.Outcome != api.AcceptanceOutcomeAccepted || j.Receipt.HistoryRetentionMs != p.config.RetentionMs {
 		return nil, fmt.Errorf("acceptance: contradictory recovery receipt")
 	}
-	expectedGuarantees, err := p.acceptedGuarantees(j.Arguments.RequiredGuarantees)
+	// Recovery reads what the profile keeps, so one guarantee whose dependency
+	// cannot answer yet leaves its work waiting and never closes the store.
+	expectedGuarantees, err := acceptedFrom(p.recoverableGuarantees(), j.Arguments.RequiredGuarantees)
 	if err != nil || len(j.Receipt.AcceptedGuarantees) != len(expectedGuarantees) {
 		return nil, fmt.Errorf("acceptance: unsupported recovery guarantee")
 	}
@@ -513,7 +597,7 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 		return nil, err
 	}
 	if p.executor != nil {
-		expected, requires, err := p.prepareOrigin(j.Receipt.OperationId, *j.Arguments, j.Origin)
+		expected, requires, err := p.prepareOrigin(j.Scope, j.Receipt.OperationID, *j.Arguments, j.Origin)
 		if err != nil || !bytes.Equal(expected, j.WorkSpec) || !slices.Equal(requires, j.WorkRequires) {
 			return nil, errors.New("acceptance: incompatible execution specification")
 		}
@@ -543,59 +627,97 @@ func validateSpec(s api.Submission) error {
 
 func (b *bound) GetHistoryWindow() (api.HistoryWindow, error) {
 	if b.scope == "" {
-		return api.HistoryWindow{}, &api.ServiceError{Code: "forbidden", Message: "caller not authorized"}
+		return api.HistoryWindow{}, &api.ServiceError{Code: api.ServiceErrorCodeForbidden, Message: "caller not authorized"}
 	}
 	c := b.provider.config
 	return api.HistoryWindow{LogicalOwner: c.Owner, HistoryEpoch: c.Epoch, MinimumRetentionMs: c.RetentionMs, ResultRetentionMs: b.provider.resultRetention()}, nil
 }
-func outcome(word, reason string) api.AcceptanceResult {
+func outcome(word api.AcceptanceOutcome, reason string) api.AcceptanceResult {
 	return api.AcceptanceResult{Outcome: word, Reason: reason}
 }
 
 func (b *bound) Submit(s api.Submission) (api.AcceptanceResult, error) {
 	if b.scope == "" {
-		return outcome("forbidden", "caller not authorized"), nil
+		return outcome(api.AcceptanceOutcomeForbidden, "caller not authorized"), nil
 	}
 	if err := validateSpec(s); err != nil {
-		return outcome("invalid", "invalid or oversized job submission"), nil
+		return outcome(api.AcceptanceOutcomeInvalid, "invalid or oversized job submission"), nil
 	}
 	// Snapshot caller memory before retaining arguments in a transaction.
 	s.Spec = slices.Clone(s.Spec)
 	s.RequiredGuarantees = slices.Clone(s.RequiredGuarantees)
-	return b.resolve(s.Identity, &s)
+	// The label is outside JOB-A2 equality. It leaves the arguments here and is
+	// stored beside them once, at acceptance [JOB-A12].
+	label := b.provider.label(s)
+	s.Label = ""
+	return b.resolve(s.Identity, &s, label)
 }
 func (b *bound) Reconcile(id api.RequestIdentity) (api.AcceptanceResult, error) {
 	if b.scope == "" {
-		return outcome("forbidden", "caller not authorized"), nil
+		return outcome(api.AcceptanceOutcomeForbidden, "caller not authorized"), nil
 	}
-	return b.resolve(id, nil)
+	return b.resolve(id, nil, storedLabel{})
 }
 
-func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.AcceptanceResult, error) {
+// storedLabel is the display label a new acceptance stores [JOB-A12].
+type storedLabel struct {
+	text    string
+	derived bool
+}
+
+// label chooses the stored label for a validated submission: the caller's
+// trimmed label, or else one the executor derives within the same limits.
+func (p *Provider) label(s api.Submission) storedLabel {
+	if text, _ := api.NormalizeLabel(s.Label); text != "" {
+		return storedLabel{text: text}
+	}
+	deriver, ok := p.executor.(LabelDeriver)
+	if !ok {
+		return storedLabel{}
+	}
+	text, err := api.NormalizeLabel(deriver.DeriveLabel(s.Kind, bytes.Clone(s.Spec)))
+	if err != nil || text == "" {
+		return storedLabel{}
+	}
+	return storedLabel{text: text, derived: true}
+}
+
+func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedLabel) (api.AcceptanceResult, error) {
 	p := b.provider
 	if id.Key == "" || len(id.Key) > 1024 || id.HistoryEpoch == "" || id.Attempt < 0 {
-		return outcome("invalid", "request identity required"), nil
+		return outcome(api.AcceptanceOutcomeInvalid, "request identity required"), nil
 	}
 	// Unknown/old epochs are never fresh namespaces eligible for acceptance.
 	if id.HistoryEpoch != p.config.Epoch {
-		return outcome("unknown", "history epoch unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "history epoch unavailable"), nil
 	}
 	path := p.requestPath(b.scope, id)
 	if err := regularFile(path); err != nil {
-		return outcome("unknown", "owner recovery evidence unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
 	}
 	var eligibility api.AcceptanceResult
 	if id.Attempt > 0 {
 		eligibility = api.AttemptEligibility(id, s, b.attemptEvidence(id))
 	}
-	if id.Attempt > 0 && eligibility.Outcome == "" {
+	if id.Attempt > 0 && eligibility.Outcome == 0 {
 		// A journal with a nonzero attempt needs the storage feature first, so an
 		// older provider's storage check refuses the store by name.
 		if err := p.ensureFeature(StorageFeatureAttempts); err != nil {
-			return outcome("unknown", "owner storage feature unavailable"), nil
+			return outcome(api.AcceptanceOutcomeUnknown, "owner storage feature unavailable"), nil
 		}
 		if err := p.crashPoint("after-storage-feature"); err != nil {
-			return outcome("unknown", "acceptance reply unavailable"), nil
+			return outcome(api.AcceptanceOutcomeUnknown, "acceptance reply unavailable"), nil
+		}
+	}
+	if label.text != "" {
+		// A labelled journal needs its storage feature first, as attempts do.
+		if err := p.ensureFeature(StorageFeatureLabels); err != nil {
+			return outcome(api.AcceptanceOutcomeUnknown, "owner storage feature unavailable"), nil
+		}
+	}
+	if s != nil && (id.Attempt == 0 || eligibility.Outcome == 0) {
+		if refused, ok := b.checkAdmission(id, *s); ok {
+			return refused, nil
 		}
 	}
 	var j *journal
@@ -605,7 +727,7 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 			j, err = p.decodeJournal(cur)
 			return cur, err
 		}
-		if eligibility.Outcome != "" {
+		if eligibility.Outcome != 0 {
 			return nil, errIneligibleAttempt
 		}
 		j = &journal{Version: p.config.Version, Scope: b.scope, Identity: id, Phase: "sealed", Reason: "identity sealed before acceptance"}
@@ -617,7 +739,7 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 			}
 			operationID := job.NewID()
 			if p.executor != nil {
-				work, requires, err := p.prepare(operationID, *s)
+				work, requires, err := p.prepare(b.scope, operationID, *s)
 				if err != nil || len(work) > MaxSpecBytes || !json.Valid(work) {
 					j.Reason = "configured executor refused this work"
 					return json.Marshal(j)
@@ -627,7 +749,8 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 			}
 			j.Phase = "prepared"
 			j.Arguments = s
-			j.Receipt = &api.Receipt{Identity: id, LogicalOwner: p.config.Owner, OperationId: operationID, AcceptedGuarantees: accepted, HistoryRetentionMs: p.config.RetentionMs}
+			j.Label, j.LabelDerived = label.text, label.derived
+			j.Receipt = &api.Receipt{Identity: id, LogicalOwner: p.config.Owner, OperationID: operationID, AcceptedGuarantees: accepted, HistoryRetentionMs: p.config.RetentionMs}
 		}
 		return json.Marshal(j)
 	})
@@ -635,28 +758,63 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission) (api.Acceptan
 		return eligibility, nil
 	}
 	if err != nil {
-		return outcome("unknown", "owner recovery evidence unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
 	}
 	if j.Scope != b.scope || j.Identity != id {
-		return outcome("unknown", "owner evidence mismatch"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "owner evidence mismatch"), nil
 	}
 	v := api.ReconcileEvidence(b.scope, p.config.Owner, id, s, api.Evidence{CallerScope: j.Scope, Identity: j.Identity, Arguments: j.Arguments, Receipt: j.Receipt, HistoryAvailable: true, SealedNonAcceptance: j.Phase == "sealed"})
 	if j.Phase == "sealed" {
 		v.Reason = j.Reason
 	}
-	if v.Outcome != "accepted" {
+	if v.Outcome != api.AcceptanceOutcomeAccepted {
 		return v, nil
 	}
 	if err := p.crashPoint("after-journal"); err != nil {
-		return outcome("unknown", "acceptance reply unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "acceptance reply unavailable"), nil
 	}
 	if err := p.materialize(path); err != nil {
-		return outcome("unknown", "accepted operation recovery unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "accepted operation recovery unavailable"), nil
 	}
 	if err := p.crashPoint("before-reply"); err != nil {
-		return outcome("unknown", "acceptance reply unavailable"), nil
+		return outcome(api.AcceptanceOutcomeUnknown, "acceptance reply unavailable"), nil
 	}
 	return v, nil
+}
+
+// checkAdmission asks the executor about a submission whose identity has no
+// journal and whose guarantees the provider supports [JOB-A16]. A refusal
+// returns with no journal, seal or receipt. When the identity gains a journal
+// while the executor decides, the journal answers instead.
+func (b *bound) checkAdmission(id api.RequestIdentity, s api.Submission) (api.AcceptanceResult, bool) {
+	p := b.provider
+	checker, ok := p.executor.(AdmissionChecker)
+	if !ok {
+		return api.AcceptanceResult{}, false
+	}
+	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+		return api.AcceptanceResult{}, false
+	}
+	if _, err := p.acceptedGuarantees(s.RequiredGuarantees); err != nil {
+		return api.AcceptanceResult{}, false
+	}
+	extra := []string{}
+	for _, g := range s.RequiredGuarantees {
+		if !slices.Contains(Guarantees(), g) {
+			extra = append(extra, g)
+		}
+	}
+	word, reason := checker.CheckAdmission(b.scope, s.Kind, bytes.Clone(s.Spec), extra)
+	if word != api.AcceptanceOutcomeInvalid && word != api.AcceptanceOutcomeUnavailable {
+		return api.AcceptanceResult{}, false
+	}
+	if reason == "" || len(reason) > 1024 || !utf8.ValidString(reason) {
+		reason = "the executor refused this submission"
+	}
+	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+		return api.AcceptanceResult{}, false
+	}
+	return outcome(word, reason), true
 }
 
 func (p *Provider) crashPoint(point string) error {
@@ -679,22 +837,22 @@ func (p *Provider) materialize(path string) error {
 		if j.Phase == "sealed" {
 			return cur, nil
 		}
-		r, err := p.loadOperationRecord(j.Receipt.OperationId)
+		r, err := p.loadOperationRecord(j.Receipt.OperationID)
 		if errors.Is(err, job.ErrNotFound) && j.Phase == "prepared" {
-			_, err = p.store.Submit(job.Record{ID: j.Receipt.OperationId, Kind: j.Arguments.Kind, Spec: j.workSpec(), Requires: slices.Clone(j.WorkRequires)})
+			_, err = p.store.Submit(job.Record{ID: j.Receipt.OperationID, Kind: j.Arguments.Kind, Spec: j.workSpec(), Requires: slices.Clone(j.WorkRequires)})
 			if err != nil {
 				return nil, err
 			}
 			if err = p.crashPoint("after-job"); err != nil {
 				return nil, err
 			}
-			r, err = p.loadOperationRecord(j.Receipt.OperationId)
+			r, err = p.loadOperationRecord(j.Receipt.OperationID)
 		}
 		if err != nil {
 			return nil, err
 		}
 		var a, c bytes.Buffer
-		if json.Compact(&a, r.Spec) != nil || json.Compact(&c, j.workSpec()) != nil || r.ID != j.Receipt.OperationId || r.Kind != j.Arguments.Kind || !bytes.Equal(a.Bytes(), c.Bytes()) || !slices.Equal(r.Requires, j.WorkRequires) {
+		if json.Compact(&a, r.Spec) != nil || json.Compact(&c, j.workSpec()) != nil || r.ID != j.Receipt.OperationID || r.Kind != j.Arguments.Kind || !bytes.Equal(a.Bytes(), c.Bytes()) || !slices.Equal(r.Requires, j.WorkRequires) {
 			return nil, fmt.Errorf("acceptance: operation does not match admission")
 		}
 		if j.Phase == "published" {
@@ -707,18 +865,18 @@ func (p *Provider) materialize(path string) error {
 
 func (b *bound) CancelWork(id api.RequestIdentity) (api.CancellationResult, error) {
 	if b.scope == "" {
-		return api.CancellationResult{Outcome: "forbidden"}, nil
+		return api.CancellationResult{Outcome: api.CancellationOutcomeForbidden}, nil
 	}
 	v, err := b.Reconcile(id)
-	if err != nil || v.Outcome != "accepted" {
-		return api.CancellationResult{Outcome: "unknown"}, nil
+	if err != nil || v.Outcome != api.AcceptanceOutcomeAccepted {
+		return api.CancellationResult{Outcome: api.CancellationOutcomeUnknown}, nil
 	}
-	_, err = b.provider.store.SetIntent(v.Receipt.OperationId, job.WantCancel, b.scope)
+	_, err = b.provider.store.SetIntent(v.Receipt.OperationID, job.WantCancel, b.scope)
 	if errors.Is(err, job.ErrTerminal) {
-		return api.CancellationResult{Outcome: "already_terminal"}, nil
+		return api.CancellationResult{Outcome: api.CancellationOutcomeAlreadyTerminal}, nil
 	}
 	if err != nil {
-		return api.CancellationResult{Outcome: "unknown"}, nil
+		return api.CancellationResult{Outcome: api.CancellationOutcomeUnknown}, nil
 	}
-	return api.CancellationResult{Outcome: "requested"}, nil
+	return api.CancellationResult{Outcome: api.CancellationOutcomeRequested}, nil
 }

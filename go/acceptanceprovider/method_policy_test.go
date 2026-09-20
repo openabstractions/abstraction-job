@@ -91,12 +91,12 @@ func TestMethodPolicyAllowsObservationAndRefusesEffects(t *testing.T) {
 		}
 		return
 	}
-	if serverErr != nil || clientErr != nil || result.Outcome != "forbidden" {
+	if serverErr != nil || clientErr != nil || result.Outcome.String() != "forbidden" {
 		t.Fatalf("submit %+v %v %v", result, clientErr, serverErr)
 	}
 	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
 		r, err := api.NewRecoverableAcceptanceClient(transport).CancelWork(existing.Identity)
-		if err != nil || r.Outcome != "forbidden" {
+		if err != nil || r.Outcome.String() != "forbidden" {
 			t.Fatalf("cancel %+v %v", r, err)
 		}
 	})
@@ -105,7 +105,7 @@ func TestMethodPolicyAllowsObservationAndRefusesEffects(t *testing.T) {
 	}
 	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
 		r, err := api.NewOperationControlClient(transport).ObserveWork(existing.Identity)
-		if err != nil || r.Outcome != "observed" || r.Snapshot.CancellationRequested {
+		if err != nil || r.Outcome.String() != "observed" || r.Snapshot.CancellationRequested {
 			t.Fatalf("observe %+v %v", r, err)
 		}
 	})
@@ -114,7 +114,7 @@ func TestMethodPolicyAllowsObservationAndRefusesEffects(t *testing.T) {
 	}
 	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
 		r, err := api.NewOperationControlClient(transport).ReadResult(existing.Identity, 0, 64)
-		if err != nil || r.Outcome != "unsupported" {
+		if err != nil || r.Outcome.String() != "unsupported" {
 			t.Fatalf("read %+v %v", r, err)
 		}
 	})
@@ -162,7 +162,7 @@ func TestMethodPolicyCancellationPreventsEffects(t *testing.T) {
 	policy := func(context.Context, *identity.Peer, string, string) error { calls.Add(1); return nil }
 	methodExchange(t, p, policy, func(transport listen.FrameClient) {
 		result, err := api.NewRecoverableAcceptanceClient(transport).Submit(submission(p, "cancelled-policy"))
-		if err == nil && result.Outcome != "forbidden" {
+		if err == nil && result.Outcome.String() != "forbidden" {
 			t.Fatalf("cancelled policy admitted %+v", result)
 		}
 	}, true)

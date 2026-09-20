@@ -36,7 +36,7 @@ func TestInventoryTraversesMixedScopesAndReplays(t *testing.T) {
 	for pages := 0; pages < 100; pages++ {
 		input := cursor
 		page, err := b.ListWork(input, 7)
-		if err != nil || page.Outcome != "page" {
+		if err != nil || page.Outcome.String() != "page" {
 			t.Fatalf("page: %+v %v", page, err)
 		}
 		if input != "" {
@@ -45,12 +45,12 @@ func TestInventoryTraversesMixedScopesAndReplays(t *testing.T) {
 				t.Fatal("lost-reply replay changed")
 			}
 			foreign, _ := p.BindInventory("other").ListWork(input, 7)
-			if foreign.Outcome != "gap" {
+			if foreign.Outcome.String() != "gap" {
 				t.Fatal("cursor crossed scope")
 			}
 			if old != "" {
 				stale, _ := b.ListWork(old, 7)
-				if stale.Outcome != "gap" {
+				if stale.Outcome.String() != "gap" {
 					t.Fatal("old cursor did not gap")
 				}
 			}
@@ -86,7 +86,7 @@ func TestInventoryEmptyPagesContinueAndLifetime(t *testing.T) {
 	}
 	b := p.BindInventory("own")
 	page, _ := b.ListWork("", 64)
-	if page.Outcome != "page" || page.Complete || len(page.Snapshots) != 0 || page.Next == "" {
+	if page.Outcome.String() != "page" || page.Complete || len(page.Snapshots) != 0 || page.Next == "" {
 		t.Fatalf("empty scan page: %+v", page)
 	}
 	end := page
@@ -103,7 +103,7 @@ func TestInventoryEmptyPagesContinueAndLifetime(t *testing.T) {
 	p.inventory.mu.Unlock()
 	p.expireInventory(token, session)
 	gap, _ := b.ListWork(page.Next, 64)
-	if gap.Outcome != "gap" {
+	if gap.Outcome.String() != "gap" {
 		t.Fatal("expiry hidden")
 	}
 	fresh, _ := b.ListWork("", 1)
@@ -122,7 +122,7 @@ func TestInventoryEmptyPagesContinueAndLifetime(t *testing.T) {
 		t.Fatal("sessions retained")
 	}
 	unavailable, _ := b.ListWork("", 1)
-	if unavailable.Outcome != "unavailable" {
+	if unavailable.Outcome.String() != "unavailable" {
 		t.Fatal("closed inventory admitted")
 	}
 }
@@ -134,30 +134,30 @@ func TestInventoryBoundsAndRefusal(t *testing.T) {
 	b := p.BindInventory("own")
 	for _, limit := range []int64{0, 65} {
 		v, _ := b.ListWork("", limit)
-		if v.Outcome != "invalid" {
+		if v.Outcome.String() != "invalid" {
 			t.Fatal(v)
 		}
 	}
 	forbidden, _ := p.BindInventory("").ListWork("", 1)
-	if forbidden.Outcome != "forbidden" || len(p.inventory.sessions) != 0 {
+	if forbidden.Outcome.String() != "forbidden" || len(p.inventory.sessions) != 0 {
 		t.Fatal("unauthorized inventory read")
 	}
 	var cursor string
 	for i := 0; i < inventorySessions; i++ {
 		v, _ := b.ListWork("", 1)
-		if v.Outcome != "page" {
+		if v.Outcome.String() != "page" {
 			t.Fatal(v)
 		}
 		cursor = v.Next
 	}
 	full, _ := b.ListWork("", 1)
-	if full.Outcome != "unavailable" {
+	if full.Outcome.String() != "unavailable" {
 		t.Fatal("unbounded sessions")
 	}
 	p2 := openTest(t, p.root)
 	defer p2.CloseInventory()
 	gap, _ := p2.BindInventory("own").ListWork(cursor, 1)
-	if gap.Outcome != "gap" {
+	if gap.Outcome.String() != "gap" {
 		t.Fatal("restart accepted cursor")
 	}
 }
@@ -193,7 +193,7 @@ func TestInventoryByteBudgetAndCorruptFiles(t *testing.T) {
 	}
 	f.Close()
 	v, _ := p.BindInventory("own").ListWork("", 1)
-	if v.Outcome != "unavailable" || len(v.Snapshots) != 0 || v.Complete || v.Next != "" {
+	if v.Outcome.String() != "unavailable" || len(v.Snapshots) != 0 || v.Complete || v.Next != "" {
 		t.Fatalf("oversize: %+v", v)
 	}
 }
@@ -225,7 +225,7 @@ func TestInventoryPolicyRecheckedBeforeReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if second.Outcome != "page" {
+	if second.Outcome.String() != "page" {
 		t.Fatal(second)
 	}
 	denied := func(context.Context, *identity.Peer, string, string) error {
@@ -233,7 +233,7 @@ func TestInventoryPolicyRecheckedBeforeReplay(t *testing.T) {
 	}
 	methodExchange(t, p, denied, func(tr listen.FrameClient) {
 		page, err := api.NewJobInventoryClient(tr).ListWork(first.Next, 1)
-		if err != nil || page.Outcome != "forbidden" || len(page.Snapshots) != 0 {
+		if err != nil || page.Outcome.String() != "forbidden" || len(page.Snapshots) != 0 {
 			t.Fatalf("cached authorization bypass: %+v %v", page, err)
 		}
 	})
@@ -242,7 +242,7 @@ func TestInventoryPolicyRecheckedBeforeReplay(t *testing.T) {
 type inventoryFailureExecutor struct{ testExecutor }
 
 func (inventoryFailureExecutor) OperationFailure(*job.Record) *api.WorkFailure {
-	return &api.WorkFailure{Classification: "unknown", Message: strings.Repeat("sensitive provider diagnostic", 100000)}
+	return &api.WorkFailure{Classification: api.FailureClassUnknown, Message: strings.Repeat("sensitive provider diagnostic", 100000)}
 }
 func TestInventoryLargeFailureIsBounded(t *testing.T) {
 	p, err := OpenWithExecutor(t.TempDir(), "owner", inventoryFailureExecutor{testExecutor{profile: "inventory-test"}})
@@ -253,7 +253,7 @@ func TestInventoryLargeFailureIsBounded(t *testing.T) {
 	accept(t, p.Bind("own"), submission(p, "one"))
 	page, _ := p.BindInventory("own").ListWork("", 1)
 	encoded, _ := json.Marshal(page)
-	if page.Outcome != "page" || len(encoded) > inventoryPageBytes || strings.Contains(string(encoded), "sensitive") {
+	if page.Outcome.String() != "page" || len(encoded) > inventoryPageBytes || strings.Contains(string(encoded), "sensitive") {
 		t.Fatalf("unbounded failure: %d", len(encoded))
 	}
 }
@@ -267,18 +267,36 @@ func TestInventoryReadBudgetContinues(t *testing.T) {
 	}
 	b := p.BindInventory("own")
 	page, _ := b.ListWork("", 64)
-	if page.Outcome != "page" || page.Complete || len(page.Snapshots) == 0 || len(page.Snapshots) >= 8 {
+	if page.Outcome.String() != "page" || page.Complete || len(page.Snapshots) == 0 || len(page.Snapshots) >= 8 {
 		t.Fatalf("read budget not exercised: %+v", page)
 	}
 	count := len(page.Snapshots)
 	for i := 0; i < 10 && !page.Complete; i++ {
 		page, _ = b.ListWork(page.Next, 64)
-		if page.Outcome != "page" {
+		if page.Outcome.String() != "page" {
 			t.Fatal(page)
 		}
 		count += len(page.Snapshots)
 	}
 	if !page.Complete || count != 8 {
 		t.Fatalf("byte-budget continuation lost entries: %d", count)
+	}
+}
+
+// Empty-input replies have no replayable cursor. Completed single-page reads
+// must not consume the bounded pool used by live enumerations.
+func TestCompletedInitialInventoryDoesNotExhaustSessions(t *testing.T) {
+	p := openTest(t, t.TempDir())
+	defer p.CloseInventory()
+	accept(t, p.Bind("own"), submission(p, "one"))
+	b := p.BindInventory("own")
+	for i := 0; i < inventorySessions+1; i++ {
+		page, err := b.ListWork("", 64)
+		if err != nil || page.Outcome.String() != "page" || !page.Complete || len(page.Snapshots) != 1 {
+			t.Fatalf("listing %d: %+v, %v", i, page, err)
+		}
+	}
+	if len(p.inventory.sessions) != 0 {
+		t.Fatal("completed initial pages retained unreachable sessions")
 	}
 }

@@ -36,30 +36,30 @@ func Verdict(err error) string {
 	case err == nil:
 		return ""
 	case errors.Is(err, ErrNotFound):
-		return wire.VerdictNotFound
+		return string(wire.VerdictNotFound)
 	case errors.Is(err, ErrLeaseHeld):
-		return wire.VerdictLeaseHeld
+		return string(wire.VerdictLeaseHeld)
 	case errors.Is(err, ErrStaleEpoch):
-		return wire.VerdictStaleEpoch
+		return string(wire.VerdictStaleEpoch)
 	case errors.Is(err, ErrConflict):
-		return wire.VerdictConflict
+		return string(wire.VerdictConflict)
 	case errors.Is(err, ErrLeaseExpiry):
-		return wire.VerdictLeaseExpired
+		return string(wire.VerdictLeaseExpired)
 	case errors.Is(err, ErrTerminal):
-		return wire.VerdictTerminal
+		return string(wire.VerdictTerminal)
 	case errors.Is(err, ErrUnknownSchema):
-		return wire.VerdictUnknownSchema
+		return string(wire.VerdictUnknownSchema)
 	case errors.Is(err, ErrNotSupported):
-		return wire.VerdictNotSupported
+		return string(wire.VerdictNotSupported)
 	case errors.Is(err, ErrInvalid):
-		return wire.VerdictInvalid
+		return string(wire.VerdictInvalid)
 	}
-	return wire.VerdictOther
+	return string(wire.VerdictOther)
 }
 
 func errorOf(kind, text string) error {
 	var base error
-	switch kind {
+	switch wire.Verdict(kind) {
 	case "":
 		return nil
 	case wire.VerdictNotFound:
