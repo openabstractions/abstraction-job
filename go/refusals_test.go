@@ -55,7 +55,7 @@ func word(t *testing.T, s shape) string {
 
 // flat is the record with every line's indent removed and the encoder's own
 // separators closed up, so what remains of a payload is the tokens its writer
-// spelled. [JOB-E1] owns the whitespace; [JOB-E7] owns everything else.
+// spelled. [JOB-J1] owns the whitespace; [JOB-J7] owns everything else.
 func flat(b []byte) string {
 	var out strings.Builder
 	for _, line := range strings.Split(string(b), "\n") {
@@ -103,7 +103,7 @@ func TestAnUnknownExtensionSurvivesReadModifyWrite(t *testing.T) {
 
 // The paired case to the one above: nothing about the payload moves when an
 // unrelated envelope field does. Key order, escape spelling and number spelling
-// are all its writer's, and none of them is ours to normalise [JOB-E7].
+// are all its writer's, and none of them is ours to normalise [JOB-J7].
 func TestOpaqueSpellingSurvivesAChangeToTheEnvelope(t *testing.T) {
 	const spec = `{"zebra":1,"apple":2,"esc":"a\/b","ratio":1.50,` +
 		`"zed":-0.0,"exp":1e2,"big":12345678901234567890}`

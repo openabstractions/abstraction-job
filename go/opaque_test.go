@@ -13,7 +13,7 @@ import (
 const hostileSpec = `{"esc":"a\/b","o\/d":1,"ratio":1.50,"exp":1e2,` +
 	`"zed":-0.0,"big":12345678901234567890,"zebra":1,"apple":2}`
 
-// TestOpaqueBytesSurvive is [JOB-E7]. The bytes of a spec belong to whoever
+// TestOpaqueBytesSurvive is [JOB-J7]. The bytes of a spec belong to whoever
 // wrote them, and a store that returns 1.5 for the 1.50 it was handed has
 // rewritten somebody else's document on their behalf.
 func TestOpaqueBytesSurvive(t *testing.T) {
@@ -30,7 +30,7 @@ func TestOpaqueBytesSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// [JOB-E1] indents the whole file, so the payload's own whitespace is the
+	// [JOB-J1] indents the whole file, so the payload's own whitespace is the
 	// record writer's to choose and its tokens are not.
 	var flat strings.Builder
 	for _, line := range strings.Split(string(written), "\n") {

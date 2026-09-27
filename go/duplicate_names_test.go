@@ -13,7 +13,7 @@ const nameBase = `{"content":["abstraction.job/base@1"],"critical":["abstraction
 	`"lease":{"owner":"w","epoch":2,"expires_at":"2026-08-20T05:08:14.635068Z"},` +
 	`"created_at":"2026-08-20T05:07:10.967343Z","updated_at":"2026-08-20T05:07:15.134811Z"}`
 
-// escapedDupe is [JOB-E9]'s whole point in one value: two spellings of the name
+// escapedDupe is [JOB-J9]'s whole point in one value: two spellings of the name
 // x, which decode to the same sequence of characters and are therefore one
 // member appearing twice.
 const escapedDupe = "{\"x\":1,\"\\u0078\":2}"
@@ -22,7 +22,7 @@ func nameDoc(spec string) []byte {
 	return []byte(strings.Replace(nameBase, "SPEC", spec, 1))
 }
 
-// Why [JOB-E9] needs code of its own: the standard library will not refuse a
+// Why [JOB-J9] needs code of its own: the standard library will not refuse a
 // repeated name, so a reader built on it silently keeps the last one while a
 // first-wins reader in another language keeps the first. Two readers, one file,
 // two documents. Run this against any JSON reader to find out which half of that
@@ -79,7 +79,7 @@ func TestDuplicateNameRefusedOnValidate(t *testing.T) {
 	}
 }
 
-// [JOB-E9] is per object. Everything here repeats a name somewhere the rule does
+// [JOB-J9] is per object. Everything here repeats a name somewhere the rule does
 // not reach, or spells two names that are genuinely different.
 func TestNamesThatOnlyLookLikeDuplicates(t *testing.T) {
 	accepted := map[string]string{
@@ -99,7 +99,7 @@ func TestNamesThatOnlyLookLikeDuplicates(t *testing.T) {
 	}
 }
 
-// The rule that makes [JOB-E9] and [JOB-E7] compatible: names are decoded in
+// The rule that makes [JOB-J9] and [JOB-J7] compatible: names are decoded in
 // order to compare them, and nothing decoded is ever written back. A reader that
 // compared correctly and then re-encoded from its own parse would pass every
 // test above and still hand the next reader a different document.
@@ -121,7 +121,7 @@ func TestOpaqueBytesSurviveNameComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// [JOB-E1] indents the whole file, so the payload's own whitespace is the
+	// [JOB-J1] indents the whole file, so the payload's own whitespace is the
 	// record writer's to choose and its tokens are not.
 	if got := unindent(string(again.Spec)); got != spelled {
 		t.Fatalf("a round trip through the record writer changed the payload:\n got %s\nwant %s", got, spelled)

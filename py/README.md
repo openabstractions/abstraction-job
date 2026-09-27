@@ -1,5 +1,30 @@
 # Python job protocol
 
+The worked service-path example — submit, keep the receipt, observe, reconcile,
+cancel — is in [../README.md](../README.md#an-example-that-runs); this page
+covers the Python client's own scope and recovery rules.
+
+```python
+from abstraction.facade.client import Machine
+from abstraction.job.acceptance import RequestIdentity, Submission
+
+jobs = Machine().resolve_jobs()
+window = jobs.get_history_window()
+identity = RequestIdentity(key="example-work", history_epoch=window.history_epoch)
+accepted = jobs.submit(Submission(identity=identity, kind="example",
+                                   spec=b'{"fetch":"anything at all"}'))
+if accepted.outcome != "accepted":
+    raise RuntimeError(f"submission not accepted: {accepted.outcome} {accepted.reason}")
+print("logical owner:", accepted.receipt.logical_owner, "operation:", accepted.receipt.operation_id)
+
+observed = jobs.observe_work(identity)
+print("state:", observed.snapshot.state)
+
+reconciled = jobs.reconcile(identity)
+cancelled = jobs.cancel_work(identity)
+print("cancellation:", cancelled.outcome)
+```
+
 This package installs generated acceptance, operation and inventory vocabulary.
 Application code uses `abstraction.facade.client.Machine.resolve_jobs()` for the
 validated facade binding, `resolve_job_operations()` when discovery must require

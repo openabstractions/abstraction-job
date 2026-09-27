@@ -789,7 +789,7 @@ func (r *Record) canonicalise() error {
 	return nil
 }
 
-// marshalJSON encodes v under the escape policy on the contract page [JOB-E6].
+// marshalJSON encodes v under the escape policy on the contract page [JOB-J6].
 //
 // Go's default escapes & < > so that output is safe to paste inside an HTML
 // <script>. Nothing reads a record that way, and while that default stood a
@@ -797,7 +797,7 @@ func (r *Record) canonicalise() error {
 // other two implementations -- a byte difference in the one file the whole
 // conformance argument rests on. The setting reaches a json.RawMessage too, so
 // an opaque spec keeps the spelling its author chose instead of acquiring ours
-// in transit [JOB-E7].
+// in transit [JOB-J7].
 //
 // U+2028 and U+2029 are the pair this encoder will not leave alone: it escapes
 // them in a string field and carries them raw inside a RawMessage, and no
@@ -836,7 +836,7 @@ func marshalRecord(r *Record) ([]byte, error) {
 // `depth_limit = "64"`, which is what the five generated readers enforce.
 const depthLimit = 64
 
-// refuseDeepNesting enforces [JOB-E8]'s depth limit over a whole JSON document.
+// refuseDeepNesting enforces [JOB-J8]'s depth limit over a whole JSON document.
 //
 // The limit belongs to the record and reaches an opaque value at the same
 // depth, so the count starts at the record's own object and never restarts:
@@ -868,7 +868,7 @@ func refuseDeepNesting(b []byte) error {
 	}
 }
 
-// refuseDuplicateNames enforces [JOB-E9] over a whole JSON document, including
+// refuseDuplicateNames enforces [JOB-J9] over a whole JSON document, including
 // every object nested inside an opaque value.
 //
 // encoding/json does not do this and cannot be made to: json.Valid and
@@ -879,7 +879,7 @@ func refuseDeepNesting(b []byte) error {
 //
 // The scan reads a copy and returns nothing. Names are decoded because that is
 // what they are compared as; the bytes the record carries are untouched, which
-// is what [JOB-E7] promises and what TestOpaqueBytesSurviveNameComparison holds
+// is what [JOB-J7] promises and what TestOpaqueBytesSurviveNameComparison holds
 // this to.
 func refuseDuplicateNames(b []byte) error {
 	type frame struct {

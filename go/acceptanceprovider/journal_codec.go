@@ -37,19 +37,22 @@ type journalReceipt struct {
 }
 
 type journalDocument struct {
-	Version      int
-	Scope        string
-	Identity     journalIdentity
-	Phase        string
-	Arguments    *journalSubmission
-	Receipt      *journalReceipt
-	Reason       string
-	WorkSpec     []byte   `json:",omitempty"`
-	WorkRequires []string `json:",omitempty"`
-	Origin       string   `json:",omitempty"`
-	ResultLost   bool     `json:",omitempty"`
-	Label        string   `json:",omitempty"`
-	LabelDerived bool     `json:",omitempty"`
+	Version         int
+	Scope           string
+	Subject         *AuthenticatedSubject `json:",omitempty"`
+	SubjectOrigin   string                `json:",omitempty"`
+	SubjectEvidence string                `json:",omitempty"`
+	Identity        journalIdentity
+	Phase           string
+	Arguments       *journalSubmission
+	Receipt         *journalReceipt
+	Reason          string
+	WorkSpec        []byte   `json:",omitempty"`
+	WorkRequires    []string `json:",omitempty"`
+	Origin          string   `json:",omitempty"`
+	ResultLost      bool     `json:",omitempty"`
+	Label           string   `json:",omitempty"`
+	LabelDerived    bool     `json:",omitempty"`
 }
 
 func toJournalIdentity(id api.RequestIdentity) journalIdentity {
@@ -61,7 +64,7 @@ func (id journalIdentity) api() api.RequestIdentity {
 }
 
 func (j journal) MarshalJSON() ([]byte, error) {
-	doc := journalDocument{Version: j.Version, Scope: j.Scope, Identity: toJournalIdentity(j.Identity), Phase: j.Phase, Reason: j.Reason,
+	doc := journalDocument{Version: j.Version, Scope: j.Scope, Subject: j.Subject, SubjectOrigin: j.SubjectOrigin, SubjectEvidence: j.SubjectEvidence, Identity: toJournalIdentity(j.Identity), Phase: j.Phase, Reason: j.Reason,
 		WorkSpec: j.WorkSpec, WorkRequires: j.WorkRequires, Origin: j.Origin, ResultLost: j.ResultLost, Label: j.Label, LabelDerived: j.LabelDerived}
 	if s := j.Arguments; s != nil {
 		doc.Arguments = &journalSubmission{Identity: toJournalIdentity(s.Identity), Kind: s.Kind, Spec: s.Spec, RequiredGuarantees: s.RequiredGuarantees}
@@ -85,7 +88,7 @@ func (j *journal) UnmarshalJSON(b []byte) error {
 	if d.Decode(new(any)) != io.EOF {
 		return fmt.Errorf("acceptance: trailing journal data")
 	}
-	*j = journal{Version: doc.Version, Scope: doc.Scope, Identity: doc.Identity.api(), Phase: doc.Phase, Reason: doc.Reason,
+	*j = journal{Version: doc.Version, Scope: doc.Scope, Subject: doc.Subject, SubjectOrigin: doc.SubjectOrigin, SubjectEvidence: doc.SubjectEvidence, Identity: doc.Identity.api(), Phase: doc.Phase, Reason: doc.Reason,
 		WorkSpec: doc.WorkSpec, WorkRequires: doc.WorkRequires, Origin: doc.Origin, ResultLost: doc.ResultLost, Label: doc.Label, LabelDerived: doc.LabelDerived}
 	if s := doc.Arguments; s != nil {
 		j.Arguments = &api.Submission{Identity: s.Identity.api(), Kind: s.Kind, Spec: s.Spec, RequiredGuarantees: s.RequiredGuarantees}

@@ -17,6 +17,10 @@ const MaxFrameBytes uint32 = 2 * MaxSpecBytes
 // a nonempty scope returned alongside an error is never used.
 type Authorizer func(*identity.Peer) (scope string, err error)
 
+// BindingAuthorizer derives the accepted scope and execution subject from the
+// same receiver-verified peer. A failed or invalid binding denies the call.
+type BindingAuthorizer func(*identity.Peer) (Binding, error)
+
 // MethodPolicy is a service-owned decision for a validated generated method.
 // It receives bound caller evidence, never the runtime's ambient identity.
 // Errors refuse the call; implementations must honor context cancellation.
@@ -48,7 +52,21 @@ func HandleConnection(ctx context.Context, conn listen.Conn, provider *Provider,
 // HandleConnectionWithPolicy adds method-level enforcement without changing the
 // caller namespace. The generated dispatcher validates arguments before policy.
 func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider *Provider, authorize Authorizer, policy MethodPolicy) error {
+	var binding BindingAuthorizer
+	if authorize != nil {
+		binding = func(peer *identity.Peer) (Binding, error) {
+			scope, err := authorize(peer)
+			return Binding{Scope: scope}, err
+		}
+	}
+	return HandleConnectionWithBindingPolicy(ctx, conn, provider, binding, policy)
+}
+
+// HandleConnectionWithBindingPolicy retains the receiver-bound subject for
+// new work while continuing to recheck method authorization for every call.
+func HandleConnectionWithBindingPolicy(ctx context.Context, conn listen.Conn, provider *Provider, authorize BindingAuthorizer, policy MethodPolicy) error {
 	if provider == nil {
+		//unchecked: no provider can report a cleanup error to this caller.
 		_ = conn.Close()
 		return errors.New("acceptance: provider required")
 	}
@@ -56,15 +74,17 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 	if err != nil {
 		return err
 	}
+	//unchecked: the reply or receive error is primary; call cleanup has no
+	// separate response channel after this exchange.
 	defer call.Close()
 	peer, err := call.Peer()
 	if err != nil {
 		return err
 	}
-	scope := ""
+	binding := Binding{}
 	if authorize != nil {
-		if allowedScope, err := authorize(peer); err == nil {
-			scope = allowedScope
+		if selected, err := authorize(peer); err == nil && selected.valid() == nil {
+			binding = selected
 		}
 	}
 	// Recheck after host policy, before any admission/seal or cancellation mutation.
@@ -72,7 +92,7 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 		return err
 	}
 	permit := func(service, method string) access {
-		if scope == "" || ctx.Err() != nil {
+		if binding.Scope == "" || ctx.Err() != nil {
 			return accessDenied
 		}
 		granted := accessAllowed
@@ -89,7 +109,7 @@ func HandleConnectionWithPolicy(ctx context.Context, conn listen.Conn, provider 
 		}
 		return granted
 	}
-	reply, err := provider.dispatchFrame(call.Frame, scope, permit, policy != nil)
+	reply, err := provider.dispatchFrameBinding(call.Frame, binding, permit, policy != nil)
 	if err != nil {
 		return err
 	}
@@ -103,8 +123,13 @@ const OperatorService = "abstraction.job/operator@1"
 // method policy: the operator profile crosses caller scopes and is forbidden
 // without one (JOB-A13).
 func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) access, decided bool) ([]byte, error) {
+	return provider.dispatchFrameBinding(frame, Binding{Scope: scope}, permit, decided)
+}
+
+func (provider *Provider) dispatchFrameBinding(frame []byte, binding Binding, permit func(string, string) access, decided bool) ([]byte, error) {
+	scope := binding.Scope
 	return api.ServeEndpoint(frame, "openabstractions", "",
-		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.Bind(scope), denied: provider.Bind(""), permit: permit}},
+		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.BindBinding(binding), denied: provider.Bind(""), permit: permit}},
 		&api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.BindInventory(scope), denied: provider.BindInventory(""), permit: permit}},
 		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperations(scope), denied: provider.BindOperations(""), permit: permit}},
 		&api.JobOperatorDispatcher{Handler: methodOperator{bound: &bound{provider: provider, scope: boundScope(scope)}, permit: permit, decided: decided}})

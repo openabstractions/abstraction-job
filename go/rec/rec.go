@@ -221,17 +221,10 @@ func (v Verdict) Known() bool {
 }
 
 var VerdictTranscript = map[string]string{
-	"not_found":      "not-found",
-	"lease_held":     "lease-held",
-	"stale_epoch":    "stale-epoch",
-	"conflict":       "refused",
-	"lease_expired":  "lease-expired",
-	"terminal":       "terminal",
-	"invalid":        "invalid",
-	"unknown_schema": "unknown-model",
-	"unknown_op":     "refused",
-	"not_supported":  "refused",
-	"other":          "refused",
+	"conflict":      "refused",
+	"unknown_op":    "refused",
+	"not_supported": "refused",
+	"other":         "refused",
 }
 
 type Step struct {

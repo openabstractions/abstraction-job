@@ -52,15 +52,18 @@ type configuration struct {
 // published means insertion succeeded; a missing published record is corruption,
 // not permission to create it again. sealed prevents delayed acceptance forever.
 type journal struct {
-	Version      int
-	Scope        string
-	Identity     api.RequestIdentity
-	Phase        string
-	Arguments    *api.Submission
-	Receipt      *api.Receipt
-	Reason       string
-	WorkSpec     []byte   `json:",omitempty"`
-	WorkRequires []string `json:",omitempty"`
+	Version         int
+	Scope           string
+	Subject         *AuthenticatedSubject `json:",omitempty"`
+	SubjectOrigin   string                `json:",omitempty"`
+	SubjectEvidence string                `json:",omitempty"`
+	Identity        api.RequestIdentity
+	Phase           string
+	Arguments       *api.Submission
+	Receipt         *api.Receipt
+	Reason          string
+	WorkSpec        []byte   `json:",omitempty"`
+	WorkRequires    []string `json:",omitempty"`
 	// Origin is empty for admitted submissions. legacyMigrationOrigin marks work
 	// an operator mapping converted; only such journals use LegacyPreparer.
 	Origin string `json:",omitempty"`
@@ -82,17 +85,78 @@ func (j *journal) workSpec() []byte {
 }
 
 type Provider struct {
-	inventory inventoryState
-	root      string
-	config    configuration
-	store     *job.FileStore
-	executor  Executor
+	inventory  inventoryState
+	root       string
+	config     configuration
+	store      *job.FileStore
+	executor   Executor
+	subjectsMu sync.RWMutex
+	subjects   map[string]journalSubject
 	// features caches storage features already recorded in the owner header.
 	features sync.Map
 	// Tests inject failures at durable admission boundaries.
 	fault func(string) error
 	// report receives failures no reply carries; see SetErrorReporter.
 	report func(error)
+}
+
+type journalSubject struct {
+	scope       string
+	subject     *AuthenticatedSubject
+	origin      string
+	evidence    string
+	journalPath string
+}
+
+// SubjectForOperation returns the subject retained with this exact operation.
+// A nil subject with found=true is an older journal. Missing or conflicting
+// evidence never becomes a subject by looking up another operation's scope.
+func (p *Provider) SubjectForOperation(operationID, scope string) (*AuthenticatedSubject, bool, error) {
+	p.subjectsMu.RLock()
+	record, found := p.subjects[operationID]
+	p.subjectsMu.RUnlock()
+	if !found {
+		return nil, false, nil
+	}
+	if record.scope != scope {
+		return nil, true, errors.New("acceptance: operation scope mismatch")
+	}
+	if record.subject == nil {
+		return nil, true, nil
+	}
+	// Re-read durable evidence instead of granting on a cached subject alone.
+	data, err := cas.Read(record.journalPath)
+	if err != nil {
+		return nil, true, err
+	}
+	j, err := p.decodeJournal(data)
+	if err != nil || j.Receipt == nil || j.Receipt.OperationID != operationID || j.Scope != scope || j.Subject == nil || j.SubjectOrigin != record.origin || j.SubjectEvidence != record.evidence || *j.Subject != *record.subject {
+		return nil, true, errors.New("acceptance: operation subject evidence unavailable")
+	}
+	subject := *record.subject
+	return &subject, true, nil
+}
+
+func (p *Provider) indexJournal(path string, j *journal) error {
+	if j.Receipt == nil {
+		return nil
+	}
+	id := j.Receipt.OperationID
+	p.subjectsMu.Lock()
+	defer p.subjectsMu.Unlock()
+	if p.subjects == nil {
+		p.subjects = make(map[string]journalSubject)
+	}
+	if prior, ok := p.subjects[id]; ok && prior.journalPath != path {
+		return errors.New("acceptance: duplicate operation association")
+	}
+	var subject *AuthenticatedSubject
+	if j.Subject != nil {
+		copy := *j.Subject
+		subject = &copy
+	}
+	p.subjects[id] = journalSubject{scope: j.Scope, subject: subject, origin: j.SubjectOrigin, evidence: j.SubjectEvidence, journalPath: path}
+	return nil
 }
 
 // errResultLostNotRecorded marks a lost result whose journal record failed.
@@ -116,6 +180,15 @@ type Executor interface {
 	Profile() string
 	Prepare(operationID, kind string, spec []byte) ([]byte, error)
 	Serve(context.Context, job.Store) error
+}
+
+// SubjectLookup reads private journal evidence for the actual claimed record.
+type SubjectLookup func(operationID, scope string) (*AuthenticatedSubject, bool, error)
+
+// SubjectServingExecutor receives recovery evidence without changing the job
+// wire contract or the old executor Serve method.
+type SubjectServingExecutor interface {
+	ServeWithSubjectLookup(context.Context, job.Store, SubjectLookup) error
 }
 
 // GuaranteedExecutor prepares execution requirements under the same deterministic,
@@ -166,6 +239,12 @@ type RecoverableExecutor interface {
 // its decision [JOB-A9]. It has no effects.
 type AdmissionChecker interface {
 	CheckAdmission(scope, kind string, spec []byte, required []string) (api.AcceptanceOutcome, string)
+}
+
+// SubjectAdmissionChecker evaluates a new key using receiver-bound identity.
+// The executor still checks current rights at the point of use.
+type SubjectAdmissionChecker interface {
+	CheckSubjectAdmission(binding Binding, kind string, spec []byte, required []string) (api.AcceptanceOutcome, string)
 }
 
 // SupportedGuarantees is the vocabulary this configured provider can negotiate.
@@ -222,6 +301,51 @@ func acceptedFrom(supported, required []string) ([]string, error) {
 // arguments must produce the same work and requirements.
 type ScopedPreparer interface {
 	PrepareScoped(scope, operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
+}
+
+// SubjectScopedPreparer receives the receiver-bound subject for newly accepted
+// work. Legacy journals continue through ScopedPreparer byte-for-byte.
+type SubjectScopedPreparer interface {
+	PrepareSubjectScoped(binding Binding, operationID, kind string, spec []byte, required []string) ([]byte, []string, error)
+}
+
+func (p *Provider) prepareBinding(binding Binding, id string, s api.Submission) ([]byte, []string, error) {
+	if binding.Subject == nil {
+		return p.prepare(binding.Scope, id, s)
+	}
+	e, ok := p.executor.(SubjectScopedPreparer)
+	if !ok {
+		return p.prepare(binding.Scope, id, s)
+	}
+	extra := []string{}
+	for _, g := range s.RequiredGuarantees {
+		if !slices.Contains(Guarantees(), g) {
+			extra = append(extra, g)
+		}
+	}
+	work, requires, err := e.PrepareSubjectScoped(binding, id, s.Kind, bytes.Clone(s.Spec), slices.Clone(extra))
+	if len(requires) > 64 {
+		return nil, nil, errors.New("too many execution requirements")
+	}
+	for _, g := range requires {
+		if g == "" || len(g) > 256 || !utf8.ValidString(g) {
+			return nil, nil, errors.New("invalid execution requirement")
+		}
+	}
+	if len(requires) == 0 {
+		requires = nil
+	}
+	return bytes.Clone(work), slices.Clone(requires), err
+}
+
+func (p *Provider) prepareJournal(j *journal) ([]byte, []string, error) {
+	if j.Subject != nil {
+		if j.Origin != "" {
+			return nil, nil, errors.New("acceptance: subject on migrated work")
+		}
+		return p.prepareBinding(Binding{Scope: j.Scope, Subject: j.Subject, Origin: j.SubjectOrigin, Evidence: j.SubjectEvidence}, j.Receipt.OperationID, *j.Arguments)
+	}
+	return p.prepareOrigin(j.Scope, j.Receipt.OperationID, *j.Arguments, j.Origin)
 }
 
 func (p *Provider) prepare(scope, id string, s api.Submission) ([]byte, []string, error) {
@@ -320,6 +444,9 @@ func (p *Provider) Execute(ctx context.Context) error {
 	if p.executor == nil {
 		return errors.New("acceptance: execution not configured")
 	}
+	if executor, ok := p.executor.(SubjectServingExecutor); ok {
+		return executor.ServeWithSubjectLookup(ctx, p.store, p.SubjectForOperation)
+	}
 	return p.executor.Serve(ctx, p.store)
 }
 
@@ -407,6 +534,9 @@ func open(root, logicalOwner string, executor Executor, managed bool) (*Provider
 		if p.requestPath(j.Scope, j.Identity) != path {
 			return nil, fmt.Errorf("acceptance: journal identity mismatch")
 		}
+		if err := p.indexJournal(path, j); err != nil {
+			return nil, err
+		}
 		if j.Phase != "sealed" {
 			if err := p.materialize(path); err != nil {
 				return nil, err
@@ -420,15 +550,21 @@ func open(root, logicalOwner string, executor Executor, managed bool) (*Provider
 // boundary. It must not receive an unverified request field or upstream claim.
 // An empty scope always yields forbidden (including on history-window lookup).
 func (p *Provider) Bind(authenticatedCallerScope string) api.RecoverableAcceptance {
-	if len(authenticatedCallerScope) > MaxCallerScopeBytes || !utf8.ValidString(authenticatedCallerScope) {
-		authenticatedCallerScope = ""
+	return p.BindBinding(Binding{Scope: authenticatedCallerScope})
+}
+
+// BindBinding accepts only identity selected by the receiving boundary.
+func (p *Provider) BindBinding(binding Binding) api.RecoverableAcceptance {
+	if binding.valid() != nil {
+		binding = Binding{}
 	}
-	return &bound{provider: p, scope: authenticatedCallerScope}
+	return &bound{provider: p, scope: binding.Scope, binding: binding}
 }
 
 type bound struct {
 	provider *Provider
 	scope    string
+	binding  Binding
 }
 
 func (p *Provider) requests() string { return filepath.Join(p.root, "acceptance", "requests") }
@@ -558,6 +694,15 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	if j.Origin != "" && j.Origin != legacyMigrationOrigin {
 		return nil, fmt.Errorf("acceptance: unsupported work origin")
 	}
+	if j.Subject != nil || j.SubjectOrigin != "" || j.SubjectEvidence != "" {
+		_, marked := p.features.Load(StorageFeatureSubjects)
+		if !marked && !slices.Contains(p.config.Features, StorageFeatureSubjects) {
+			return nil, fmt.Errorf("acceptance: subject storage feature missing")
+		}
+		if err := (Binding{Scope: j.Scope, Subject: j.Subject, Origin: j.SubjectOrigin, Evidence: j.SubjectEvidence}).valid(); err != nil || j.Subject == nil {
+			return nil, fmt.Errorf("acceptance: invalid recovery subject")
+		}
+	}
 	if label, err := api.NormalizeLabel(j.Label); err != nil || label != j.Label || (j.LabelDerived && j.Label == "") {
 		return nil, fmt.Errorf("acceptance: invalid recovery label")
 	}
@@ -597,7 +742,7 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 		return nil, err
 	}
 	if p.executor != nil {
-		expected, requires, err := p.prepareOrigin(j.Scope, j.Receipt.OperationID, *j.Arguments, j.Origin)
+		expected, requires, err := p.prepareJournal(&j)
 		if err != nil || !bytes.Equal(expected, j.WorkSpec) || !slices.Equal(requires, j.WorkRequires) {
 			return nil, errors.New("acceptance: incompatible execution specification")
 		}
@@ -668,6 +813,7 @@ type storedLabel struct {
 // label chooses the stored label for a validated submission: the caller's
 // trimmed label, or else one the executor derives within the same limits.
 func (p *Provider) label(s api.Submission) storedLabel {
+	//unchecked: a failed normalize just leaves text empty, which the check below already treats as "derive one instead"
 	if text, _ := api.NormalizeLabel(s.Label); text != "" {
 		return storedLabel{text: text}
 	}
@@ -720,6 +866,11 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 			return refused, nil
 		}
 	}
+	if s != nil && b.binding.Subject != nil {
+		if err := p.ensureFeature(StorageFeatureSubjects); err != nil {
+			return outcome(api.AcceptanceOutcomeUnknown, "owner storage feature unavailable"), nil
+		}
+	}
 	var j *journal
 	err := cas.Change(path, func(cur []byte) ([]byte, error) {
 		if cur != nil {
@@ -739,7 +890,7 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 			}
 			operationID := job.NewID()
 			if p.executor != nil {
-				work, requires, err := p.prepare(b.scope, operationID, *s)
+				work, requires, err := p.prepareBinding(b.binding, operationID, *s)
 				if err != nil || len(work) > MaxSpecBytes || !json.Valid(work) {
 					j.Reason = "configured executor refused this work"
 					return json.Marshal(j)
@@ -748,6 +899,10 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 				j.WorkRequires = slices.Clone(requires)
 			}
 			j.Phase = "prepared"
+			if b.binding.Subject != nil {
+				subject := *b.binding.Subject
+				j.Subject, j.SubjectOrigin, j.SubjectEvidence = &subject, b.binding.Origin, b.binding.Evidence
+			}
 			j.Arguments = s
 			j.Label, j.LabelDerived = label.text, label.derived
 			j.Receipt = &api.Receipt{Identity: id, LogicalOwner: p.config.Owner, OperationID: operationID, AcceptedGuarantees: accepted, HistoryRetentionMs: p.config.RetentionMs}
@@ -762,6 +917,9 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 	}
 	if j.Scope != b.scope || j.Identity != id {
 		return outcome(api.AcceptanceOutcomeUnknown, "owner evidence mismatch"), nil
+	}
+	if err := p.indexJournal(path, j); err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
 	}
 	v := api.ReconcileEvidence(b.scope, p.config.Owner, id, s, api.Evidence{CallerScope: j.Scope, Identity: j.Identity, Arguments: j.Arguments, Receipt: j.Receipt, HistoryAvailable: true, SealedNonAcceptance: j.Phase == "sealed"})
 	if j.Phase == "sealed" {
@@ -804,7 +962,16 @@ func (b *bound) checkAdmission(id api.RequestIdentity, s api.Submission) (api.Ac
 			extra = append(extra, g)
 		}
 	}
-	word, reason := checker.CheckAdmission(b.scope, s.Kind, bytes.Clone(s.Spec), extra)
+	word, reason := api.AcceptanceOutcomeAccepted, ""
+	if b.binding.Subject != nil {
+		if subjectChecker, ok := p.executor.(SubjectAdmissionChecker); ok {
+			word, reason = subjectChecker.CheckSubjectAdmission(b.binding, s.Kind, bytes.Clone(s.Spec), extra)
+		} else {
+			word, reason = checker.CheckAdmission(b.scope, s.Kind, bytes.Clone(s.Spec), extra)
+		}
+	} else {
+		word, reason = checker.CheckAdmission(b.scope, s.Kind, bytes.Clone(s.Spec), extra)
+	}
 	if word != api.AcceptanceOutcomeInvalid && word != api.AcceptanceOutcomeUnavailable {
 		return api.AcceptanceResult{}, false
 	}

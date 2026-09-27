@@ -64,11 +64,13 @@ const (
 	StorageFeatureResultLost = "abstraction.job/journal-result-lost@1"
 	// StorageFeatureLabels marks journals that store a display label [JOB-A12].
 	StorageFeatureLabels = "abstraction.job/journal-labels@1"
+	// StorageFeatureSubjects marks journals retaining receiver-bound subjects.
+	StorageFeatureSubjects = "abstraction.job/journal-subjects@1"
 )
 
 // SupportedStorageFeatures is the feature roster this provider reads.
 func SupportedStorageFeatures() []string {
-	return []string{StorageFeatureAttempts, StorageFeatureResultLost, StorageFeatureLabels}
+	return []string{StorageFeatureAttempts, StorageFeatureResultLost, StorageFeatureLabels, StorageFeatureSubjects}
 }
 
 func validateConfiguration(data []byte, owner string, version int, profile string, managed bool) (configuration, error) {

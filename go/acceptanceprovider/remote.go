@@ -2,6 +2,7 @@ package acceptanceprovider
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 
 	"github.com/openabstractions/abstraction-identity/remote"
@@ -12,6 +13,11 @@ import (
 // from the frame, certificate display name, or a claimed local process identity.
 type RemoteAuthorizer func(context.Context, remote.Peer) (scope string, err error)
 
+// RemoteBindingAuthorizer maps authenticated certificate evidence through
+// receiver-owned configuration. Origin claims and certificate display names
+// are not execution subjects.
+type RemoteBindingAuthorizer func(context.Context, remote.Peer) (Binding, error)
+
 // RemoteMethodPolicy applies receiving-side resource policy to the validated
 // generated method. Nil retains the configured authorizer's access decision.
 type RemoteMethodPolicy func(context.Context, remote.Peer, string, string) error
@@ -21,18 +27,35 @@ type RemoteMethodPolicy func(context.Context, remote.Peer, string, string) error
 // frames; this handler owns caller scoping and per-method policy. Configure that
 // server's frame limit as MaxFrameBytes. Work lifetime remains provider-owned.
 func (p *Provider) RemoteHandler(authorize RemoteAuthorizer, policy RemoteMethodPolicy) remote.Handler {
+	var binding RemoteBindingAuthorizer
+	if authorize != nil {
+		binding = func(ctx context.Context, peer remote.Peer) (Binding, error) {
+			scope, err := authorize(ctx, peer)
+			return Binding{Scope: scope}, err
+		}
+	}
+	return p.RemoteBindingHandler(binding, policy)
+}
+
+// RemoteBindingHandler serves jobs for a receiver-owned certificate mapping.
+func (p *Provider) RemoteBindingHandler(authorize RemoteBindingAuthorizer, policy RemoteMethodPolicy) remote.Handler {
 	return func(ctx context.Context, peer remote.Peer, frame []byte) ([]byte, error) {
 		if p == nil {
 			return nil, errors.New("acceptance: provider required")
 		}
-		scope := ""
+		binding := Binding{}
 		if authorize != nil && ctx.Err() == nil {
 			if selected, err := authorize(ctx, peer); err == nil {
-				scope = selected
+				if selected.Subject != nil {
+					selected.Evidence = hex.EncodeToString(peer.Key[:])
+				}
+				if selected.valid() == nil && (selected.Subject == nil || selected.Origin == "remote") {
+					binding = selected
+				}
 			}
 		}
 		permit := func(service, method string) access {
-			if scope == "" || ctx.Err() != nil {
+			if binding.Scope == "" || ctx.Err() != nil {
 				return accessDenied
 			}
 			granted := accessAllowed
@@ -49,6 +72,6 @@ func (p *Provider) RemoteHandler(authorize RemoteAuthorizer, policy RemoteMethod
 			}
 			return granted
 		}
-		return p.dispatchFrame(frame, scope, permit, policy != nil)
+		return p.dispatchFrameBinding(frame, binding, permit, policy != nil)
 	}
 }

@@ -39,7 +39,7 @@ func TestDecodeStripsANeverCriticalNameBeforeTheSubsetCheck(t *testing.T) {
 	}
 }
 
-// [JOB-E8]: the depth limit is the record's own and an opaque value is counted
+// [JOB-J8]: the depth limit is the record's own and an opaque value is counted
 // against it, so the boundary is measured from the record object outwards.
 func TestDecodeRefusesNestingPastTheDepthLimit(t *testing.T) {
 	nest := func(n int) string {

@@ -65,11 +65,11 @@ func immutableMoved(field string) error {
 //
 // Not bytes.Equal, and the difference is the whole reason this rule has to hold
 // on all three bindings at once. Whitespace INSIDE an opaque value belongs to
-// the record format, not to the payload: [JOB-E1] fixes the indent, so the same
+// the record format, not to the payload: [JOB-J1] fixes the indent, so the same
 // spec is two-space-indented on disk and compact on the wire, and the service
 // binding would refuse every ordinary write if it compared what it received
 // against what it holds. json.Compact removes only insignificant whitespace, so
-// every escape and every number survives it exactly as [JOB-E7] promises.
+// every escape and every number survives it exactly as [JOB-J7] promises.
 func sameOpaque(a, b []byte) bool {
 	if bytes.Equal(a, b) {
 		return true

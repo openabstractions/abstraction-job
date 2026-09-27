@@ -5580,8 +5580,17 @@ func DescribeEndpoint(frame []byte, program, version string, services ...Describ
 	for i, service := range services {
 		contract, ready, why := service.DescribeService()
 		readiness := "ready"
-		if !ready {
+		if ready {
+			why = ""
+		} else {
 			readiness = "not_ready"
+		}
+		var guarantees []string
+		var capabilities map[string]string
+		if described, ok := service.(interface {
+			DescribeServiceMetadata() ([]string, map[string]string)
+		}); ok {
+			guarantees, capabilities = described.DescribeServiceMetadata()
 		}
 		if i > 0 {
 			out = append(out, ',')
@@ -5590,7 +5599,23 @@ func DescribeEndpoint(frame []byte, program, version string, services ...Describ
 		out = esc(out, contract)
 		out = append(out, ",\"readiness\":\""+readiness+"\",\"why\":"...)
 		out = esc(out, why)
-		out = append(out, ",\"guarantees\":[],\"capabilities\":{}}"...)
+		out = append(out, ",\"guarantees\":["...)
+		for j, guarantee := range guarantees {
+			if j > 0 {
+				out = append(out, ',')
+			}
+			out = esc(out, guarantee)
+		}
+		out = append(out, "],\"capabilities\":{"...)
+		for j, key := range sortedKeys(capabilities) {
+			if j > 0 {
+				out = append(out, ',')
+			}
+			out = esc(out, key)
+			out = append(out, ':')
+			out = esc(out, capabilities[key])
+		}
+		out = append(out, "}}"...)
 	}
 	return serviceReply(v, Raw(append(out, "]}}"...)), nil)
 }
@@ -5828,6 +5853,17 @@ func (d *RecoverableAcceptanceDispatcher) DescribeService() (contract string, re
 		return "abstraction.job/acceptance@1", ready, why
 	}
 	return "abstraction.job/acceptance@1", true, ""
+}
+
+// DescribeServiceMetadata returns optional handler display facts for Describe.
+// They grant no authority and do not change service admission.
+func (d *RecoverableAcceptanceDispatcher) DescribeServiceMetadata() (guarantees []string, capabilities map[string]string) {
+	if h, ok := d.Handler.(interface {
+		DescribeMetadata() ([]string, map[string]string)
+	}); ok {
+		return h.DescribeMetadata()
+	}
+	return nil, nil
 }
 
 // ServiceContract is the wire name ServeEndpoint routes this dispatcher's frames by.
@@ -6164,6 +6200,17 @@ func (d *OperationControlDispatcher) DescribeService() (contract string, ready b
 	return "abstraction.job/operations@1", true, ""
 }
 
+// DescribeServiceMetadata returns optional handler display facts for Describe.
+// They grant no authority and do not change service admission.
+func (d *OperationControlDispatcher) DescribeServiceMetadata() (guarantees []string, capabilities map[string]string) {
+	if h, ok := d.Handler.(interface {
+		DescribeMetadata() ([]string, map[string]string)
+	}); ok {
+		return h.DescribeMetadata()
+	}
+	return nil, nil
+}
+
 // ServiceContract is the wire name ServeEndpoint routes this dispatcher's frames by.
 func (d *OperationControlDispatcher) ServiceContract() string { return "abstraction.job/operations@1" }
 func (d *OperationControlDispatcher) WriteFrame(frame []byte) error {
@@ -6359,6 +6406,17 @@ func (d *JobInventoryDispatcher) DescribeService() (contract string, ready bool,
 	return "abstraction.job/inventory@1", true, ""
 }
 
+// DescribeServiceMetadata returns optional handler display facts for Describe.
+// They grant no authority and do not change service admission.
+func (d *JobInventoryDispatcher) DescribeServiceMetadata() (guarantees []string, capabilities map[string]string) {
+	if h, ok := d.Handler.(interface {
+		DescribeMetadata() ([]string, map[string]string)
+	}); ok {
+		return h.DescribeMetadata()
+	}
+	return nil, nil
+}
+
 // ServiceContract is the wire name ServeEndpoint routes this dispatcher's frames by.
 func (d *JobInventoryDispatcher) ServiceContract() string { return "abstraction.job/inventory@1" }
 func (d *JobInventoryDispatcher) WriteFrame(frame []byte) error {
@@ -6548,6 +6606,17 @@ func (d *JobOperatorDispatcher) DescribeService() (contract string, ready bool, 
 		return "abstraction.job/operator@1", ready, why
 	}
 	return "abstraction.job/operator@1", true, ""
+}
+
+// DescribeServiceMetadata returns optional handler display facts for Describe.
+// They grant no authority and do not change service admission.
+func (d *JobOperatorDispatcher) DescribeServiceMetadata() (guarantees []string, capabilities map[string]string) {
+	if h, ok := d.Handler.(interface {
+		DescribeMetadata() ([]string, map[string]string)
+	}); ok {
+		return h.DescribeMetadata()
+	}
+	return nil, nil
 }
 
 // ServiceContract is the wire name ServeEndpoint routes this dispatcher's frames by.

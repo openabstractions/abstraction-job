@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/openabstractions/abstraction-cas/go v0.4.0
-	github.com/openabstractions/abstraction-identity v0.3.0
+	github.com/openabstractions/abstraction-identity v0.4.0
 	github.com/openabstractions/abstraction-watch/go v0.3.0
 )
 

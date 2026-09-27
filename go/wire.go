@@ -78,7 +78,9 @@ func errorOf(kind, text string) error {
 		base = ErrInvalid
 	case wire.VerdictUnknownSchema:
 		base = ErrUnknownSchema
-	case wire.VerdictNotSupported:
+	case wire.VerdictNotSupported, "unsupported":
+		// "unsupported" is the spelling writers take next release
+		// (vocabulary N24); a reader accepts it one release ahead.
 		base = ErrNotSupported
 	default:
 		return errors.New(text)
