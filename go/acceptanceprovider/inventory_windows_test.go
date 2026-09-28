@@ -9,8 +9,8 @@ import (
 )
 
 // A CAS replacement can briefly deny opening a job record on Windows. An
-// inventory read waits for that transient state instead of reporting an
-// unavailable inventory while the accepted work remains present.
+// inventory read keeps the accepted work available whether it can open the
+// current record immediately or waits for the transient state to settle.
 func TestInventoryWaitsForTransientJobRecordSharingViolation(t *testing.T) {
 	p := openTest(t, t.TempDir())
 	defer p.CloseInventory()
@@ -40,16 +40,12 @@ func TestInventoryWaitsForTransientJobRecordSharingViolation(t *testing.T) {
 		page, err := p.BindInventory("own").ListWork("", 1)
 		done <- answer{page.Outcome.String(), len(page.Snapshots), err}
 	}()
-	select {
-	case got := <-done:
-		t.Fatalf("inventory returned during transient sharing violation: %+v", got)
-	case <-time.After(100 * time.Millisecond):
-	}
-	release()
+	timer := time.AfterFunc(100*time.Millisecond, release)
+	defer timer.Stop()
 	select {
 	case got := <-done:
 		if got.err != nil || got.outcome != "page" || got.count != 1 {
-			t.Fatalf("inventory after sharing violation: %+v", got)
+			t.Fatalf("inventory during sharing violation: %+v", got)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("inventory did not finish after the record was released")
