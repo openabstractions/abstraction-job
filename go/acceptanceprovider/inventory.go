@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	cas "github.com/openabstractions/abstraction-cas/go"
 	job "github.com/openabstractions/abstraction-job/go"
 	api "github.com/openabstractions/abstraction-job/go/abstraction/job/acceptance"
 )
@@ -258,18 +259,16 @@ func inventoryRead(path string, remaining *int64) ([]byte, error) {
 	if err := regularFile(path); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, min(*remaining, 4*MaxSpecBytes+16385)))
+	// Inventory records are replaced through CAS. On Windows a reader can briefly
+	// receive sharing violation or access denied while that replacement settles.
+	// Use the same bounded, retrying read as other observers of those records.
+	data, err := cas.ReadLimit(path, min(*remaining, 4*MaxSpecBytes+16384))
 	*remaining -= int64(len(data))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > 4*MaxSpecBytes+16384 {
-		return nil, errors.New("inventory record exceeds limit")
+	if data == nil {
+		return nil, os.ErrNotExist
 	}
 	return data, nil
 }
