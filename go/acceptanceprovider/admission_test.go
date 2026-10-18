@@ -59,9 +59,11 @@ func (e checkingExecutor) set(answer api.AcceptanceOutcome, available bool) {
 }
 
 // TestAdmissionCheckRefusesWithoutJournalOrSeal proves JOB-A16: an executor's
-// refusal is invalid or unavailable with its reason, leaves no journal, seal or
-// work, and the same identity is admitted once the executor admits it. A
-// duplicate of accepted work is answered from its journal without asking.
+// refusal is forbidden, invalid or unavailable with its reason, leaves no
+// journal, seal or work, and the same identity is admitted once the executor
+// admits it. A duplicate of accepted work is answered from its journal
+// without asking. A forbidden answer was read as admission before
+// 2026-10-02 and sealed the key (live walkthrough D11).
 func TestAdmissionCheckRefusesWithoutJournalOrSeal(t *testing.T) {
 	root := t.TempDir()
 	e := newCheckingExecutor()
@@ -70,7 +72,7 @@ func TestAdmissionCheckRefusesWithoutJournalOrSeal(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := submission(p, "named-credential")
-	for _, word := range []api.AcceptanceOutcome{api.AcceptanceOutcomeInvalid, api.AcceptanceOutcomeUnavailable} {
+	for _, word := range []api.AcceptanceOutcome{api.AcceptanceOutcomeForbidden, api.AcceptanceOutcomeInvalid, api.AcceptanceOutcomeUnavailable} {
 		e.set(word, true)
 		r, err := p.Bind("alice").Submit(s)
 		if err != nil || r.Outcome != word || r.Reason != "credential:unknown:hf" || r.Receipt != nil {

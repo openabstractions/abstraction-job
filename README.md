@@ -1,9 +1,147 @@
 # abstraction-job
 
-Keep long work running after the application closes or the service restarts.
-The job service accepts the work, reports progress and retains the result for
-recovery. A timeout ends only the application's wait; cancelling the work is a
-separate request.
+*For applications that hand long work to OA. Provider authors start at
+[For provider implementers](#for-provider-implementers).*
+
+abstraction-job keeps long work running after the application closes or the
+service restarts. An application submits the work; the job service accepts
+it, reports progress and keeps a completed result readable for the provider's
+declared minimum retention window. `GetHistoryWindow.result_retention_ms`
+declares that window after completion; zero declares no retention (JOB-A11).
+
+**What's new here:** Accepted work outlives the application that asked: the
+service keeps the job, its progress and its result, and a lost reply is
+reconciled into the same job.
+
+Long work, such as a large download, an import or a conversion, normally
+lives in the memory of the program that started it. Closing that program, a
+crash or a reboot destroys the fact that the work was ever wanted. A job puts
+that fact somewhere the process does not own: what is wanted, how far it got,
+and what a successor needs to carry on. Sleeping, crashing and restarting all
+become the owner going away, and the record is still there when somebody
+looks.
+
+## Who runs a job
+
+A job's kind names the provider that runs it. The runtime runs two kinds
+today:
+
+| Kind | Runs | Module |
+| --- | --- | --- |
+| `download` | a download: the runtime's HTTP transfer, or a delegate such as a NAS | [abstraction-download](https://github.com/openabstractions/abstraction-download) |
+| `inference` | video generation and image batches on a model server | [abstraction-inference](https://github.com/openabstractions/abstraction-inference) |
+
+The service refuses a submission of any other kind with
+`definitely_not_accepted` and the reason "configured executor refused this
+work". A new kind needs a provider that executes it.
+
+## See progress
+
+Poll `ObserveWork` with the job's idempotency key. Each answer carries a
+snapshot whose `State` is `pending`, `running`, `transferred`, `complete`,
+`failed` or `cancelled`, and whose `Progress` is `Done` of `Total`, with
+`Total` 0 while unknown. For a download both count bytes. Stop polling at
+`complete`, `failed` or `cancelled`. Ending the poll ends only the
+application's wait; the job keeps running, and `CancelWork` is the separate
+request that stops it.
+
+`Watch` (contract rule JOB-N1) and the
+[watch](https://github.com/openabstractions/abstraction-watch) module serve
+provider authors who read the job store directly. An application uses
+`ObserveWork`.
+
+## An example that runs
+
+An application submits a download job, keeps what it needs for recovery, and
+polls its progress until the job ends or the application stops waiting.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	download "github.com/openabstractions/abstraction-download/go"
+	request "github.com/openabstractions/abstraction-download/go/abstraction/download/request"
+	facade "github.com/openabstractions/abstraction-facade/go"
+	api "github.com/openabstractions/abstraction-job/go/abstraction/job/acceptance"
+)
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	jobs, err := facade.Discover().ResolveJobs(ctx, facade.Requirements{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	window, err := jobs.GetHistoryWindow(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// A download job: the artifact's digest and size, and where to get it.
+	spec := request.Encode(&request.Request{
+		Artifact: request.Artifact{
+			Digest: "sha256:2fc237e65e1f963310e9c961d8e71e932734a72f90e3216a972d83edd1feb756",
+			Size:   328597408,
+		},
+		Sources: []request.Source{{Scheme: "https", Locator: "https://example.invalid/artifact"}},
+	})
+	id := api.RequestIdentity{Key: "example-work", HistoryEpoch: window.HistoryEpoch}
+	accepted, err := jobs.Submit(ctx, api.Submission{Identity: id, Kind: download.Kind, Spec: spec})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if accepted.Outcome != api.AcceptanceOutcomeAccepted {
+		log.Fatalf("submission not accepted: %s %s", accepted.Outcome, accepted.Reason)
+	}
+	fmt.Println("operation:", accepted.Receipt.OperationID)
+
+	// Keep id and jobs.Binding() before waiting: a process that lost the
+	// reply, or a later run, calls jobs.Reconcile(ctx, id) and never resubmits.
+	_ = jobs.Binding()
+
+	// Poll for progress until the job ends or this program stops waiting.
+	for {
+		observed, err := jobs.ObserveWork(ctx, id)
+		if err != nil {
+			log.Fatal(err) // the deadline ends the wait; the job keeps running
+		}
+		if observed.Outcome != api.ObservationOutcomeObserved {
+			log.Fatalf("observation refused: %s", observed.Outcome)
+		}
+		job := observed.Snapshot
+		fmt.Printf("%s: %d of %d bytes\n", job.State, job.Progress.Done, job.Progress.Total)
+		switch job.State {
+		case api.WorkStateComplete, api.WorkStateFailed, api.WorkStateCancelled:
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+```
+
+`ResolveJobs` binds a `JobsClient` to the service. `GetHistoryWindow` reads
+the owner's current acceptance epoch, which every idempotency key carries.
+`Submit` returns the receipt inside `accepted`. `ObserveWork` reads state
+without changing it. `Reconcile` is what a restarted process calls with the
+same idempotency key in place of submitting again. `CancelWork` asks for
+cancellation and proves nothing about effects having stopped. The
+[download README](https://github.com/openabstractions/abstraction-download)
+saves the finished file with `LinkResult`, or `CopyResult` where a link
+cannot reach.
+
+## Application service path
+
+Normal applications use resolved durable jobs and generated download requests
+through [the facade](https://github.com/openabstractions/abstraction-facade).
+The service owns execution and shared stores. Preserve the caller's
+idempotency key and binding for recovery; cancelling a wait leaves the
+accepted job alone.
 
 For safe retry after a lost reply, the application keeps the original
 idempotency key, service binding and receipt. The receipt is the service's
@@ -17,14 +155,6 @@ executable's absolute path, as the operating system reports it: the same rule
 for every language's client. Rebuilding or moving that executable changes its
 subject, and receipts filed under the old subject stay behind it, unreachable
 from the new one.
-
-## Application service path
-
-Normal applications use resolved durable jobs and generated download requests
-through [the facade](https://github.com/openabstractions/abstraction-facade).
-The service owns execution and shared stores. Preserve the caller's
-idempotency key and binding for recovery; cancelling a wait leaves the
-accepted job alone.
 
 The [acceptance rules](CONTRACT.md) define retries, failures and recovery. The
 contract declares each rule; this page names them without restating them:
@@ -80,37 +210,6 @@ key `RequestIdentity` and the methods Cancel, Observe and List as
 `CancelWork`, `ObserveWork` and `ListWork`
 ([CONTRACT.md](CONTRACT.md#reading-this-page)).
 
-The job store examples below are explicitly selected native provider APIs with
-separate lifecycle guarantees. Their historical conformance describes that
-provider, and it qualifies neither current service packages nor every
-platform.
-
-
-**Deprecated job store.** The job store is deprecated and kept: no release
-removing it is named. The Go file store is the runtime job provider's
-persistence, and the example below runs as shown. The Python and C++ file stores
-were removed on 2026-09-15; the parent project's `docs/REMOVED.md` records them.
-No version number is typed on this page: a tag is the only thing that cannot
-drift, so
-[the tag list](https://github.com/openabstractions/abstraction-job/tags) is the
-answer to "which release".
-
-A record on disk describing a job somebody asked for, and rules for who is
-allowed to be doing it right now. Any process can pick up a job another one
-left.
-
-Long work — a large download, an import, a conversion — is normally held in the
-memory of the program that started it, so closing that program, or a crash, or a
-reboot destroys the fact that the work was ever wanted. A job puts that fact
-somewhere the process does not own: what is wanted, how far it got, what a
-successor needs to carry on, and a lease saying who holds it. Sleeping, crashing
-and restarting stop being special cases; they are all the owner going away, and
-the record is still there when somebody else looks.
-
-One module of [Open Abstractions](https://github.com/openabstractions/abstractions),
-the parent project, which holds the scope rules, the method, the measured results
-and the conformance suite that judges implementations of this contract.
-
 ## Install
 
 Install the runtime first: https://openabstractions.org/adopt.html
@@ -128,97 +227,14 @@ Python and C++ applications use the generated acceptance vocabulary under
 Whether to adopt this at all, what it costs and what is not proven:
 [Adopting](CONTRIBUTING.md#adopting).
 
-## An example that runs
-
-An application submits a job, keeps the receipt, and later checks whether it
-finished: the service path every normal application uses.
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	"time"
-
-	facade "github.com/openabstractions/abstraction-facade/go"
-	api "github.com/openabstractions/abstraction-job/go/abstraction/job/acceptance"
-)
-
-func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	jobs, err := facade.Discover().ResolveJobs(ctx, facade.Requirements{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	// The epoch an idempotency key is stamped with (GetHistoryWindow's
-	// HistoryEpoch) is the owner's current acceptance epoch: closing it fences
-	// every submission under it, including a delayed one. It is a different
-	// thing from a lease's epoch, below, which fences writes to one record.
-	window, err := jobs.GetHistoryWindow(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	id := api.RequestIdentity{Key: "example-work", HistoryEpoch: window.HistoryEpoch}
-	accepted, err := jobs.Submit(ctx, api.Submission{Identity: id, Kind: "example", Spec: []byte(`{"fetch":"anything at all"}`)})
-	if err != nil {
-		log.Fatal(err)
-	}
-	if accepted.Outcome != api.AcceptanceOutcomeAccepted {
-		log.Fatalf("submission not accepted: %s %s", accepted.Outcome, accepted.Reason)
-	}
-	receipt := *accepted.Receipt
-	fmt.Println("logical owner:", receipt.LogicalOwner, "operation:", receipt.OperationID)
-
-	// Keep id and jobs.Binding() before waiting; a lost reply is reconciled
-	// with the same idempotency key, never resubmitted.
-	binding := jobs.Binding()
-	_ = binding
-
-	observed, err := jobs.ObserveWork(ctx, id)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if observed.Outcome != api.ObservationOutcomeObserved {
-		log.Fatalf("observation refused: %s", observed.Outcome)
-	}
-	fmt.Println("state:", observed.Snapshot.State)
-
-	// A restarted process presents the same idempotency key and never resubmits.
-	reconciled, err := jobs.Reconcile(ctx, id)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if reconciled.Outcome != api.AcceptanceOutcomeAccepted || reconciled.Receipt.OperationID != receipt.OperationID {
-		log.Fatalf("reconcile: %+v", reconciled)
-	}
-
-	cancelled, err := jobs.CancelWork(ctx, id)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("cancellation:", cancelled.Outcome)
-}
-```
-
-`ResolveJobs` binds a `JobsClient` to the service; `GetHistoryWindow` reads the
-owner's current epoch and pins the logical owner this binding will accept
-receipts from. `Submit` returns the receipt inside `accepted`; Observe
-(`ObserveWork`) reads state without changing it; `Reconcile` is what a
-restarted process calls with the same idempotency key in place of submitting
-again; Cancel (`CancelWork`) asks for cancellation and proves nothing about
-effects having stopped.
+## For provider implementers
 
 The deprecated `Store` interface below (`Claim`, which acquires a lease,
 `Update`, `Release` and the lease each of those holds) is what a provider
-implementer writes against; an application calls the service above. See
-[For provider implementers](#for-provider-implementers).
-
-## For provider implementers
+implementer writes against; an application calls the service above. These
+are explicitly selected native provider APIs with separate lifecycle
+guarantees. Their historical conformance describes that provider, and it
+qualifies neither current service packages nor every platform.
 
 `NewFileStore` is the shipped implementation of the deprecated `Store`. One
 worker acquires a job, records how far it got, and goes away; a second worker
@@ -302,8 +318,20 @@ it tests.
 
 ## Status
 
+One module of [Open Abstractions](https://github.com/openabstractions/abstractions),
+the parent project, which holds the scope rules, the method, the measured results
+and the conformance suite that judges implementations of this contract.
+
 Experimental. Go is the only language with a tagged release, and no release
 carries an API stability promise.
+
+- **Deprecated job store.** The job store is deprecated and kept: no release
+  removing it is named. The Go file store is the runtime job provider's
+  persistence, and the provider example above runs as shown. The Python and
+  C++ file stores were removed on 2026-09-15; the parent project's
+  `docs/REMOVED.md` records them. No version number is typed on this page:
+  [the tag list](https://github.com/openabstractions/abstraction-job/tags)
+  answers "which release".
 
 - **A reader that meets a record feature it does not understand refuses the whole
   record** when that feature is marked critical, and carries on when it is not.
@@ -404,3 +432,19 @@ is written. The command refuses while a runtime job service runs on that root.
 Drain active deprecated jobs through jobd first. `inspect` also reports jobd's
 separate store; those records stay with jobd and are finished through it.
 `abandon` withdraws an interrupted apply.
+
+<!-- BEGIN GENERATED PERMISSION DEFINITIONS -->
+
+## Permission definitions
+
+Generated from the existing compiled catalogue. [RIGHTS.json](RIGHTS.json) contains the complete action/profile records, disclosure, lifecycle, first-use behavior, selector support and finite bundles.
+
+This reference records compiled receiving support; RIGHTS.json names the compilation context. A connected runtime advertises current availability and selector support. These definitions supply no grant.
+
+| Action | Resource profile | Owning operations | First-use targets | Compiled receiver |
+|---|---|---|---|---|
+| `abstraction.job/acceptance.cancel` | `abstraction.rights/legacy-exact-string@1` | `abstraction.job/operator@1#CancelOperation` | `none` | served in compiled context |
+| `abstraction.job/acceptance.submit` | `abstraction.rights/legacy-exact-string@1` | `abstraction.job/acceptance@1#Submit` | Legacy `exact` | served in compiled context |
+| `abstraction.job/inventory.read` | `abstraction.rights/legacy-exact-string@1` | `abstraction.job/operator@1#ListAccountWork` | `none` | served in compiled context |
+
+<!-- END GENERATED PERMISSION DEFINITIONS -->

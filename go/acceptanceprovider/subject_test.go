@@ -3,12 +3,14 @@ package acceptanceprovider
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	identity "github.com/openabstractions/abstraction-identity"
 	"github.com/openabstractions/abstraction-identity/remote"
 	api "github.com/openabstractions/abstraction-job/go/abstraction/job/acceptance"
 )
@@ -25,6 +27,7 @@ func (f subjectRemoteFrames) ExchangeFrame(frame []byte) ([]byte, error) {
 type subjectCheckingExecutor struct {
 	checkingExecutor
 	seen *AuthenticatedSubject
+	peer *identity.Peer
 }
 
 func (e *subjectCheckingExecutor) CheckSubjectAdmission(binding Binding, _ string, _ []byte, _ []string) (api.AcceptanceOutcome, string) {
@@ -32,6 +35,7 @@ func (e *subjectCheckingExecutor) CheckSubjectAdmission(binding Binding, _ strin
 		copy := *binding.Subject
 		e.seen = &copy
 	}
+	e.peer = binding.Peer
 	return e.CheckAdmission(binding.Scope, "", nil, nil)
 }
 
@@ -100,6 +104,33 @@ func TestSubjectAdmissionRefusalLeavesNoJournal(t *testing.T) {
 	entries, err := os.ReadDir(p.requests())
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("refusal left journal: %v %v", entries, err)
+	}
+}
+
+// TestALocalBindingCarriesItsPeerToAdmission: the native peer a local
+// binding was derived from reaches the executor's admission, and a binding of
+// any other origin carrying a peer is invalid.
+func TestALocalBindingCarriesItsPeerToAdmission(t *testing.T) {
+	binding := testBinding(t)
+	binding.Peer = &identity.Peer{Platform: "fixture"}
+	e := &subjectCheckingExecutor{checkingExecutor: newCheckingExecutor()}
+	p, err := OpenWithExecutor(t.TempDir(), "owner", e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept(t, p.BindBinding(binding), submission(p, "peer"))
+	if e.peer != binding.Peer {
+		t.Fatalf("admission received peer %v, want the binding's", e.peer)
+	}
+	subject := AuthenticatedSubject{AccountKind: "posix", Account: "1000", Program: "/services/receiving-runtime"}
+	key := sha256.Sum256([]byte("trusted remote public key"))
+	remoteBinding := Binding{Scope: "mapped-remote-peer", Subject: &subject, Origin: "remote", Evidence: hex.EncodeToString(key[:]), Peer: binding.Peer}
+	if remoteBinding.valid() == nil {
+		t.Fatal("a remote binding carried a native peer")
+	}
+	remoteBinding.Peer = nil
+	if err := remoteBinding.valid(); err != nil {
+		t.Fatalf("the remote binding without a peer: %v", err)
 	}
 }
 

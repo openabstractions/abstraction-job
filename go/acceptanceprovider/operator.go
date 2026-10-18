@@ -21,7 +21,7 @@ func boundScope(scope string) string {
 // policy. With no configured policy every call is forbidden (JOB-A13).
 type methodOperator struct {
 	bound   *bound
-	permit  func(string, string) access
+	permit  permitFunc
 	decided bool
 }
 
@@ -29,7 +29,7 @@ func (h methodOperator) grant(method string) access {
 	if !h.decided || h.bound.scope == "" {
 		return accessDenied
 	}
-	return h.permit(OperatorService, method)
+	return h.permit(OperatorService, method, "")
 }
 
 func (h methodOperator) ListAccountWork(cursor string, limit int64) (api.InventoryPage, error) {

@@ -95,6 +95,9 @@ export declare class JobOperatorClient {
 
 export declare const JobOperatorService: Readonly<{ wireName: "abstraction.job/operator@1"; Client: typeof JobOperatorClient }>;
 
+export type LinkOutcome = (typeof LinkOutcome)[keyof typeof LinkOutcome];
+export declare const LinkOutcome: Readonly<{ Linked: "linked"; NotReady: "not_ready"; Unavailable: "unavailable"; Unsupported: "unsupported"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid"; Exists: "exists"; OtherVolume: "other_volume"; NoHardLinks: "no_hard_links"; Remote: "remote" }>;
+
 export type ObservationOutcome = (typeof ObservationOutcome)[keyof typeof ObservationOutcome];
 export declare const ObservationOutcome: Readonly<{ Observed: "observed"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid"; DefinitelyNotAccepted: "definitely_not_accepted"; Unavailable: "unavailable" }>;
 
@@ -115,6 +118,8 @@ export declare class OperationControlClient {
   observeWork(identity: RequestIdentity): Promise<ObservationResult>;
   /** Read complete immutable bytes without exposing paths. Offset must be nonnegative; max_bytes must be in 1..65536. Data obeys ResultChunk bounds. Absence, failure, incomplete work and transport errors are never EOF. This read never seals an absent identity. */
   readResult(identity: RequestIdentity, offset: bigint, maxBytes: bigint): Promise<ResultRead>;
+  /** Hard-link a complete result to destination for a local caller on this machine, under the caller's own authority to create that path, and never copy it. Destination is an absolute clean path of 1..4096 bytes whose parent directory exists, outside the provider's own root, and that does not exist yet. This call never seals an absent identity (JOB-A17). */
+  linkResult(identity: RequestIdentity, destination: string): Promise<ResultLink>;
 }
 
 export declare const OperationControlService: Readonly<{ wireName: "abstraction.job/operations@1"; Client: typeof OperationControlClient }>;
@@ -209,6 +214,19 @@ export interface ResultChunk {
   eof: boolean;
 }
 
+// Exactly linked carries the original receipt and the result's size in bytes;
+// other outcomes forbid a receipt and carry size zero. Linked means the
+// destination is a second name for the provider's own verified result bytes;
+// the provider keeps its name and retention. Other_volume and no_hard_links
+// name why no hard link could be made; remote refuses a caller without
+// receiver-verified local peer evidence, which keeps reading with ReadResult;
+// exists names a destination already present, which stays as it was (JOB-A17).
+export interface ResultLink {
+  outcome: LinkOutcome;
+  receipt: Receipt | null;
+  size: bigint;
+}
+
 export type ResultOutcome = (typeof ResultOutcome)[keyof typeof ResultOutcome];
 export declare const ResultOutcome: Readonly<{ Data: "data"; NotReady: "not_ready"; Unavailable: "unavailable"; Unsupported: "unsupported"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid" }>;
 
@@ -291,6 +309,8 @@ export declare function newReceipt(): Receipt;
 export declare function newRequestIdentity(): RequestIdentity;
 
 export declare function newResultChunk(): ResultChunk;
+
+export declare function newResultLink(): ResultLink;
 
 export declare function newResultRead(): ResultRead;
 

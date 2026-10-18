@@ -287,7 +287,17 @@ obtained is `unavailable` and reads or changes nothing (JOB-A9). A cursor
 from `ListAccountWork` MUST NOT continue a List enumeration, and the
 reverse. An operator snapshot MUST carry no subject, program or provider
 path. Submit is decided under the rule `abstraction.job/acceptance.submit`
-where the runtime configures one.
+where the runtime configures one, and per kind: the provider MUST hand the
+submission's kind to the decision (`acceptanceprovider.SubmitKind`). An
+explicit deny wins. A deny on `abstraction.job/acceptance@1` refuses every
+kind. A deny on `job:<kind>` refuses that kind under a permit on
+`abstraction.job/acceptance@1`. Otherwise a permit on either admits the
+submission, so a program allowed to submit `job:inference` work cannot queue
+a `download`. Reading the kind's rule under a contract-wide permit asks the
+person nothing. A kind no rule can name (a
+lower-case letter, then up to 63 lower-case letters, digits, `.`, `-` or
+`_`) is decided on `abstraction.job/acceptance@1` alone. A first-use
+question for submission names the kind's resource.
 
 **[JOB-A14] The job rights actions are closed.** `resource_actions` MUST name
 exactly `acceptance.submit`, `acceptance.cancel` and `inventory.read`. They
@@ -324,16 +334,123 @@ storage checks below.
 provider journals, accepts or seals a new idempotency key, the executor of
 its kind MAY decide that it can never serve this submission for this caller
 as submitted, for example because the submission names a credential the
-caller may not apply. Submit then MUST return `invalid` with the executor's
-reason, and the provider journals, accepts and seals nothing. The reason is
-a stable word the kind defines: the `download` kind uses
-`credential:<outcome>:<name>`, where outcome is the credentials applier's
-word. The same key is admissible once the cause is repaired. An executor
+caller may not apply. Submit then MUST return the executor's outcome with
+its reason: `forbidden` when a rights decision refused this caller, and
+`invalid` for any other refusal. The provider journals, accepts and seals
+nothing for either. The reason is a stable word the kind defines: the
+`download` kind uses `credential:<outcome>:<name>`, where outcome is the
+credentials applier's word, and the `inference` kind names each missing
+grant (inference INF-V4), such as `output:forbidden`. The same key is
+admissible once the cause is repaired, by an answer to a first-use question
+among other ways. An executor
 that cannot obtain its decision MUST make Submit return `unavailable` under
 JOB-A9. The check MUST run only for a key with no journal: a duplicate
 Submit of an accepted job returns its receipt without asking, and Reconcile
 never asks. A job the executor admitted may still end with the same refusal
 at execution, when the cause changed in between.
+
+**[JOB-A17] A complete result is linked on request and never copied.**
+`OperationControl.LinkResult(identity, destination)` gives a complete job's
+result bytes a second name at `destination` by a hard link the provider
+makes (VISION 2026-10-01). The identity, scope and result-state rules are
+`ReadResult`'s: no scope is `forbidden`, an absent or another caller's
+identity `unknown` without a seal, an unfinished job `not_ready`, a failed
+or cancelled job and missing bytes `unavailable` (missing bytes are also
+recorded under JOB-A10), and a provider whose executor cannot name its
+result file `unsupported`. The provider MUST refuse `remote` for a caller
+without receiver-verified local peer evidence, such as a remote runtime's
+mapping; that caller reads with `ReadResult`. `destination` MUST be an
+absolute clean path of 1 to 4096 bytes whose parent directory exists and
+whose parent's final path, with every junction and link resolved, lies
+outside the provider's own root, or the call is `invalid`; the link is made
+at that final path. A name
+already present there is `exists` and stays as it was. The provider MUST
+create the name only under the caller's own authority to create that path,
+or answer `forbidden`: the default decision admits a caller of the
+provider's own account at no lower integrity (identity `Self`, ID-S1),
+whose authority covers whatever the provider may create. It refuses a
+caller whose token is restricted, since restricting SIDs may deny writes
+the account itself may make, and a caller or provider whose integrity
+level is unknown: an unread level never stands for the lowest one. The
+provider MUST decide this authority before it reads or opens anything at
+the destination, its parent or its final path. The provider MUST NOT copy: a destination
+on another volume is `other_volume` and a file system without hard links
+`no_hard_links`. A destination that is not on a local drive
+(`abstraction-identity` `LocalPath`, ID-F1), such as a share, is
+`other_volume` and is never opened. `linked` carries the original receipt and the result's
+size; every other outcome carries neither. The provider keeps its own name
+and its retention (JOB-A11), and the result stays readable with
+`ReadResult`. Both names reach the same bytes, and a reader verifies them by
+digest as before. File attributes belong to the file and are shared by both
+names: OA never sets the read-only attribute on a linked file, which would
+block the provider's removal of its own name when its retention ends, and
+the folder that holds the caller's name protects it by its ACL. The download kind's result file is `results/<operation
+id>` under its root, or a migrated job's contained sink.
+
+**[JOB-A18] Accepted work lives only while its submitter's rule does.**
+JOB-A13 decides Submit once. A provider configured with a standing decision
+(`Provider.SetStanding`) MUST decide each accepted operation again, asking
+nobody, for the subject and kind its journal recorded, as Submit decided it
+(abstraction-rights RIGHTS-R23):
+
+- before the executor claims the work, a first start and every resume
+  alike: a refusal claims it only to fail it, and a decision that cannot be
+  obtained claims nothing, so nothing runs;
+- before each lease renewal: a refusal fails the work under the executor's
+  own epoch. A decision that cannot be obtained answers the record with its
+  lease unextended and no error, so one transient outage interrupts nothing;
+  the store still fences a lapsed or stale lease, and an outage that lasts
+  the lease's lifetime ends it at its expiry;
+- before each progress write: a refusal writes the failure in its place,
+  and a decision that cannot be obtained lets the write through, since the
+  renewal bounds it;
+- on each committed rights change, on its own goroutine with concurrent
+  requests coalesced into one more pass, so the edit never waits on the
+  store (`Provider.RecheckSoon`), and every 30 seconds (`Provider.Recheck`):
+  work nobody holds is claimed and failed at once, and work a runner holds,
+  a remote one included, receives a cancel intent, which every runner
+  honours (JOB-I9); a decision that cannot be obtained ends nothing there.
+  A host that closes MUST stop new passes and wait for the one in flight
+  before it releases the store's root, so no pass writes after it closed
+  (`Provider.StopRechecks`), and `Execute` returns only after its clock's
+  pass has.
+
+A refused executor call matches `job.ErrStaleEpoch` and
+`acceptanceprovider.ErrStandingRefused`, so the executor stops acting on the
+work. The operation ends `failed`, and its snapshot failure is permanent
+with the refusal (`rights:<word>`) as its message. A refusal is an
+explicit deny on `abstraction.job/acceptance@1` or on `job:<kind>`, or
+neither permitting any more; an account-wide default's permit (rights
+RIGHTS-R22) counts as a permit, so work it admitted keeps running until the
+person turns the default off or Blocks that program. Work whose journal
+recorded no subject was admitted under no subject's rule and is not decided
+again. The runtime configures this for its job host.
+
+**[JOB-A19] A rights refusal is not a result of the work.** An accepted
+operation that failed only because a rights decision refused it is not
+replayed to a Submit of the same identity with equal arguments. Such a
+refusal is the provider's own standing refusal (JOB-A18: at a claim,
+renewal, progress write or recheck), or one its executor reports through
+`RightsRefusalReporter`: for inference jobs, a failure made only of the
+words the executor writes for its own grant decisions, a closed list
+(`rights:denied`, `rights:not_granted`, `rights:unknown_action`,
+`credential:not_permitted`, `content:read:forbidden`, `output:forbidden`);
+for downloads, a credential use the applier refused `not_permitted`, read
+where the applier writes it, at the end of the recorded error. Text a
+provider or source wrote, such as a word under `native:`, `upstream:` or
+`provider:`, is never a rights refusal, whatever it ends with. A Submit refused before acceptance is journaled
+nowhere and is already decided again (JOB-A16). The provider MUST decide the
+Submit again, asking nobody: the submitter's standing decision for the
+subject and kind its journal recorded, then the executor's admission. A
+refusal there answers that refusal, and an unobtainable decision answers
+`unavailable`; neither writes anything, and the refused operation stays the
+identity's operation. When both permit, the same identity runs again: its
+journal names a new operation, prepared and accepted as the first one was,
+the receipt names it, and every later call under the identity addresses it.
+The refused operation stays failed. Every other result keeps JOB-A1's
+idempotency: a completed operation, a cancelled one and a failure of the
+work itself replay, and nothing runs again. JOB-A7's explicit attempts are
+unchanged. Migrated legacy work is not run again this way.
 
 Deprecated job store records and calls keep their existing semantics.
 
@@ -632,6 +749,20 @@ lid or power button as it always did.
 
 A queued job holds nothing. A delegated job holds nothing here: the NAS's
 fetch is the NAS's power.
+
+`PlatformGPU` is the hold for GPU work, and it also requires the display:
+`PowerRequestDisplayRequired` beside `PowerRequestSystemRequired` on
+Windows, `caffeinate -di` on macOS, the same inhibitor on Linux. On a Modern
+Standby machine the display turning off is the standby entry, and a
+system-required request alone did not hold it off: the owner's machine
+entered standby on its display timeout under one at 00:57:24 on 2026-10-02,
+and a display-required one held it out through every GPU run of that day
+(`research/live-runs/2026-10-02.md`). The runtime keeps it only for the wake
+lease (resource CONTRACT.md RES-A1), which GPU work alone takes, so the
+display stays on only while a GPU job runs. Every other hold is `Platform`'s.
+Each request type a hold sets is cleared at its release, which
+`TestTheGPUHoldRequiresTheDisplayAndOnlyWhileHeld` holds against a stand-in
+for the platform's power request API.
 
 ### Who may hold is a service's decision, and this is where it is enforced
 
@@ -1293,8 +1424,8 @@ The acceptance services answer with an outcome word on every call:
 | Submit, Reconcile | `definitely_not_accepted` | Never accepted, and sealed against delayed acceptance (JOB-A4). |
 | Submit, Reconcile | `unknown` | No evidence either way; reconcile again (JOB-A4, JOB-A5). |
 | Submit, Reconcile | `key_conflict` | The key was accepted with different arguments (JOB-A2, JOB-A7). |
-| Submit, Reconcile | `forbidden` | An evaluated authorization refusal. |
-| Submit, Reconcile | `invalid` | Invalid input, an ineligible attempt (JOB-A7), a bad label (JOB-A12) or an executor's refusal (JOB-A16). |
+| Submit, Reconcile | `forbidden` | An evaluated authorization refusal, the executor's rights refusal at admission among them (JOB-A16). |
+| Submit, Reconcile | `invalid` | Invalid input, an ineligible attempt (JOB-A7), a bad label (JOB-A12) or an executor's other refusal (JOB-A16). |
 | Submit, Reconcile | `unavailable` | A policy decision could not be obtained; nothing recorded (JOB-A9). |
 | Cancel | `requested` | Cancellation intent recorded; effects may still finish (JOB-A6). |
 | Cancel | `already_terminal`, `unknown`, `forbidden`, `unsupported` | Distinct refusals (JOB-A6). |

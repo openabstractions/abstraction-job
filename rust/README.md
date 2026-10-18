@@ -1,7 +1,9 @@
 # Rust job service protocol
 
-The worked service-path example — submit, keep the receipt, observe, reconcile,
-cancel — is in [../README.md](../README.md#an-example-that-runs); this crate is
+*For Rust applications.*
+
+The worked service-path example — submit, keep what recovery needs, poll
+progress — is in [../README.md](../README.md#an-example-that-runs); this crate is
 the generated wire vocabulary the validated binding below sits on.
 
 ```rust

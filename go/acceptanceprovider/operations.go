@@ -99,12 +99,15 @@ func (b *bound) operation(id api.RequestIdentity) (*journal, *job.Record, api.Ob
 	if j.Phase == "sealed" {
 		return nil, nil, api.ObservationOutcomeDefinitelyNotAccepted
 	}
-	// Finish an interrupted acceptance under the same journal lock and stable ID.
-	if err := p.materialize(path); err != nil {
-		return nil, nil, api.ObservationOutcomeUnknown
+	// Published admission is irreversible. Only prepared admission needs the
+	// journal lock for recovery; ordinary observations validate its job below.
+	if j.Phase != "published" {
+		if err := p.materialize(path); err != nil {
+			return nil, nil, api.ObservationOutcomeUnknown
+		}
 	}
 	record, err := p.loadOperationRecord(j.Receipt.OperationID)
-	if err != nil {
+	if err != nil || validateOperationRecord(j, record) != nil {
 		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	return j, record, api.ObservationOutcomeObserved
@@ -166,7 +169,10 @@ func operationSnapshot(accepted *journal, record *job.Record, executor Executor,
 			snapshot.Waiting = word
 		}
 	}
-	if reporter, ok := executor.(FailureReporter); ok {
+	if refused := standingFailure(record); refused != nil {
+		// A rule that refused the work ended it, not the executor [JOB-A18].
+		snapshot.Failure = refused
+	} else if reporter, ok := executor.(FailureReporter); ok {
 		snapshot.Failure = reporter.OperationFailure(record)
 	} else if record.Error != "" || record.State == job.StateFailed {
 		snapshot.Failure = &api.WorkFailure{Classification: api.FailureClassUnknown, Message: "operation reported a failure"}

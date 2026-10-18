@@ -10,15 +10,15 @@ import (
 type frames struct {
 	p      *Provider
 	scope  string
-	permit func(string, string) access
+	permit permitFunc
 }
 
 func (f frames) ExchangeFrame(frame []byte) ([]byte, error) {
 	return f.p.dispatchFrame(frame, f.scope, f.permit, true)
 }
 
-func granting(a access) func(string, string) access {
-	return func(string, string) access { return a }
+func granting(a access) permitFunc {
+	return func(string, string, string) access { return a }
 }
 
 func TestPolicyUnavailableObservationResultAndInventory(t *testing.T) {

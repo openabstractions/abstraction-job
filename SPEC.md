@@ -290,7 +290,7 @@ deadline is § 11.9.
 
 ## 6. The answers, and the fourth shape
 
-Three answers that are not two, from `demo/answer`: **unavailable** (nothing
+Three answers that are not two, from the provider demo (deleted 2026-10-06): **unavailable** (nothing
 that could do this is here now; the request stands), **forbidden** (something
 answered no; asking again is pointless), **unknown** (no answer arrived — not
 a no, not a yes, not a later). Download spells the first two *not now* and

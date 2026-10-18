@@ -41,6 +41,28 @@ const (
 	accessUnavailable
 )
 
+// permitFunc decides one generated method; kind is the submission's job kind
+// for Submit and empty for every other method.
+type permitFunc func(service, method, kind string) access
+
+type submitKindKey struct{}
+
+// SubmitKind is the job kind of the submission a MethodPolicy or
+// RemoteMethodPolicy is deciding Submit for, so that submission can be
+// decided per kind (JOB-A13). It reports false for every other method.
+func SubmitKind(ctx context.Context) (string, bool) {
+	kind, ok := ctx.Value(submitKindKey{}).(string)
+	return kind, ok
+}
+
+// policyContext carries the kind into the policy's context for Submit.
+func policyContext(ctx context.Context, method, kind string) context.Context {
+	if method != "Submit" {
+		return ctx
+	}
+	return context.WithValue(ctx, submitKindKey{}, kind)
+}
+
 // HandleConnection owns one connection and serves one generated exchange after
 // the shared Program identity binding. The host supplies listener lifecycle,
 // authorization policy and provider configuration; this creates no daemon.
@@ -85,19 +107,22 @@ func HandleConnectionWithBindingPolicy(ctx context.Context, conn listen.Conn, pr
 	if authorize != nil {
 		if selected, err := authorize(peer); err == nil && selected.valid() == nil {
 			binding = selected
+			if binding.Origin == "local" {
+				binding.Peer = peer
+			}
 		}
 	}
 	// Recheck after host policy, before any admission/seal or cancellation mutation.
 	if err := call.Recheck(); err != nil {
 		return err
 	}
-	permit := func(service, method string) access {
+	permit := func(service, method, kind string) access {
 		if binding.Scope == "" || ctx.Err() != nil {
 			return accessDenied
 		}
 		granted := accessAllowed
 		if policy != nil {
-			if err := policy(ctx, peer, service, method); err != nil {
+			if err := policy(policyContext(ctx, method, kind), peer, service, method); err != nil {
 				if !errors.Is(err, ErrPolicyUnavailable) {
 					return accessDenied
 				}
@@ -122,26 +147,31 @@ const OperatorService = "abstraction.job/operator@1"
 // dispatchFrame serves one generated exchange. decided reports a configured
 // method policy: the operator profile crosses caller scopes and is forbidden
 // without one (JOB-A13).
-func (provider *Provider) dispatchFrame(frame []byte, scope string, permit func(string, string) access, decided bool) ([]byte, error) {
+func (provider *Provider) dispatchFrame(frame []byte, scope string, permit permitFunc, decided bool) ([]byte, error) {
 	return provider.dispatchFrameBinding(frame, Binding{Scope: scope}, permit, decided)
 }
 
-func (provider *Provider) dispatchFrameBinding(frame []byte, binding Binding, permit func(string, string) access, decided bool) ([]byte, error) {
+func (provider *Provider) dispatchFrameBinding(frame []byte, binding Binding, permit permitFunc, decided bool) ([]byte, error) {
 	scope := binding.Scope
 	return api.ServeEndpoint(frame, "openabstractions", "",
 		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.BindBinding(binding), denied: provider.Bind(""), permit: permit}},
 		&api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.BindInventory(scope), denied: provider.BindInventory(""), permit: permit}},
-		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperations(scope), denied: provider.BindOperations(""), permit: permit}},
+		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperationsBinding(binding), denied: provider.BindOperations(""), permit: permit}},
 		&api.JobOperatorDispatcher{Handler: methodOperator{bound: &bound{provider: provider, scope: boundScope(scope)}, permit: permit, decided: decided}})
 }
 
 type methodAcceptance struct {
 	allowed, denied api.RecoverableAcceptance
-	permit          func(string, string) access
+	permit          permitFunc
 }
 
 func (h methodAcceptance) handler(method string) (api.RecoverableAcceptance, access) {
-	granted := h.permit("abstraction.job/acceptance@1", method)
+	return h.handlerFor(method, "")
+}
+
+// handlerFor decides method; Submit carries its submission's kind.
+func (h methodAcceptance) handlerFor(method, kind string) (api.RecoverableAcceptance, access) {
+	granted := h.permit("abstraction.job/acceptance@1", method, kind)
 	if granted == accessAllowed {
 		return h.allowed, granted
 	}
@@ -155,7 +185,7 @@ func (h methodAcceptance) GetHistoryWindow() (api.HistoryWindow, error) {
 	return handler.GetHistoryWindow()
 }
 func (h methodAcceptance) Submit(s api.Submission) (api.AcceptanceResult, error) {
-	handler, granted := h.handler("Submit")
+	handler, granted := h.handlerFor("Submit", s.Kind)
 	if granted == accessUnavailable {
 		return outcome(api.AcceptanceOutcomeUnavailable, policyUnavailableReason), nil
 	}
@@ -178,11 +208,11 @@ func (h methodAcceptance) CancelWork(id api.RequestIdentity) (api.CancellationRe
 
 type methodOperations struct {
 	allowed, denied api.OperationControl
-	permit          func(string, string) access
+	permit          permitFunc
 }
 
 func (h methodOperations) ObserveWork(id api.RequestIdentity) (api.ObservationResult, error) {
-	switch h.permit("abstraction.job/operations@1", "ObserveWork") {
+	switch h.permit("abstraction.job/operations@1", "ObserveWork", "") {
 	case accessAllowed:
 		return h.allowed.ObserveWork(id)
 	case accessUnavailable:
@@ -191,7 +221,7 @@ func (h methodOperations) ObserveWork(id api.RequestIdentity) (api.ObservationRe
 	return h.denied.ObserveWork(id)
 }
 func (h methodOperations) ReadResult(id api.RequestIdentity, offset, max int64) (api.ResultRead, error) {
-	switch h.permit("abstraction.job/operations@1", "ReadResult") {
+	switch h.permit("abstraction.job/operations@1", "ReadResult", "") {
 	case accessAllowed:
 		return h.allowed.ReadResult(id, offset, max)
 	case accessUnavailable:
@@ -199,14 +229,23 @@ func (h methodOperations) ReadResult(id api.RequestIdentity, offset, max int64) 
 	}
 	return h.denied.ReadResult(id, offset, max)
 }
+func (h methodOperations) LinkResult(id api.RequestIdentity, destination string) (api.ResultLink, error) {
+	switch h.permit("abstraction.job/operations@1", "LinkResult", "") {
+	case accessAllowed:
+		return h.allowed.LinkResult(id, destination)
+	case accessUnavailable:
+		return api.ResultLink{Outcome: api.LinkOutcomeUnavailable}, nil
+	}
+	return h.denied.LinkResult(id, destination)
+}
 
 type methodInventory struct {
 	allowed, denied api.JobInventory
-	permit          func(string, string) access
+	permit          permitFunc
 }
 
 func (h methodInventory) ListWork(cursor string, limit int64) (api.InventoryPage, error) {
-	switch h.permit("abstraction.job/inventory@1", "ListWork") {
+	switch h.permit("abstraction.job/inventory@1", "ListWork", "") {
 	case accessAllowed:
 		return h.allowed.ListWork(cursor, limit)
 	case accessUnavailable:

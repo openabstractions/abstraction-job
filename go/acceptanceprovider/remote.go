@@ -54,13 +54,13 @@ func (p *Provider) RemoteBindingHandler(authorize RemoteBindingAuthorizer, polic
 				}
 			}
 		}
-		permit := func(service, method string) access {
+		permit := func(service, method, kind string) access {
 			if binding.Scope == "" || ctx.Err() != nil {
 				return accessDenied
 			}
 			granted := accessAllowed
 			if policy != nil {
-				if err := policy(ctx, peer, service, method); err != nil {
+				if err := policy(policyContext(ctx, method, kind), peer, service, method); err != nil {
 					if !errors.Is(err, ErrPolicyUnavailable) {
 						return accessDenied
 					}

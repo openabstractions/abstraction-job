@@ -112,6 +112,162 @@ section; `JOB-J5` moved from "What is proven" to the encoding rules; and
     verdict it compares, and `--capabilities`, appears in backticks on
     `CONTRACT.md` itself.
 
+## Result link, 2026-10-01
+
+Setup streamed each verified model out of the download result store into a
+provider's folder and held the bytes twice at peak. VISION 2026-10-01 ("A
+finished download reaches a provider's folder as a hard link the job service
+makes on request") gave `operations@1` a method; a service version may gain
+one (VISION 2026-10-01, a closed struct or enum may not gain a member), so
+`LinkOutcome` and `ResultLink` are new types and no existing one changed.
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A17 | none | binding: `LinkResult(identity, destination)` hard-links a complete result for a caller with receiver-verified local peer evidence, under that caller's own authority to create the path (default: the provider's account at no lower integrity); refuses `remote`, `invalid`, `exists`, `other_volume`, `no_hard_links`, `forbidden` and `ReadResult`'s outcomes, never copies, keeps the provider's name and retention; review of the same day: judges the destination's parent by its final path (a junction into the provider root is `invalid`), refuses a restricted-token caller, and refuses when the caller's or the provider's own integrity level is unknown |
+
+## The GPU hold requires the display, 2026-10-02
+
+Windows entered Modern Standby on its display timeout at 00:57:24 on
+2026-10-02 while a system-required hold was in place, and again at 02:06
+while agents worked; a display-required execution state held it out
+through every GPU run of that day (`research/live-runs/2026-10-02.md`,
+"Modern Standby"; coordinator, 2026-10-02). The platform hold gained a
+second form for GPU work; downloads keep the weaker one.
+
+| rule | before | now |
+| --- | --- | --- |
+| "Awake for exactly as long as a lease" | one hold, `PowerRequestSystemRequired` | adds `PlatformGPU`: also `PowerRequestDisplayRequired` (macOS `caffeinate -di`), kept by the runtime only for the wake lease; every request type set is cleared at release |
+
+## Submission is decided per kind, 2026-10-02
+
+The review of the runtime fixes (fa380274e) found that `rights grant --for
+inference` wrote `acceptance.submit` on the acceptance contract, so a program
+allowed inference jobs could also queue URL downloads. Coordinator's
+decision: scope submission by job kind at the rights and acceptance owner.
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A13 | Submit decided on `abstraction.job/acceptance@1` for every kind | the provider hands the submission's kind to the decision; a rule on `abstraction.job/acceptance@1` still covers every kind (operator programs hold it), and without one the rule on `job:<kind>` decides; the inference bundle writes `job:inference`, the downloads bundle `job:download`; the first-use question names the kind's resource |
+
+## An explicit submit deny wins, 2026-10-02
+
+`research/wake-and-inference-rights/REPORT.md` recommendation 6: a
+contract-wide permit was decided first, so a "Never" on one kind had no
+effect. AWS IAM and XACML let an explicit deny win.
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A13 | a rule on `abstraction.job/acceptance@1` permits or denies every kind; without one, `job:<kind>` decides | a deny on either resource wins; otherwise a permit on either admits; the kind's rule read under a contract-wide permit asks nothing |
+
+## An executor's rights refusal is forbidden, 2026-10-02
+
+The live walkthrough of 2026-10-02
+(`research/live-runs/2026-10-02-walkthrough.md`, D11) saw a video job refused
+for want of `output:video` answer `invalid`: JOB-A16 allowed only `invalid`,
+and the provider read any other word as admission, so the inference executor
+mapped its rights refusal to `invalid`. Coordinator's decision: an
+executor's rights refusal reads `forbidden`, unsealed like `invalid`.
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A16 | the executor's refusal is `invalid` with its reason; nothing journaled or sealed | `forbidden` when a rights decision refused the caller, `invalid` for any other refusal; nothing journaled or sealed for either; the `inference` kind's reason names each missing grant |
+
+## Accepted work ends when its rule does, 2026-10-07
+
+The survey of grants that outlive a revoke (TODO "Live grants outlive
+revocation") found download jobs decided once, at Submit: a Block, a removed
+rule or the download default turned off left queued and running downloads
+going. JOB-A18 has the acceptance provider, which owns admission, decide
+each operation again with the same standing pattern the resource book
+(RES-L7) and the inference provider (INF-A6) use. `SetStanding` takes the
+decision. The executor's store decides before each claim, renewal and
+progress write. `Recheck` runs on each committed rights change (rights
+RIGHTS-R23) and on a 30-second clock. The runtime builds the decision with
+`JobStandingFromRights` in abstraction-facade's runtime, which reads
+Submit's rules quietly, the account defaults included. Tests:
+`go/acceptanceprovider/standing_test.go` (a running job fails with the
+refusal and its executor is fenced; a queued job ends at the change and one
+refused at its claim never runs; an outage claims nothing, ends nothing and
+extends no lease; all fail with the plain store restored) and the runtime's
+`serve/runtime_job_standing_test.go` (a download the default admitted runs
+on through an unrelated change, and ends on a Block and on the default
+turned off).
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A18 | none: Submit's decision held for the work's whole life | decided again before each claim, renewal and progress write, on each rights change and every 30 s; a refusal fails the work with `rights:<word>` |
+
+Review the same day: a renewal whose decision could not be obtained
+returned an error, and both renewal callers of the wrapped store read any
+error as a lost lease: the download runner's checkpoint renewal
+(`abstraction-download/go/runner.go`) dropped the transfer, and inference's
+`renewInStore` (`abstraction-inference/go/job_lease.go`) cancelled the job's
+upstream work. One slow decision would interrupt either. The renewal now
+answers the record unextended with no error, through an Update that changes
+nothing, so the store's terminal, epoch and expiry checks still fence a
+lapsed holder. The renewal callers of the wrapped store, and what each does
+with an error:
+
+| caller | on an error |
+| --- | --- |
+| download `keeper.hold` (`keeper.go`) | stops on a stale epoch, an expired lease or not found; any other error is transient and retried at the next tick |
+| download runner checkpoint (`runner.go`) | any error is a lost lease: the transfer is dropped |
+| inference `renewInStore` (`job_lease.go`) | any error loses the lease and cancels the job |
+| job service `renew` (`serve.go`) | returns the error to the remote holder; it serves the plain store |
+| download replay (`cmd/replay`) | a test harness over the plain store |
+
+The change notice also ran `Recheck` on the editing caller, which loads
+every unfinished job; `RecheckSoon` now runs it on its own goroutine with
+concurrent notices coalesced into one more pass. Tests:
+`go/acceptanceprovider/standing_test.go` (an unavailable renewal keeps the
+lease unextended, and past its expiry still reads `ErrLeaseExpiry`; five
+notices during a slow pass return at once and run two passes), the
+download runner's `serve/standing_outage_test.go` and inference's
+`job_standing_outage_test.go` (a short outage interrupts neither; one
+past the lease's lifetime lapses the lease, starts nothing and resumes
+after). The two short-outage tests fail with the error answer restored.
+
+## A rights refusal is not replayed, 2026-10-08
+
+The release journey found that after a Block and an unblock, an app that
+submitted the same download again under the same request key was given the
+replayed `rights:denied` failure forever; the pretend-lemonade adopter had
+to rerun a failed request as its next JOB-A7 attempt to get past it.
+Coordinator's decision: a rights refusal is not a result of the work.
+JOB-A19 has the provider decide such a resubmission again (the standing
+decision, then the executor's admission) and, when both permit, run the
+same identity again as a new operation (`rerun.go`). Executors name their
+own rights refusals through `RightsRefusalReporter`: the inference executor
+(grant refusal words), the download executor (a credential use refused
+`not_permitted`) and the runtime's composite executor, by kind. Tests:
+`go/acceptanceprovider/rerun_test.go` (refused while still Blocked, run
+again once unblocked, a duplicate of the rerun returns it; completed and
+failed-work results replay with no new run; the first fails with the
+refusal check removed), abstraction-inference `job_rerun_test.go`,
+abstraction-download `serve/rights_refusal_test.go` and the runtime's
+`serve/runtime_job_rerun_test.go` (Block, refused resubmission, unblock,
+one rerun, replay after completion with no transfer).
+
+| id | before | now |
+| --- | --- | --- |
+| JOB-A19 | none: a rights refusal replayed like any failure | not replayed to the same request; decided again, and run again as a new operation when permitted |
+
+Review the same day: the inference classifier accepted any word ending
+`:forbidden`, so a provider's own failure such as `native:forbidden` or
+`native:<text>:forbidden` would have rerun paid work on an idempotent
+retry. It now accepts only a closed list of the words the executor writes
+for its own decisions. The download classifier found
+`credential:<outcome>:<name>` anywhere in the error, so a source's text
+could pose as the applier's word; it now reads the word only where
+`download.CredentialError` writes it, at the end of the error. Tests: the
+inference table adds `native:forbidden`, `native:x:forbidden`,
+`upstream:forbidden`, `provider:forbidden` and `caller:forbidden` (all
+false); the download table adds a wrapped applier word (true) and source
+text before or instead of it (false); `rerun_crash_test.go` interrupts a
+rerun after its journal write, after its operation's insertion and before
+its reply, and shows recovery completing it. A typed refusal field set only
+by OA decision points is the follow-up (TODO).
+
 ## Design records
 
 - `research/vocabulary/DECISION.md` §2: D1, D6, D16, D24, D28, D30, D33,

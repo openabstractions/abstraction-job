@@ -224,6 +224,20 @@ class ResultOutcome(_StrEnum):
     INVALID = "invalid"
 
 
+class LinkOutcome(_StrEnum):
+    LINKED = "linked"
+    NOT_READY = "not_ready"
+    UNAVAILABLE = "unavailable"
+    UNSUPPORTED = "unsupported"
+    UNKNOWN = "unknown"
+    FORBIDDEN = "forbidden"
+    INVALID = "invalid"
+    EXISTS = "exists"
+    OTHER_VOLUME = "other_volume"
+    NO_HARD_LINKS = "no_hard_links"
+    REMOTE = "remote"
+
+
 class InventoryOutcome(_StrEnum):
     PAGE = "page"
     GAP = "gap"
@@ -428,6 +442,21 @@ class ResultRead:
 
 
 @dataclasses.dataclass(kw_only=True)
+class ResultLink:
+    """Exactly linked carries the original receipt and the result's size in bytes;
+    other outcomes forbid a receipt and carry size zero. Linked means the
+    destination is a second name for the provider's own verified result bytes;
+    the provider keeps its name and retention. Other_volume and no_hard_links
+    name why no hard link could be made; remote refuses a caller without
+    receiver-verified local peer evidence, which keeps reading with ReadResult;
+    exists names a destination already present, which stays as it was (JOB-A17)."""
+
+    outcome: LinkOutcome | None = None
+    receipt: Receipt | None = None
+    size: int = 0
+
+
+@dataclasses.dataclass(kw_only=True)
 class InventoryPage:
     """Caller-scoped accepted-operation observations without paths. Only page
     carries snapshots. A noncomplete page always has a next cursor, even when no
@@ -485,6 +514,12 @@ class _OperationControlReadResultArguments:
     identity: RequestIdentity = dataclasses.field(default_factory=RequestIdentity)
     offset: int = 0
     max_bytes: int = 0
+
+
+@dataclasses.dataclass(kw_only=True)
+class _OperationControlLinkResultArguments:
+    identity: RequestIdentity = dataclasses.field(default_factory=RequestIdentity)
+    destination: str = ""
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -555,6 +590,11 @@ class _OperationControlObserveWorkResult:
 @dataclasses.dataclass(kw_only=True)
 class _OperationControlReadResultResult:
     value: ResultRead = dataclasses.field(default_factory=ResultRead)
+
+
+@dataclasses.dataclass(kw_only=True)
+class _OperationControlLinkResultResult:
+    value: ResultLink = dataclasses.field(default_factory=ResultLink)
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -922,6 +962,32 @@ def _write_result_read(out, v, depth):
     out += b"}"
 
 
+def _write_result_link(out, v, depth):
+    _closed_enum(LinkOutcome, v.outcome)
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "outcome")
+    out += b": "
+    _esc(out, v.outcome)
+    if v.receipt is not None:
+        out += b","
+        out += b"\n"
+        _pad(out, depth + 1)
+        _esc(out, "receipt")
+        out += b": "
+        _write_receipt(out, v.receipt, depth + 1)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "size")
+    out += b": "
+    _num(out, v.size)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
 def _write_inventory_page(out, v, depth):
     _closed_enum(InventoryOutcome, v.outcome)
     out += b"{"
@@ -1038,6 +1104,24 @@ def _write_oa_operation_control_read_result_arguments(out, v, depth):
     _esc(out, "max_bytes")
     out += b": "
     _num(out, v.max_bytes)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
+def _write_oa_operation_control_link_result_arguments(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "identity")
+    out += b": "
+    _write_request_identity(out, v.identity, depth + 1)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "destination")
+    out += b": "
+    _esc(out, v.destination)
     out += b"\n"
     _pad(out, depth)
     out += b"}"
@@ -1242,6 +1326,18 @@ def _write_oa_operation_control_read_result_result(out, v, depth):
     _esc(out, "value")
     out += b": "
     _write_result_read(out, v.value, depth + 1)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
+def _write_oa_operation_control_link_result_result(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "value")
+    out += b": "
+    _write_result_link(out, v.value, depth + 1)
     out += b"\n"
     _pad(out, depth)
     out += b"}"
@@ -2268,6 +2364,59 @@ def _read_result_read(r):
     return v
 
 
+def _read_result_link(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = ResultLink()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "outcome":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.outcome = r.string()
+            elif key == "receipt":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.receipt = _read_receipt(r)
+            elif key == "size":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.size = r.integer(-9223372036854775808, 9223372036854775807)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 5 != 5:
+        raise r.refuse("missing_field")
+    try:
+        v.outcome = LinkOutcome(v.outcome)
+    except ValueError:
+        raise r.refuse("bad_enum") from None
+    return v
+
+
 def _read_inventory_page(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -2604,6 +2753,50 @@ def _read_oa_operation_control_read_result_arguments(r):
     r.pos += 1
     r.depth -= 1
     if seen & 7 != 7:
+        raise r.refuse("missing_field")
+    return v
+
+
+def _read_oa_operation_control_link_result_arguments(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = _OperationControlLinkResultArguments()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "identity":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.identity = _read_request_identity(r)
+            elif key == "destination":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.destination = r.string()
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 3 != 3:
         raise r.refuse("missing_field")
     return v
 
@@ -3126,6 +3319,45 @@ def _read_oa_operation_control_read_result_result(r):
     return v
 
 
+def _read_oa_operation_control_link_result_result(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = _OperationControlLinkResultResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "value":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.value = _read_result_link(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
 def _read_oa_job_inventory_list_work_result(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -3261,39 +3493,21 @@ _REFUSALS = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_
 def _refusal_rank(word):
     return _REFUSALS.index(word) if word in _REFUSALS else -1
 
+import base64
+import binascii
+
 def _encode_binary(value):
     if type(value) is not bytes:
         raise Refusal("wrong_type", 0)
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    out = []
-    for i in range(0, len(value), 3):
-        chunk = value[i:i+3]
-        v = int.from_bytes(chunk, "big") << (8 * (3-len(chunk)))
-        out.extend((alphabet[v >> 18], alphabet[(v >> 12) & 63], alphabet[(v >> 6) & 63] if len(chunk)>1 else "=", alphabet[v & 63] if len(chunk)>2 else "="))
-    return "".join(out)
+    return base64.b64encode(value).decode("ascii")
 
 def _decode_binary(text):
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     def bad():
         raise _Reader(b"").refuse("bad_binary")
-    if len(text) % 4: bad()
-    out = bytearray()
-    for i in range(0,len(text),4):
-        v, pad = 0, 0
-        for j,c in enumerate(text[i:i+4]):
-            if c == "=":
-                if j<2 or i+4 != len(text): bad()
-                pad += 1
-                digit = 0
-            else:
-                if pad: bad()
-                digit = alphabet.find(c)
-                if digit < 0: bad()
-            v = (v << 6) | digit
-        out.append(v >> 16)
-        if pad < 2: out.append((v >> 8) & 255)
-        if pad == 0: out.append(v & 255)
-    result = bytes(out)
+    try:
+        result = base64.b64decode(text, validate=True)
+    except (ValueError, binascii.Error):
+        bad()
     if _encode_binary(result) != text: bad()
     return result
 
@@ -3424,6 +3638,7 @@ _SERVICE_RECORDS = {
     "ObservationResult": (ObservationResult, [("outcome", "enum", "never"), ("snapshot", "OperationSnapshot", "absent"), ]),
     "ResultChunk": (ResultChunk, [("receipt", "Receipt", "never"), ("offset", "i64", "never"), ("total", "i64", "never"), ("data", "binary", "never"), ("eof", "bool", "never"), ]),
     "ResultRead": (ResultRead, [("outcome", "enum", "never"), ("chunk", "ResultChunk", "absent"), ]),
+    "ResultLink": (ResultLink, [("outcome", "enum", "never"), ("receipt", "Receipt", "absent"), ("size", "i64", "never"), ]),
     "InventoryPage": (InventoryPage, [("outcome", "enum", "never"), ("snapshots", "list<OperationSnapshot>", "never"), ("next", "string", "never"), ("complete", "bool", "never"), ]),
     "OperatorCancellation": (OperatorCancellation, [("outcome", "enum", "never"), ]),
     "OARecoverableAcceptanceGetHistoryWindowArguments": (_RecoverableAcceptanceGetHistoryWindowArguments, []),
@@ -3432,6 +3647,7 @@ _SERVICE_RECORDS = {
     "OARecoverableAcceptanceCancelWorkArguments": (_RecoverableAcceptanceCancelWorkArguments, [("identity", "RequestIdentity", "never"), ]),
     "OAOperationControlObserveWorkArguments": (_OperationControlObserveWorkArguments, [("identity", "RequestIdentity", "never"), ]),
     "OAOperationControlReadResultArguments": (_OperationControlReadResultArguments, [("identity", "RequestIdentity", "never"), ("offset", "i64", "never"), ("max_bytes", "i64", "never"), ]),
+    "OAOperationControlLinkResultArguments": (_OperationControlLinkResultArguments, [("identity", "RequestIdentity", "never"), ("destination", "string", "never"), ]),
     "OAJobInventoryListWorkArguments": (_JobInventoryListWorkArguments, [("cursor", "string", "never"), ("limit", "i64", "never"), ]),
     "OAJobOperatorListAccountWorkArguments": (_JobOperatorListAccountWorkArguments, [("cursor", "string", "never"), ("limit", "i64", "never"), ]),
     "OAJobOperatorCancelOperationArguments": (_JobOperatorCancelOperationArguments, [("operation_id", "string", "never"), ]),
@@ -3444,6 +3660,7 @@ _SERVICE_RECORDS = {
     "OARecoverableAcceptanceCancelWorkResult": (_RecoverableAcceptanceCancelWorkResult, [("value", "CancellationResult", "never"), ]),
     "OAOperationControlObserveWorkResult": (_OperationControlObserveWorkResult, [("value", "ObservationResult", "never"), ]),
     "OAOperationControlReadResultResult": (_OperationControlReadResultResult, [("value", "ResultRead", "never"), ]),
+    "OAOperationControlLinkResultResult": (_OperationControlLinkResultResult, [("value", "ResultLink", "never"), ]),
     "OAJobInventoryListWorkResult": (_JobInventoryListWorkResult, [("value", "InventoryPage", "never"), ]),
     "OAJobOperatorListAccountWorkResult": (_JobOperatorListAccountWorkResult, [("value", "InventoryPage", "never"), ]),
     "OAJobOperatorCancelOperationResult": (_JobOperatorCancelOperationResult, [("value", "OperatorCancellation", "never"), ]),
@@ -3545,6 +3762,14 @@ class OperationControl:
         EOF. This read never seals an absent identity."""
         raise NotImplementedError
 
+    def link_result(self, identity: RequestIdentity, destination: str) -> ResultLink:
+        """Hard-link a complete result to destination for a local caller on this
+        machine, under the caller's own authority to create that path, and never
+        copy it. Destination is an absolute clean path of 1..4096 bytes whose
+        parent directory exists, outside the provider's own root, and that does
+        not exist yet. This call never seals an absent identity (JOB-A17)."""
+        raise NotImplementedError
+
 
 class OperationControlClient(OperationControl):
     """Calls abstraction.job/operations@1 through a transport that exchanges frames."""
@@ -3576,6 +3801,19 @@ class OperationControlClient(OperationControl):
         _request = _service_request("abstraction.job/operations@1", "ReadResult", _arguments)
         _payload = _service_response(self._transport.exchange_frame(_request), "abstraction.job/operations@1", "ReadResult")
         _result = _service_decode(_read_oa_operation_control_read_result_result, _payload, 1)
+        return _result.value
+
+    def link_result(self, identity: RequestIdentity, destination: str) -> ResultLink:
+        _service_check("RequestIdentity", identity)
+        _service_check("string", destination)
+        _args = _OperationControlLinkResultArguments()
+        _args.identity = identity
+        _args.destination = destination
+        _arguments = _service_encode(_write_oa_operation_control_link_result_arguments, _args, 1)
+        _service_decode(_read_oa_operation_control_link_result_arguments, _arguments, 1)
+        _request = _service_request("abstraction.job/operations@1", "LinkResult", _arguments)
+        _payload = _service_response(self._transport.exchange_frame(_request), "abstraction.job/operations@1", "LinkResult")
+        _result = _service_decode(_read_oa_operation_control_link_result_result, _payload, 1)
         return _result.value
 
 

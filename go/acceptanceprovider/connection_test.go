@@ -26,6 +26,12 @@ func (d dropConnectionReply) SetDeadline(at time.Time) error {
 // The listener here is test-owned; the production helper only handles one conn.
 func localExchange(t *testing.T, p *Provider, auth Authorizer, drop bool, invoke func(*api.RecoverableAcceptanceClient)) error {
 	t.Helper()
+	return localExchangeWith(t, func(ctx context.Context, conn listen.Conn) error { return HandleConnection(ctx, conn, p, auth) }, drop, invoke)
+}
+
+// localExchangeWith serves one test connection through handle.
+func localExchangeWith(t *testing.T, handle func(context.Context, listen.Conn) error, drop bool, invoke func(*api.RecoverableAcceptanceClient)) error {
+	t.Helper()
 	endpoint := fmt.Sprintf(`\\.\pipe\oa-acceptance-test-%d`, time.Now().UnixNano())
 	if runtime.GOOS != "windows" {
 		dir, err := os.MkdirTemp("", "oa-")
@@ -53,7 +59,7 @@ func localExchange(t *testing.T, p *Provider, auth Authorizer, drop bool, invoke
 			if drop {
 				conn = dropConnectionReply{conn}
 			}
-			err = HandleConnection(ctx, conn, p, auth)
+			err = handle(ctx, conn)
 		}
 		done <- err
 	}()
@@ -65,6 +71,53 @@ func localExchange(t *testing.T, p *Provider, auth Authorizer, drop bool, invoke
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 		return ctx.Err()
+	}
+}
+
+// TestTheConnectionsPeerReachesLocalAdmission: a local binding served over a
+// connection carries the peer the connection bound to the executor's
+// admission.
+func TestTheConnectionsPeerReachesLocalAdmission(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("Program proof unavailable")
+	}
+	e := &subjectCheckingExecutor{checkingExecutor: newCheckingExecutor()}
+	p, err := OpenWithExecutor(t.TempDir(), "owner", e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := make(chan *identity.Peer, 1)
+	authorize := func(peer *identity.Peer) (Binding, error) {
+		user, err := peer.User.AtLeast(listen.Program.User)
+		if err != nil {
+			return Binding{}, err
+		}
+		path, err := peer.Path.AtLeast(listen.Program.Path)
+		if err != nil {
+			return Binding{}, err
+		}
+		account := user.SID
+		if user.Kind == "posix" {
+			account = fmt.Sprint(user.UID)
+		}
+		scope, err := LocalSubjectScope(user.Kind, account, filepath.Clean(path))
+		if err != nil {
+			return Binding{}, err
+		}
+		bound <- peer
+		return Binding{Scope: scope, Origin: "local", Subject: &AuthenticatedSubject{AccountKind: user.Kind, Account: account, Executable: filepath.Clean(path), Program: filepath.Clean(path)}}, nil
+	}
+	s := submission(p, "connection-peer")
+	var result api.AcceptanceResult
+	var clientErr error
+	serverErr := localExchangeWith(t, func(ctx context.Context, conn listen.Conn) error {
+		return HandleConnectionWithBindingPolicy(ctx, conn, p, authorize, nil)
+	}, false, func(client *api.RecoverableAcceptanceClient) { result, clientErr = client.Submit(s) })
+	if serverErr != nil || clientErr != nil || result.Outcome != api.AcceptanceOutcomeAccepted {
+		t.Fatalf("submit %+v %v %v", result, clientErr, serverErr)
+	}
+	if peer := <-bound; e.peer == nil || e.peer != peer {
+		t.Fatalf("admission received peer %v, want the connection's %v", e.peer, peer)
 	}
 }
 

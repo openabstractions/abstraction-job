@@ -1,28 +1,47 @@
 # Python job protocol
 
-The worked service-path example — submit, keep the receipt, observe, reconcile,
-cancel — is in [../README.md](../README.md#an-example-that-runs); this page
-covers the Python client's own scope and recovery rules.
+*For Python applications.*
+
+The same task as [the Go example](../README.md#an-example-that-runs): submit a
+download job, show its progress and save the result to a path.
 
 ```python
+import hashlib
+import sys
+import time
+
+import abstraction.download.request as request
 from abstraction.facade.client import Machine
 from abstraction.job.acceptance import RequestIdentity, Submission
 
-jobs = Machine().resolve_jobs()
+url, path = sys.argv[1], sys.argv[2]  # an https URL, and where to save it
+# copy_result runs the whole copy under this deadline; a large file needs a long one.
+jobs = Machine(deadline=time.monotonic() + 3600).resolve_jobs()
 window = jobs.get_history_window()
-identity = RequestIdentity(key="example-work", history_epoch=window.history_epoch)
-accepted = jobs.submit(Submission(identity=identity, kind="example",
-                                   spec=b'{"fetch":"anything at all"}'))
+key = "fetch-" + hashlib.sha256(url.encode()).hexdigest()  # under the 1 KiB key limit
+identity = RequestIdentity(key=key, history_epoch=window.history_epoch)
+spec = request.encode(request.Request(sources=[request.Source(scheme="https", locator=url)]))
+accepted = jobs.submit(Submission(identity=identity, kind="download", spec=spec))
 if accepted.outcome != "accepted":
-    raise RuntimeError(f"submission not accepted: {accepted.outcome} {accepted.reason}")
-print("logical owner:", accepted.receipt.logical_owner, "operation:", accepted.receipt.operation_id)
+    raise SystemExit(f"not accepted: {accepted.outcome} {accepted.reason}")
 
-observed = jobs.observe_work(identity)
-print("state:", observed.snapshot.state)
+while True:  # progress until the job ends
+    observed = jobs.observe_work(identity)
+    if observed.outcome != "observed":
+        raise SystemExit(f"observe: {observed.outcome}")
+    job = observed.snapshot
+    print(f"\r{job.progress.done} of {job.progress.total} bytes", end="")
+    if job.state == "complete":
+        break
+    if job.state in ("failed", "cancelled"):
+        raise SystemExit(f"\ndownload {job.state}")
+    time.sleep(1)
 
-reconciled = jobs.reconcile(identity)
-cancelled = jobs.cancel_work(identity)
-print("cancellation:", cancelled.outcome)
+# The Python facade has no validated link_result yet (only the raw
+# generated call exists), so this copies the bytes.
+with open(path, "wb") as file:
+    jobs.copy_result(identity, file)
+print("\nsaved", path)
 ```
 
 This package installs generated acceptance, operation and inventory vocabulary.

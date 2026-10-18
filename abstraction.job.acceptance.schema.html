@@ -52,6 +52,11 @@
 <li>Argument 2: <code>i64</code> <code>offset</code> (required, including zero/false/empty)</li>
 <li>Argument 3: <code>i64</code> <code>max_bytes</code> (required, including zero/false/empty)</li>
 </ul>
+<p>Hard-link a complete result to destination for a local caller on this machine, under the caller&#39;s own authority to create that path, and never copy it. Destination is an absolute clean path of 1..4096 bytes whose parent directory exists, outside the provider&#39;s own root, and that does not exist yet. This call never seals an absent identity (JOB-A17).</p>
+<h3><code>LinkResult</code></h3><p><code>request-response</code> <code>ResultLink</code></p><ul>
+<li>Argument 1: <code>RequestIdentity</code> <code>identity</code> (required, including zero/false/empty)</li>
+<li>Argument 2: <code>string</code> <code>destination</code> (required, including zero/false/empty)</li>
+</ul>
 <h2 id="service-JobInventory">Service <code>JobInventory</code> <span class="tag">[DEF-S1]</span></h2>
 <p>Bounded own-scope inventory on the acceptance provider endpoint. Authorization is independent of cursor text and uses the existing native caller scope. Listing does not authorize cross-scope Observe/Cancel or expose private provider paths.</p>
 <p>Wire identity: <code>abstraction.job/inventory@1</code></p>
@@ -95,7 +100,7 @@
 <div class="wrap"><table>
 <thead><tr><th>kind</th><th>types</th></tr></thead>
 <tbody>
-<tr><td>built in</td><td><code>AcceptanceOutcome</code> <code>CancellationOutcome</code> <code>FailureCause</code> <code>FailureClass</code> <code>InventoryOutcome</code> <code>ObservationOutcome</code> <code>OperatorCancellationOutcome</code> <code>ResultOutcome</code> <code>WorkState</code> <code>binary</code> <code>bool</code> <code>i64</code> <code>string</code></td></tr>
+<tr><td>built in</td><td><code>AcceptanceOutcome</code> <code>CancellationOutcome</code> <code>FailureCause</code> <code>FailureClass</code> <code>InventoryOutcome</code> <code>LinkOutcome</code> <code>ObservationOutcome</code> <code>OperatorCancellationOutcome</code> <code>ResultOutcome</code> <code>WorkState</code> <code>binary</code> <code>bool</code> <code>i64</code> <code>string</code></td></tr>
 <tr><td>declared below</td><td><code>OperationSnapshot</code> <code>Receipt</code> <code>RequestIdentity</code> <code>ResultChunk</code> <code>WorkFailure</code> <code>WorkProgress</code></td></tr>
 <tr><td>container <span class="tag">[DEF-T3]</span></td><td><code>list&lt;string&gt;</code></td></tr>
 <tr><td>repeated record <span class="tag">[DEF-A9]</span></td><td><code>list&lt;OperationSnapshot&gt;</code></td></tr>
@@ -217,6 +222,15 @@
 <tr><td>1</td><td><code>outcome</code></td><td><code>ResultOutcome</code></td><td>required</td><td>—</td></tr>
 <tr><td>2</td><td><code>chunk</code></td><td><code>ResultChunk</code></td><td>optional · omitted when absent</td><td>—</td></tr>
 </tbody></table></div>
+<h3 id="struct-ResultLink"><code>ResultLink</code></h3>
+<p class="meta">unknown fields <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>field</th><th>type</th><th>presence</th><th>named elsewhere</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>outcome</code></td><td><code>LinkOutcome</code></td><td>required</td><td>—</td></tr>
+<tr><td>2</td><td><code>receipt</code></td><td><code>Receipt</code></td><td>optional · omitted when absent</td><td>—</td></tr>
+<tr><td>3</td><td><code>size</code></td><td><code>i64</code></td><td>required</td><td>—</td></tr>
+</tbody></table></div>
 <h3 id="struct-InventoryPage"><code>InventoryPage</code></h3>
 <p class="meta">unknown fields <code>refuse</code></p>
 <div class="wrap"><table>
@@ -324,6 +338,23 @@
 <tr><td>5</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
 <tr><td>6</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
 <tr><td>7</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+</tbody></table></div>
+<h3 id="enum-LinkOutcome"><code>LinkOutcome</code></h3>
+<p class="meta">a member this reader does not know is <code>refuse</code></p>
+<div class="wrap"><table>
+<thead><tr><th>id</th><th>member</th><th>wire</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>linked</code></td><td><code>linked</code></td></tr>
+<tr><td>2</td><td><code>not_ready</code></td><td><code>not_ready</code></td></tr>
+<tr><td>3</td><td><code>unavailable</code></td><td><code>unavailable</code></td></tr>
+<tr><td>4</td><td><code>unsupported</code></td><td><code>unsupported</code></td></tr>
+<tr><td>5</td><td><code>unknown</code></td><td><code>unknown</code></td></tr>
+<tr><td>6</td><td><code>forbidden</code></td><td><code>forbidden</code></td></tr>
+<tr><td>7</td><td><code>invalid</code></td><td><code>invalid</code></td></tr>
+<tr><td>8</td><td><code>exists</code></td><td><code>exists</code></td></tr>
+<tr><td>9</td><td><code>other_volume</code></td><td><code>other_volume</code></td></tr>
+<tr><td>10</td><td><code>no_hard_links</code></td><td><code>no_hard_links</code></td></tr>
+<tr><td>11</td><td><code>remote</code></td><td><code>remote</code></td></tr>
 </tbody></table></div>
 <h3 id="enum-InventoryOutcome"><code>InventoryOutcome</code></h3>
 <p class="meta">a member this reader does not know is <code>refuse</code></p>

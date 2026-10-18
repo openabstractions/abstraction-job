@@ -30,7 +30,7 @@ var (
 // learns this only from a hold that quietly does nothing lets a 40 GB transfer
 // sleep.
 func CanKeepAwake() error {
-	free, err := keepAwake("abstraction", "checking whether this machine can be kept awake")
+	free, err := keepAwake("abstraction", "checking whether this machine can be kept awake", false)
 	if err != nil {
 		return fmt.Errorf("this machine cannot be kept awake: %w", err)
 	}
@@ -55,7 +55,14 @@ type Holder interface {
 // Platform takes the operating system's idle-sleep inhibitor in this process.
 var Platform Holder = platform{}
 
-type platform struct{}
+// PlatformGPU takes the inhibitor for GPU work, which also keeps the display
+// on: on a Modern Standby machine the display turning off is the standby
+// entry, which a GPU job must not meet (resource CONTRACT.md RES-A1, RES-G5).
+// The runtime keeps it for the wake lease, which GPU work alone takes, so the
+// display stays on only while a GPU job runs; other holds use Platform.
+var PlatformGPU Holder = platform{display: true}
+
+type platform struct{ display bool }
 
 type held struct {
 	free func()
@@ -69,8 +76,8 @@ func (h held) Release() error {
 	return nil
 }
 
-func (platform) Hold(who, why string) (Held, error) {
-	free, err := keepAwake(who, why)
+func (p platform) Hold(who, why string) (Held, error) {
+	free, err := keepAwake(who, why, p.display)
 	if err != nil {
 		return nil, fmt.Errorf("this machine cannot be kept awake: %w", err)
 	}

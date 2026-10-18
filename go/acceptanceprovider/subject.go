@@ -7,6 +7,8 @@ import (
 	"errors"
 	"path/filepath"
 	"unicode/utf8"
+
+	identity "github.com/openabstractions/abstraction-identity"
 )
 
 // AuthenticatedSubject is receiver-bound identity retained for an accepted job.
@@ -21,16 +23,23 @@ type AuthenticatedSubject struct {
 
 // Binding is supplied by a receiving boundary, never decoded from a request.
 // Origin is "local" for a native peer or "remote" for a receiver-owned mapping.
+// Peer is the native peer a local binding was derived from, for the
+// executor's decisions about new work. It is never journaled, and a binding
+// rebuilt from a journal has none.
 type Binding struct {
 	Scope    string
 	Subject  *AuthenticatedSubject
 	Origin   string
 	Evidence string
+	Peer     *identity.Peer
 }
 
 func (b Binding) valid() error {
 	if b.Scope == "" || len(b.Scope) > MaxCallerScopeBytes || !utf8.ValidString(b.Scope) {
 		return errors.New("acceptance: invalid binding scope")
+	}
+	if b.Peer != nil && b.Origin != "local" {
+		return errors.New("acceptance: only a local binding carries a peer")
 	}
 	if b.Subject == nil {
 		if b.Origin != "" || b.Evidence != "" {

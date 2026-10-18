@@ -435,6 +435,80 @@ impl PartialEq<&str> for ResultOutcome {
     }
 }
 
+/// The closed vocabulary LinkOutcome. A reader refuses a name it does not list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LinkOutcome {
+    Linked,
+    NotReady,
+    Unavailable,
+    Unsupported,
+    Unknown,
+    Forbidden,
+    Invalid,
+    Exists,
+    OtherVolume,
+    NoHardLinks,
+    Remote,
+}
+
+impl LinkOutcome {
+    /// Every member, in declaration order.
+    pub const ALL: [Self; 11] = [Self::Linked, Self::NotReady, Self::Unavailable, Self::Unsupported, Self::Unknown, Self::Forbidden, Self::Invalid, Self::Exists, Self::OtherVolume, Self::NoHardLinks, Self::Remote];
+
+    /// The member's name on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Linked => "linked",
+            Self::NotReady => "not_ready",
+            Self::Unavailable => "unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Unknown => "unknown",
+            Self::Forbidden => "forbidden",
+            Self::Invalid => "invalid",
+            Self::Exists => "exists",
+            Self::OtherVolume => "other_volume",
+            Self::NoHardLinks => "no_hard_links",
+            Self::Remote => "remote",
+        }
+    }
+
+    /// The member a wire name spells, or `None` for a name this vocabulary refuses.
+    pub fn from_wire(name: &str) -> Option<Self> {
+        match name {
+            "linked" => Some(Self::Linked),
+            "not_ready" => Some(Self::NotReady),
+            "unavailable" => Some(Self::Unavailable),
+            "unsupported" => Some(Self::Unsupported),
+            "unknown" => Some(Self::Unknown),
+            "forbidden" => Some(Self::Forbidden),
+            "invalid" => Some(Self::Invalid),
+            "exists" => Some(Self::Exists),
+            "other_volume" => Some(Self::OtherVolume),
+            "no_hard_links" => Some(Self::NoHardLinks),
+            "remote" => Some(Self::Remote),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for LinkOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for LinkOutcome {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for LinkOutcome {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
 /// The closed vocabulary InventoryOutcome. A reader refuses a name it does not list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum InventoryOutcome {
@@ -725,6 +799,20 @@ pub struct ResultRead {
     pub chunk: Option<ResultChunk>,
 }
 
+/// Exactly linked carries the original receipt and the result's size in bytes;
+/// other outcomes forbid a receipt and carry size zero. Linked means the
+/// destination is a second name for the provider's own verified result bytes;
+/// the provider keeps its name and retention. Other_volume and no_hard_links
+/// name why no hard link could be made; remote refuses a caller without
+/// receiver-verified local peer evidence, which keeps reading with ReadResult;
+/// exists names a destination already present, which stays as it was (JOB-A17).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResultLink {
+    pub outcome: LinkOutcome,
+    pub receipt: Option<Receipt>,
+    pub size: i64,
+}
+
 /// Caller-scoped accepted-operation observations without paths. Only page
 /// carries snapshots. A noncomplete page always has a next cursor, even when no
 /// own operations were scanned. Complete pages have empty next. Refusals carry
@@ -780,6 +868,12 @@ struct OAOperationControlReadResultArguments {
     identity: RequestIdentity,
     offset: i64,
     max_bytes: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct OAOperationControlLinkResultArguments {
+    identity: RequestIdentity,
+    destination: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -850,6 +944,11 @@ struct OAOperationControlObserveWorkResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OAOperationControlReadResultResult {
     value: ResultRead,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OAOperationControlLinkResultResult {
+    value: ResultLink,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1065,6 +1164,24 @@ fn enc_oa_operation_control_read_result_arguments(out: &mut Vec<u8>, v: &OAOpera
     esc(out, "max_bytes");
     out.extend_from_slice(b": ");
     num(out, v.max_bytes);
+    out.push(b'\n');
+    pad(out, depth);
+    out.push(b'}');
+}
+
+fn enc_oa_operation_control_link_result_arguments(out: &mut Vec<u8>, v: &OAOperationControlLinkResultArguments, depth: i32) {
+    out.push(b'{');
+    out.push(b'\n');
+    pad(out, depth + 1);
+    esc(out, "identity");
+    out.extend_from_slice(b": ");
+    enc_request_identity(out, &v.identity, depth + 1);
+    out.push(b',');
+    out.push(b'\n');
+    pad(out, depth + 1);
+    esc(out, "destination");
+    out.extend_from_slice(b": ");
+    esc(out, &v.destination);
     out.push(b'\n');
     pad(out, depth);
     out.push(b'}');
@@ -2539,6 +2656,81 @@ fn decode_result_read(r: &mut Reader) -> Result<ResultRead, Refusal> {
     })
 }
 
+fn decode_result_link(r: &mut Reader) -> Result<ResultLink, Refusal> {
+    if r.at() != b'{' {
+        return r.refuse("wrong_type");
+    }
+    r.enter()?;
+    r.pos += 1;
+    let mut field_outcome: Option<String> = None;
+    let mut field_receipt: Option<Receipt> = None;
+    let mut field_size: i64 = Default::default();
+    let mut seen: u32 = 0;
+    r.skip_ws();
+    if r.at() != b'}' {
+        loop {
+            r.skip_ws();
+            if r.at() != b'"' {
+                return r.refuse("malformed");
+            }
+            let key = r.string()?;
+            r.skip_ws();
+            if r.at() != b':' {
+                return r.refuse("malformed");
+            }
+            r.pos += 1;
+            r.skip_ws();
+            match key.as_str() {
+                "outcome" => {
+                    if seen & 1 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 1;
+                    field_outcome = Some(r.string()?);
+                }
+                "receipt" => {
+                    if seen & 2 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 2;
+                    field_receipt = Some(decode_receipt(r)?);
+                }
+                "size" => {
+                    if seen & 4 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 4;
+                    field_size = r.integer(i64::MIN, i64::MAX)?;
+                }
+                _ => {
+                    return r.refuse("unknown_field");
+                }
+            }
+            r.skip_ws();
+            if r.at() != b',' {
+                break;
+            }
+            r.pos += 1;
+        }
+    }
+    if r.at() != b'}' {
+        return r.refuse("malformed");
+    }
+    r.pos += 1;
+    r.depth -= 1;
+    if seen & 5 != 5 {
+        return r.refuse("missing_field");
+    }
+    let Some(field_outcome) = field_outcome.as_deref().and_then(LinkOutcome::from_wire) else {
+        return r.refuse("bad_enum");
+    };
+    Ok(ResultLink {
+        outcome: field_outcome,
+        receipt: field_receipt,
+        size: field_size,
+    })
+}
+
 fn decode_inventory_page(r: &mut Reader) -> Result<InventoryPage, Refusal> {
     if r.at() != b'{' {
         return r.refuse("wrong_type");
@@ -2991,6 +3183,69 @@ fn decode_oa_operation_control_read_result_arguments(r: &mut Reader) -> Result<O
         identity: field_identity,
         offset: field_offset,
         max_bytes: field_max_bytes,
+    })
+}
+
+fn decode_oa_operation_control_link_result_arguments(r: &mut Reader) -> Result<OAOperationControlLinkResultArguments, Refusal> {
+    if r.at() != b'{' {
+        return r.refuse("wrong_type");
+    }
+    r.enter()?;
+    r.pos += 1;
+    let mut field_identity: RequestIdentity = Default::default();
+    let mut field_destination: String = Default::default();
+    let mut seen: u32 = 0;
+    r.skip_ws();
+    if r.at() != b'}' {
+        loop {
+            r.skip_ws();
+            if r.at() != b'"' {
+                return r.refuse("malformed");
+            }
+            let key = r.string()?;
+            r.skip_ws();
+            if r.at() != b':' {
+                return r.refuse("malformed");
+            }
+            r.pos += 1;
+            r.skip_ws();
+            match key.as_str() {
+                "identity" => {
+                    if seen & 1 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 1;
+                    field_identity = decode_request_identity(r)?;
+                }
+                "destination" => {
+                    if seen & 2 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 2;
+                    field_destination = r.string()?;
+                }
+                _ => {
+                    return r.refuse("unknown_field");
+                }
+            }
+            r.skip_ws();
+            if r.at() != b',' {
+                break;
+            }
+            r.pos += 1;
+        }
+    }
+    if r.at() != b'}' {
+        return r.refuse("malformed");
+    }
+    r.pos += 1;
+    r.depth -= 1;
+    if seen & 3 != 3 {
+        return r.refuse("missing_field");
+    }
+    Ok(OAOperationControlLinkResultArguments {
+        identity: field_identity,
+        destination: field_destination,
     })
 }
 
@@ -3747,6 +4002,63 @@ fn decode_oa_operation_control_read_result_result(r: &mut Reader) -> Result<OAOp
     })
 }
 
+fn decode_oa_operation_control_link_result_result(r: &mut Reader) -> Result<OAOperationControlLinkResultResult, Refusal> {
+    if r.at() != b'{' {
+        return r.refuse("wrong_type");
+    }
+    r.enter()?;
+    r.pos += 1;
+    let mut field_value: Option<ResultLink> = None;
+    let mut seen: u32 = 0;
+    r.skip_ws();
+    if r.at() != b'}' {
+        loop {
+            r.skip_ws();
+            if r.at() != b'"' {
+                return r.refuse("malformed");
+            }
+            let key = r.string()?;
+            r.skip_ws();
+            if r.at() != b':' {
+                return r.refuse("malformed");
+            }
+            r.pos += 1;
+            r.skip_ws();
+            match key.as_str() {
+                "value" => {
+                    if seen & 1 != 0 {
+                        return r.refuse("duplicate_field");
+                    }
+                    seen |= 1;
+                    field_value = Some(decode_result_link(r)?);
+                }
+                _ => {
+                    return r.refuse("unknown_field");
+                }
+            }
+            r.skip_ws();
+            if r.at() != b',' {
+                break;
+            }
+            r.pos += 1;
+        }
+    }
+    if r.at() != b'}' {
+        return r.refuse("malformed");
+    }
+    r.pos += 1;
+    r.depth -= 1;
+    if seen & 1 != 1 {
+        return r.refuse("missing_field");
+    }
+    let Some(field_value) = field_value else {
+        return r.refuse("missing_field");
+    };
+    Ok(OAOperationControlLinkResultResult {
+        value: field_value,
+    })
+}
+
 fn decode_oa_job_inventory_list_work_result(r: &mut Reader) -> Result<OAJobInventoryListWorkResult, Refusal> {
     if r.at() != b'{' {
         return r.refuse("wrong_type");
@@ -3967,6 +4279,11 @@ fn service_check_oa_operation_control_read_result_arguments(v: &OAOperationContr
     Ok(())
 }
 
+fn service_check_oa_operation_control_link_result_arguments(v: &OAOperationControlLinkResultArguments) -> Result<(), Refusal> {
+    service_check_request_identity(&v.identity)?;
+    Ok(())
+}
+
 fn service_check_oa_job_inventory_list_work_arguments(_v: &OAJobInventoryListWorkArguments) -> Result<(), Refusal> {
     Ok(())
 }
@@ -4168,6 +4485,12 @@ pub trait OperationControl {
     /// bounds. Absence, failure, incomplete work and transport errors are never
     /// EOF. This read never seals an absent identity.
     fn read_result(&self, identity: RequestIdentity, offset: i64, max_bytes: i64) -> Result<ResultRead, Self::Error>;
+    /// Hard-link a complete result to destination for a local caller on this
+    /// machine, under the caller's own authority to create that path, and never
+    /// copy it. Destination is an absolute clean path of 1..4096 bytes whose
+    /// parent directory exists, outside the provider's own root, and that does
+    /// not exist yet. This call never seals an absent identity (JOB-A17).
+    fn link_result(&self, identity: RequestIdentity, destination: String) -> Result<ResultLink, Self::Error>;
 }
 
 pub struct OperationControlClient<T> {
@@ -4231,6 +4554,30 @@ impl<T: FrameTransport> OperationControl for OperationControlClient<T> {
             return Err(CallError::Service(ServiceError { code: error.code, message: error.message }));
         }
         let result = service_decode(&reply.payload, decode_oa_operation_control_read_result_result).map_err(CallError::Refusal)?;
+        Ok(result.value)
+    }
+
+    fn link_result(&self, identity: RequestIdentity, destination: String) -> Result<ResultLink, Self::Error> {
+        let args = OAOperationControlLinkResultArguments { identity, destination };
+        let arguments = service_encode(&args, service_check_oa_operation_control_link_result_arguments, enc_oa_operation_control_link_result_arguments, decode_oa_operation_control_link_result_arguments).map_err(CallError::Refusal)?;
+        let request = OAServiceFrame { version: 1, service: "abstraction.job/operations@1".into(), method: "LinkResult".into(), arguments };
+        let frame = service_encode(&request, service_check_oa_service_frame, enc_oa_service_frame, decode_oa_service_frame).map_err(CallError::Refusal)?;
+        let reply = self.transport.exchange_frame(&frame).map_err(CallError::Transport)?;
+        let reply = service_decode(&reply, decode_oa_service_reply).map_err(CallError::Refusal)?;
+        if reply.version != 1 {
+            return Err(CallError::Dispatch("unknown_version"));
+        }
+        if reply.service != "abstraction.job/operations@1" || reply.method != "LinkResult" {
+            return Err(CallError::Dispatch("mismatched_response"));
+        }
+        if !reply.ok {
+            let error = service_decode(&reply.payload, decode_oa_service_error).map_err(CallError::Refusal)?;
+            if error.code.is_empty() {
+                return Err(CallError::Dispatch("invalid_error"));
+            }
+            return Err(CallError::Service(ServiceError { code: error.code, message: error.message }));
+        }
+        let result = service_decode(&reply.payload, decode_oa_operation_control_link_result_result).map_err(CallError::Refusal)?;
         Ok(result.value)
     }
 }

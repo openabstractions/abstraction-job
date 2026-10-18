@@ -1,0 +1,86 @@
+{
+  "format": "openabstractions-rights@1",
+  "owner": "abstraction.job",
+  "generated": "Do not edit. Run rights-catalogue --write from the existing compiled catalogue.",
+  "source": "github.com/openabstractions/abstraction-facade/go/grants",
+  "availability": "Compiled catalogue reference: served and selector support use the named receiving-service context. Connected-runtime discovery supplies current availability. Facade Applications is experimental. Definitions grant no access.",
+  "compiled_receivers": {
+    "credentials": true,
+    "application_logs": true
+  },
+  "definitions": [
+    {
+      "definition": {
+        "action": "abstraction.job/acceptance.cancel",
+        "owner_contract": "abstraction.job/operator@1",
+        "operations": [
+          "abstraction.job/operator@1#CancelOperation"
+        ],
+        "resource_profile": "abstraction.rights/legacy-exact-string@1",
+        "resource_type": "string (legacy exact resource)",
+        "enforced_by": [
+          "abstraction.job/operator@1"
+        ],
+        "disclosure": "Request cross-program cancellation.",
+        "lifecycle": "Any operation in receiving account.",
+        "first_use": "none",
+        "served": true
+      },
+      "label": "abstraction.job/acceptance.cancel",
+      "supported_selectors": [],
+      "first_use_selectors": [],
+      "collection": "Any operation in receiving account.",
+      "all_effect": "",
+      "request_type": "string (legacy exact resource)"
+    },
+    {
+      "definition": {
+        "action": "abstraction.job/acceptance.submit",
+        "owner_contract": "abstraction.job/acceptance@1",
+        "operations": [
+          "abstraction.job/acceptance@1#Submit"
+        ],
+        "resource_profile": "abstraction.rights/legacy-exact-string@1",
+        "resource_type": "string (legacy exact resource)",
+        "enforced_by": [
+          "abstraction.job/acceptance@1"
+        ],
+        "disclosure": "Accept durable work once; no automatic retry creates fresh work.",
+        "lifecycle": "One valid job kind OR every kind, including future kind names; deny on either overrides permit. First-use asks only for job:\u003ckind\u003e; the contract-wide acceptance check stays quiet.",
+        "first_use": "exact",
+        "served": true
+      },
+      "label": "abstraction.job/acceptance.submit",
+      "supported_selectors": [],
+      "first_use_selectors": [],
+      "collection": "One valid job kind OR every kind, including future kind names; deny on either overrides permit. First-use asks only for job:\u003ckind\u003e; the contract-wide acceptance check stays quiet.",
+      "all_effect": "",
+      "request_type": "string (legacy exact resource)"
+    },
+    {
+      "definition": {
+        "action": "abstraction.job/inventory.read",
+        "owner_contract": "abstraction.job/operator@1",
+        "operations": [
+          "abstraction.job/operator@1#ListAccountWork"
+        ],
+        "resource_profile": "abstraction.rights/legacy-exact-string@1",
+        "resource_type": "string (legacy exact resource)",
+        "enforced_by": [
+          "abstraction.job/operator@1"
+        ],
+        "disclosure": "Read cross-program work records.",
+        "lifecycle": "All programs durable work in receiving account.",
+        "first_use": "none",
+        "served": true
+      },
+      "label": "abstraction.job/inventory.read",
+      "supported_selectors": [],
+      "first_use_selectors": [],
+      "collection": "All programs durable work in receiving account.",
+      "all_effect": "",
+      "request_type": "string (legacy exact resource)"
+    }
+  ],
+  "bundles": []
+}

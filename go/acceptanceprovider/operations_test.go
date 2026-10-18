@@ -3,6 +3,7 @@ package acceptanceprovider
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,5 +173,102 @@ func TestMaterializeBoundsJournalUnderConditionalWrite(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(after, data) {
 		t.Fatal("journal changed on refusal", err)
+	}
+}
+
+func TestPublishedOperationsReadWithoutJournalLock(t *testing.T) {
+	e := resultExecutor{testExecutor: testExecutor{profile: "result-v1"}, body: []byte("published result")}
+	p, err := OpenWithExecutor(t.TempDir(), "logical-owner", e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := submission(p, "published-read-with-held-lock")
+	r := accept(t, p.Bind("alice"), s)
+	endOperation(t, p, r.OperationID, job.StateComplete)
+	path := p.requestPath("alice", s.Identity)
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- cas.ChangeLimit(path, maxOperationRecordBytes, func(cur []byte) ([]byte, error) {
+			close(locked)
+			<-release
+			return cur, nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-done:
+		t.Fatalf("hold journal lock: %v", err)
+	}
+	defer func() {
+		close(release)
+		if err := <-done; err != nil {
+			t.Errorf("release journal lock: %v", err)
+		}
+	}()
+
+	operations := p.BindOperations("alice")
+	checks := make(chan error, 1)
+	go func() {
+		v, err := operations.ObserveWork(s.Identity)
+		if err != nil || v.Outcome.String() != "observed" || v.Snapshot == nil || v.Snapshot.Receipt.OperationID != r.OperationID {
+			checks <- fmt.Errorf("observe while journal locked: %+v %v", v, err)
+			return
+		}
+		read, err := operations.ReadResult(s.Identity, 0, MaxResultBytes)
+		if err != nil || read.Outcome.String() != "data" || read.Chunk == nil || !bytes.Equal(read.Chunk.Data, e.body) {
+			checks <- fmt.Errorf("read while journal locked: %+v %v", read, err)
+			return
+		}
+		checks <- nil
+	}()
+	select {
+	case err := <-checks:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("published observation or result read waited for journal lock")
+	}
+}
+
+func TestPublishedOperationStillValidatesAdmissionEvidence(t *testing.T) {
+	for name, change := range map[string]func(*job.Record){
+		"id":       func(r *job.Record) { r.ID = "other-id" },
+		"kind":     func(r *job.Record) { r.Kind = "other-kind" },
+		"spec":     func(r *job.Record) { r.Spec = []byte(`{"source":"other"}`) },
+		"requires": func(r *job.Record) { r.Requires = []string{"other-requirement"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := resultExecutor{testExecutor: testExecutor{profile: "result-v1"}, body: []byte("secret result")}
+			p, err := OpenWithExecutor(t.TempDir(), "logical-owner", e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := submission(p, "changed-admission-evidence")
+			receipt := accept(t, p.Bind("alice"), s)
+			endOperation(t, p, receipt.OperationID, job.StateComplete)
+			path := filepath.Join(p.store.Root(), "jobs", receipt.OperationID+".json")
+			record, err := p.loadOperationRecord(receipt.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			change(record)
+			data, err := record.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			operations := p.BindOperations("alice")
+			observed, err := operations.ObserveWork(s.Identity)
+			if err != nil || observed.Outcome.String() != "unknown" || observed.Snapshot != nil {
+				t.Fatalf("changed admission observed: %+v %v", observed, err)
+			}
+			read, err := operations.ReadResult(s.Identity, 0, MaxResultBytes)
+			if err != nil || read.Outcome.String() != "unknown" || read.Chunk != nil {
+				t.Fatalf("changed admission exposed result: %+v %v", read, err)
+			}
+		})
 	}
 }

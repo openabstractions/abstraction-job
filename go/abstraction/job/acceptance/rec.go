@@ -946,6 +946,150 @@ func (v ResultOutcome) Known() bool {
 	return ok
 }
 
+// LinkOutcome is a closed vocabulary. Its numeric values are private implementation
+// tags; String and ParseLinkOutcome preserve the exact wire words.
+type LinkOutcome uint32
+
+const (
+	LinkOutcomeLinked      LinkOutcome = 1
+	LinkOutcomeNotReady    LinkOutcome = 2
+	LinkOutcomeUnavailable LinkOutcome = 3
+	LinkOutcomeUnsupported LinkOutcome = 4
+	LinkOutcomeUnknown     LinkOutcome = 5
+	LinkOutcomeForbidden   LinkOutcome = 6
+	LinkOutcomeInvalid     LinkOutcome = 7
+	LinkOutcomeExists      LinkOutcome = 8
+	LinkOutcomeOtherVolume LinkOutcome = 9
+	LinkOutcomeNoHardLinks LinkOutcome = 10
+	LinkOutcomeRemote      LinkOutcome = 11
+)
+
+// String returns v's exact wire word, or the empty string for an invalid value.
+func (v LinkOutcome) String() string {
+	word, _ := v.WireName()
+	return word
+}
+
+// WireName returns v's exact wire word and whether v names a member.
+func (v LinkOutcome) WireName() (string, bool) {
+	switch v {
+	case LinkOutcomeLinked:
+		return "linked", true
+	case LinkOutcomeNotReady:
+		return "not_ready", true
+	case LinkOutcomeUnavailable:
+		return "unavailable", true
+	case LinkOutcomeUnsupported:
+		return "unsupported", true
+	case LinkOutcomeUnknown:
+		return "unknown", true
+	case LinkOutcomeForbidden:
+		return "forbidden", true
+	case LinkOutcomeInvalid:
+		return "invalid", true
+	case LinkOutcomeExists:
+		return "exists", true
+	case LinkOutcomeOtherVolume:
+		return "other_volume", true
+	case LinkOutcomeNoHardLinks:
+		return "no_hard_links", true
+	case LinkOutcomeRemote:
+		return "remote", true
+	}
+	return "", false
+}
+
+// ParseLinkOutcome returns the member named by an exact wire word.
+func ParseLinkOutcome(word string) (LinkOutcome, bool) {
+	switch word {
+	case "linked":
+		return LinkOutcomeLinked, true
+	case "not_ready":
+		return LinkOutcomeNotReady, true
+	case "unavailable":
+		return LinkOutcomeUnavailable, true
+	case "unsupported":
+		return LinkOutcomeUnsupported, true
+	case "unknown":
+		return LinkOutcomeUnknown, true
+	case "forbidden":
+		return LinkOutcomeForbidden, true
+	case "invalid":
+		return LinkOutcomeInvalid, true
+	case "exists":
+		return LinkOutcomeExists, true
+	case "other_volume":
+		return LinkOutcomeOtherVolume, true
+	case "no_hard_links":
+		return LinkOutcomeNoHardLinks, true
+	case "remote":
+		return LinkOutcomeRemote, true
+	}
+	return LinkOutcome(0), false
+}
+
+// MarshalText preserves the member's exact wire word for standard text users,
+// including JSON object keys. Invalid and zero values are refused.
+func (v LinkOutcome) MarshalText() ([]byte, error) {
+	word, ok := v.WireName()
+	if !ok {
+		return nil, &Refusal{Word: "bad_enum", Offset: 0}
+	}
+	return []byte(word), nil
+}
+
+// UnmarshalText accepts an exact wire word and refuses unknown text.
+func (v *LinkOutcome) UnmarshalText(text []byte) error {
+	word, ok := ParseLinkOutcome(string(text))
+	if !ok {
+		return &Refusal{Word: "bad_enum", Offset: 0}
+	}
+	*v = word
+	return nil
+}
+
+// MarshalJSON keeps closed vocabularies as JSON strings rather than their
+// private numeric implementation tags.
+func (v LinkOutcome) MarshalJSON() ([]byte, error) {
+	word, ok := v.WireName()
+	if !ok {
+		return nil, &Refusal{Word: "bad_enum", Offset: 0}
+	}
+	return esc(nil, word), nil
+}
+
+// UnmarshalJSON accepts only an exact JSON string member. Numbers, null and
+// unknown strings are refused by the same codec rules as generated records.
+func (v *LinkOutcome) UnmarshalJSON(data []byte) error {
+	r := reader{buf: data}
+	r.ws()
+	word, err := r.str()
+	if err != nil {
+		return err
+	}
+	r.ws()
+	if r.pos != len(r.buf) {
+		return r.refuse("trailing_bytes")
+	}
+	parsed, ok := ParseLinkOutcome(word)
+	if !ok {
+		return r.refuse("bad_enum")
+	}
+	*v = parsed
+	return nil
+}
+
+// LinkOutcomeValues returns every member of LinkOutcome in declaration order, in a new slice.
+func LinkOutcomeValues() []LinkOutcome {
+	return []LinkOutcome{LinkOutcomeLinked, LinkOutcomeNotReady, LinkOutcomeUnavailable, LinkOutcomeUnsupported, LinkOutcomeUnknown, LinkOutcomeForbidden, LinkOutcomeInvalid, LinkOutcomeExists, LinkOutcomeOtherVolume, LinkOutcomeNoHardLinks, LinkOutcomeRemote}
+}
+
+// Known reports whether v is a member of LinkOutcome.
+func (v LinkOutcome) Known() bool {
+	_, ok := v.WireName()
+	return ok
+}
+
 // InventoryOutcome is a closed vocabulary. Its numeric values are private implementation
 // tags; String and ParseInventoryOutcome preserve the exact wire words.
 type InventoryOutcome uint32
@@ -1354,6 +1498,19 @@ type ResultRead struct {
 	Chunk   *ResultChunk
 }
 
+// Exactly linked carries the original receipt and the result's size in bytes;
+// other outcomes forbid a receipt and carry size zero. Linked means the
+// destination is a second name for the provider's own verified result bytes;
+// the provider keeps its name and retention. Other_volume and no_hard_links
+// name why no hard link could be made; remote refuses a caller without
+// receiver-verified local peer evidence, which keeps reading with ReadResult;
+// exists names a destination already present, which stays as it was (JOB-A17).
+type ResultLink struct {
+	Outcome LinkOutcome
+	Receipt *Receipt
+	Size    int64
+}
+
 // Caller-scoped accepted-operation observations without paths. Only page
 // carries snapshots. A noncomplete page always has a next cursor, even when no
 // own operations were scanned. Complete pages have empty next. Refusals carry
@@ -1401,6 +1558,11 @@ type oaOperationControlReadResultArguments struct {
 	Identity RequestIdentity
 	Offset   int64
 	MaxBytes int64
+}
+
+type oaOperationControlLinkResultArguments struct {
+	Identity    RequestIdentity
+	Destination string
 }
 
 type oaJobInventoryListWorkArguments struct {
@@ -1459,6 +1621,10 @@ type oaOperationControlObserveWorkResult struct {
 
 type oaOperationControlReadResultResult struct {
 	Value ResultRead
+}
+
+type oaOperationControlLinkResultResult struct {
+	Value ResultLink
 }
 
 type oaJobInventoryListWorkResult struct {
@@ -1855,6 +2021,35 @@ func encResultRead(out []byte, v *ResultRead, depth int) []byte {
 	return append(out, '}')
 }
 
+func encResultLink(out []byte, v *ResultLink, depth int) []byte {
+	if !(v.Outcome).Known() {
+		panic(&Refusal{Word: "bad_enum", Offset: 0})
+	}
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "outcome")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Outcome.String())
+	if v.Receipt != nil {
+		out = append(out, ',')
+		out = append(out, '\n')
+		out = pad(out, depth+1)
+		out = esc(out, "receipt")
+		out = append(out, ':', ' ')
+		out = encReceipt(out, v.Receipt, depth+1)
+	}
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "size")
+	out = append(out, ':', ' ')
+	out = num(out, v.Size)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
 func encInventoryPage(out []byte, v *InventoryPage, depth int) []byte {
 	if !(v.Outcome).Known() {
 		panic(&Refusal{Word: "bad_enum", Offset: 0})
@@ -1979,6 +2174,24 @@ func encOAOperationControlReadResultArguments(out []byte, v *oaOperationControlR
 	out = esc(out, "max_bytes")
 	out = append(out, ':', ' ')
 	out = num(out, v.MaxBytes)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlLinkResultArguments(out []byte, v *oaOperationControlLinkResultArguments, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "identity")
+	out = append(out, ':', ' ')
+	out = encRequestIdentity(out, &v.Identity, depth+1)
+	out = append(out, ',')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "destination")
+	out = append(out, ':', ' ')
+	out = esc(out, v.Destination)
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -2187,6 +2400,18 @@ func encOAOperationControlReadResultResult(out []byte, v *oaOperationControlRead
 	out = esc(out, "value")
 	out = append(out, ':', ' ')
 	out = encResultRead(out, &v.Value, depth+1)
+	out = append(out, '\n')
+	out = pad(out, depth)
+	return append(out, '}')
+}
+
+func encOAOperationControlLinkResultResult(out []byte, v *oaOperationControlLinkResultResult, depth int) []byte {
+	out = append(out, '{')
+	out = append(out, '\n')
+	out = pad(out, depth+1)
+	out = esc(out, "value")
+	out = append(out, ':', ' ')
+	out = encResultLink(out, &v.Value, depth+1)
 	out = append(out, '\n')
 	out = pad(out, depth)
 	return append(out, '}')
@@ -3804,6 +4029,92 @@ func (r *reader) decodeResultRead() (*ResultRead, error) {
 	return v, nil
 }
 
+func (r *reader) decodeResultLink() (*ResultLink, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &ResultLink{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "outcome":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				word, ok := ParseLinkOutcome(x)
+				if !ok {
+					return nil, r.refuse("bad_enum")
+				}
+				v.Outcome = word
+			case "receipt":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.decodeReceipt()
+				if err != nil {
+					return nil, err
+				}
+				v.Receipt = x
+			case "size":
+				if seen&4 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 4
+				x, err := r.integer(-9223372036854775808, 9223372036854775807)
+				if err != nil {
+					return nil, err
+				}
+				v.Size = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&5 != 5 {
+		return nil, r.refuse("missing_field")
+	}
+	if !(v.Outcome).Known() {
+		return nil, r.refuse("bad_enum")
+	}
+	return v, nil
+}
+
 func (r *reader) decodeInventoryPage() (*InventoryPage, error) {
 	if r.at() != '{' {
 		return nil, r.refuse("wrong_type")
@@ -4312,6 +4623,75 @@ func (r *reader) decodeOAOperationControlReadResultArguments() (*oaOperationCont
 	r.pos++
 	r.depth--
 	if seen&7 != 7 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAOperationControlLinkResultArguments() (*oaOperationControlLinkResultArguments, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &oaOperationControlLinkResultArguments{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "identity":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeRequestIdentity()
+				if err != nil {
+					return nil, err
+				}
+				v.Identity = *x
+			case "destination":
+				if seen&2 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 2
+				x, err := r.str()
+				if err != nil {
+					return nil, err
+				}
+				v.Destination = x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&3 != 3 {
 		return nil, r.refuse("missing_field")
 	}
 	return v, nil
@@ -5100,6 +5480,65 @@ func (r *reader) decodeOAOperationControlReadResultResult() (*oaOperationControl
 				}
 				seen |= 1
 				x, err := r.decodeResultRead()
+				if err != nil {
+					return nil, err
+				}
+				v.Value = *x
+			default:
+				return nil, r.refuse("unknown_field")
+			}
+			r.ws()
+			if r.at() != ',' {
+				break
+			}
+			r.pos++
+		}
+	}
+	if r.at() != '}' {
+		return nil, r.refuse("malformed")
+	}
+	r.pos++
+	r.depth--
+	if seen&1 != 1 {
+		return nil, r.refuse("missing_field")
+	}
+	return v, nil
+}
+
+func (r *reader) decodeOAOperationControlLinkResultResult() (*oaOperationControlLinkResultResult, error) {
+	if r.at() != '{' {
+		return nil, r.refuse("wrong_type")
+	}
+	if err := r.enter(); err != nil {
+		return nil, err
+	}
+	r.pos++
+	v := &oaOperationControlLinkResultResult{}
+	var seen uint32
+	r.ws()
+	if r.at() != '}' {
+		for {
+			r.ws()
+			if r.at() != '"' {
+				return nil, r.refuse("malformed")
+			}
+			key, err := r.str()
+			if err != nil {
+				return nil, err
+			}
+			r.ws()
+			if r.at() != ':' {
+				return nil, r.refuse("malformed")
+			}
+			r.pos++
+			r.ws()
+			switch key {
+			case "value":
+				if seen&1 != 0 {
+					return nil, r.refuse("duplicate_field")
+				}
+				seen |= 1
+				x, err := r.decodeResultLink()
 				if err != nil {
 					return nil, err
 				}
@@ -6091,6 +6530,7 @@ func (d *RecoverableAcceptanceDispatcher) invokeCancelWork(args *oaRecoverableAc
 type OperationControl interface {
 	ObserveWork(identity RequestIdentity) (ObservationResult, error)
 	ReadResult(identity RequestIdentity, offset, maxBytes int64) (ResultRead, error)
+	LinkResult(identity RequestIdentity, destination string) (ResultLink, error)
 }
 type OperationControlTransport interface {
 	FrameExchanger
@@ -6187,6 +6627,48 @@ func (c *OperationControlClient) ReadResult(identity RequestIdentity, offset, ma
 	result = decoded.Value
 	return
 }
+func (c *OperationControlClient) LinkResult(identity RequestIdentity, destination string) (result ResultLink, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				err = e
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	args := oaOperationControlLinkResultArguments{Identity: identity, Destination: destination}
+	v := oaServiceFrame{Version: 1, Service: "abstraction.job/operations@1", Method: "LinkResult", Arguments: Raw(encOAOperationControlLinkResultArguments(nil, &args, 1))}
+	frame := encOAServiceFrame(nil, &v, 0)
+	if _, err = servicePayload(frame); err != nil {
+		return
+	}
+	var response []byte
+	response, err = c.transport.ExchangeFrame(frame)
+	if err != nil {
+		return
+	}
+	var payload Raw
+	payload, err = serviceResponse(response, v.Service, v.Method)
+	if err != nil {
+		return
+	}
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	var decoded *oaOperationControlLinkResultResult
+	decoded, err = r.decodeOAOperationControlLinkResultResult()
+	if err != nil {
+		return
+	}
+	_ = decoded
+	r.ws()
+	if r.pos != len(r.buf) {
+		err = r.refuse("trailing_bytes")
+		return
+	}
+	result = decoded.Value
+	return
+}
 
 // DescribeService is this dispatcher's service as abstraction.facade/endpoint@1 Describe lists it:
 // ready unless its handler implements Ready() (bool, string) and reports otherwise.
@@ -6225,6 +6707,8 @@ func (d *OperationControlDispatcher) WriteFrame(frame []byte) error {
 	case "ObserveWork":
 		return DispatchError("wrong_mode")
 	case "ReadResult":
+		return DispatchError("wrong_mode")
+	case "LinkResult":
 		return DispatchError("wrong_mode")
 	default:
 		return DispatchError("unknown_method")
@@ -6267,6 +6751,19 @@ func (d *OperationControlDispatcher) ExchangeFrame(frame []byte) ([]byte, error)
 			return serviceReply(v, "", r.refuse("trailing_bytes"))
 		}
 		payload, err := d.invokeReadResult(args)
+		return serviceReply(v, payload, err)
+	case "LinkResult":
+		r := &reader{buf: []byte(v.Arguments), depth: 1}
+		r.ws()
+		args, err := r.decodeOAOperationControlLinkResultArguments()
+		if err != nil {
+			return serviceReply(v, "", err)
+		}
+		r.ws()
+		if r.pos != len(r.buf) {
+			return serviceReply(v, "", r.refuse("trailing_bytes"))
+		}
+		payload, err := d.invokeLinkResult(args)
 		return serviceReply(v, payload, err)
 	default:
 		return serviceReply(v, "", DispatchError("unknown_method"))
@@ -6325,6 +6822,38 @@ func (d *OperationControlDispatcher) invokeReadResult(args *oaOperationControlRe
 	r := &reader{buf: []byte(payload), depth: 1}
 	r.ws()
 	if _, e := r.decodeOAOperationControlReadResultResult(); e != nil {
+		payload = ""
+		err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
+		return
+	}
+	r.ws()
+	if r.pos != len(r.buf) {
+		payload = ""
+		err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
+	}
+	return
+}
+func (d *OperationControlDispatcher) invokeLinkResult(args *oaOperationControlLinkResultArguments) (payload Raw, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			payload = ""
+			if _, ok := p.(*Refusal); ok {
+				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
+			} else {
+				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
+			}
+		}
+	}()
+	var result ResultLink
+	result, err = d.Handler.LinkResult(args.Identity, args.Destination)
+	if err != nil {
+		return
+	}
+	value := oaOperationControlLinkResultResult{Value: result}
+	payload = Raw(encOAOperationControlLinkResultResult(nil, &value, 1))
+	r := &reader{buf: []byte(payload), depth: 1}
+	r.ws()
+	if _, e := r.decodeOAOperationControlLinkResultResult(); e != nil {
 		payload = ""
 		err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 		return

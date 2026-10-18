@@ -281,6 +281,62 @@ inline constexpr bool operator!=(std::string_view name, ResultOutcome value) { r
 
 inline const std::vector<std::string> kResultOutcomeNames = {"data", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid"};
 
+enum class LinkOutcome : std::int32_t {
+    Linked = 1,
+    NotReady = 2,
+    Unavailable = 3,
+    Unsupported = 4,
+    Unknown = 5,
+    Forbidden = 6,
+    Invalid = 7,
+    Exists = 8,
+    OtherVolume = 9,
+    NoHardLinks = 10,
+    Remote = 11,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(LinkOutcome value) {
+    switch (value) {
+        case LinkOutcome::Linked: return "linked";
+        case LinkOutcome::NotReady: return "not_ready";
+        case LinkOutcome::Unavailable: return "unavailable";
+        case LinkOutcome::Unsupported: return "unsupported";
+        case LinkOutcome::Unknown: return "unknown";
+        case LinkOutcome::Forbidden: return "forbidden";
+        case LinkOutcome::Invalid: return "invalid";
+        case LinkOutcome::Exists: return "exists";
+        case LinkOutcome::OtherVolume: return "other_volume";
+        case LinkOutcome::NoHardLinks: return "no_hard_links";
+        case LinkOutcome::Remote: return "remote";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<LinkOutcome> parse_link_outcome(std::string_view name) {
+    if (name == "linked") return LinkOutcome::Linked;
+    if (name == "not_ready") return LinkOutcome::NotReady;
+    if (name == "unavailable") return LinkOutcome::Unavailable;
+    if (name == "unsupported") return LinkOutcome::Unsupported;
+    if (name == "unknown") return LinkOutcome::Unknown;
+    if (name == "forbidden") return LinkOutcome::Forbidden;
+    if (name == "invalid") return LinkOutcome::Invalid;
+    if (name == "exists") return LinkOutcome::Exists;
+    if (name == "other_volume") return LinkOutcome::OtherVolume;
+    if (name == "no_hard_links") return LinkOutcome::NoHardLinks;
+    if (name == "remote") return LinkOutcome::Remote;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(LinkOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(LinkOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, LinkOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, LinkOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kLinkOutcomeNames = {"linked", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid", "exists", "other_volume", "no_hard_links", "remote"};
+
 enum class InventoryOutcome : std::int32_t {
     Page = 1,
     Gap = 2,
@@ -515,6 +571,19 @@ struct ResultRead {
     std::optional<ResultChunk> chunk;
 };
 
+// Exactly linked carries the original receipt and the result's size in bytes;
+// other outcomes forbid a receipt and carry size zero. Linked means the
+// destination is a second name for the provider's own verified result bytes;
+// the provider keeps its name and retention. Other_volume and no_hard_links
+// name why no hard link could be made; remote refuses a caller without
+// receiver-verified local peer evidence, which keeps reading with ReadResult;
+// exists names a destination already present, which stays as it was (JOB-A17).
+struct ResultLink {
+    LinkOutcome outcome{};
+    std::optional<Receipt> receipt;
+    std::int64_t size = 0;
+};
+
 // Caller-scoped accepted-operation observations without paths. Only page
 // carries snapshots. A noncomplete page always has a next cursor, even when no
 // own operations were scanned. Complete pages have empty next. Refusals carry
@@ -704,6 +773,11 @@ struct OAOperationControlReadResultArguments {
     std::int64_t max_bytes = 0;
 };
 
+struct OAOperationControlLinkResultArguments {
+    RequestIdentity identity;
+    std::string destination;
+};
+
 struct OAJobInventoryListWorkArguments {
     std::string cursor;
     std::int64_t limit = 0;
@@ -762,6 +836,10 @@ struct OAOperationControlReadResultResult {
     ResultRead value;
 };
 
+struct OAOperationControlLinkResultResult {
+    ResultLink value;
+};
+
 struct OAJobInventoryListWorkResult {
     InventoryPage value;
 };
@@ -785,6 +863,7 @@ inline void enc_operation_snapshot(std::string&, const OperationSnapshot&, int);
 inline void enc_observation_result(std::string&, const ObservationResult&, int);
 inline void enc_result_chunk(std::string&, const ResultChunk&, int);
 inline void enc_result_read(std::string&, const ResultRead&, int);
+inline void enc_result_link(std::string&, const ResultLink&, int);
 inline void enc_inventory_page(std::string&, const InventoryPage&, int);
 inline void enc_operator_cancellation(std::string&, const OperatorCancellation&, int);
 inline void enc_oa_recoverable_acceptance_get_history_window_arguments(std::string&, const OARecoverableAcceptanceGetHistoryWindowArguments&, int);
@@ -793,6 +872,7 @@ inline void enc_oa_recoverable_acceptance_reconcile_arguments(std::string&, cons
 inline void enc_oa_recoverable_acceptance_cancel_work_arguments(std::string&, const OARecoverableAcceptanceCancelWorkArguments&, int);
 inline void enc_oa_operation_control_observe_work_arguments(std::string&, const OAOperationControlObserveWorkArguments&, int);
 inline void enc_oa_operation_control_read_result_arguments(std::string&, const OAOperationControlReadResultArguments&, int);
+inline void enc_oa_operation_control_link_result_arguments(std::string&, const OAOperationControlLinkResultArguments&, int);
 inline void enc_oa_job_inventory_list_work_arguments(std::string&, const OAJobInventoryListWorkArguments&, int);
 inline void enc_oa_job_operator_list_account_work_arguments(std::string&, const OAJobOperatorListAccountWorkArguments&, int);
 inline void enc_oa_job_operator_cancel_operation_arguments(std::string&, const OAJobOperatorCancelOperationArguments&, int);
@@ -805,6 +885,7 @@ inline void enc_oa_recoverable_acceptance_reconcile_result(std::string&, const O
 inline void enc_oa_recoverable_acceptance_cancel_work_result(std::string&, const OARecoverableAcceptanceCancelWorkResult&, int);
 inline void enc_oa_operation_control_observe_work_result(std::string&, const OAOperationControlObserveWorkResult&, int);
 inline void enc_oa_operation_control_read_result_result(std::string&, const OAOperationControlReadResultResult&, int);
+inline void enc_oa_operation_control_link_result_result(std::string&, const OAOperationControlLinkResultResult&, int);
 inline void enc_oa_job_inventory_list_work_result(std::string&, const OAJobInventoryListWorkResult&, int);
 inline void enc_oa_job_operator_list_account_work_result(std::string&, const OAJobOperatorListAccountWorkResult&, int);
 inline void enc_oa_job_operator_cancel_operation_result(std::string&, const OAJobOperatorCancelOperationResult&, int);
@@ -1167,6 +1248,33 @@ inline void enc_result_read(std::string& out, const ResultRead& v, int depth) {
     out += '}';
 }
 
+inline void enc_result_link(std::string& out, const ResultLink& v, int depth) {
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "outcome");
+    out += ": ";
+    esc(out, std::string(wire_name(v.outcome)));
+    if (v.receipt.has_value()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "receipt");
+        out += ": ";
+        enc_receipt(out, *v.receipt, depth + 1);
+    }
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "size");
+    out += ": ";
+    num(out, v.size);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
 inline void enc_inventory_page(std::string& out, const InventoryPage& v, int depth) {
     if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
@@ -1212,6 +1320,8 @@ inline void enc_operator_cancellation(std::string& out, const OperatorCancellati
 }
 
 inline void enc_oa_recoverable_acceptance_get_history_window_arguments(std::string& out, const OARecoverableAcceptanceGetHistoryWindowArguments& v, int depth) {
+    (void)v;
+    (void)depth;
     out += '{';
     out += '}';
 }
@@ -1283,6 +1393,24 @@ inline void enc_oa_operation_control_read_result_arguments(std::string& out, con
     esc(out, "max_bytes");
     out += ": ";
     num(out, v.max_bytes);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_operation_control_link_result_arguments(std::string& out, const OAOperationControlLinkResultArguments& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "identity");
+    out += ": ";
+    enc_request_identity(out, v.identity, depth + 1);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "destination");
+    out += ": ";
+    esc(out, v.destination);
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -1487,6 +1615,18 @@ inline void enc_oa_operation_control_read_result_result(std::string& out, const 
     esc(out, "value");
     out += ": ";
     enc_result_read(out, v.value, depth + 1);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_operation_control_link_result_result(std::string& out, const OAOperationControlLinkResultResult& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "value");
+    out += ": ";
+    enc_result_link(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -1857,6 +1997,7 @@ inline OperationSnapshot decode_operation_snapshot(Reader& r);
 inline ObservationResult decode_observation_result(Reader& r);
 inline ResultChunk decode_result_chunk(Reader& r);
 inline ResultRead decode_result_read(Reader& r);
+inline ResultLink decode_result_link(Reader& r);
 inline InventoryPage decode_inventory_page(Reader& r);
 inline OperatorCancellation decode_operator_cancellation(Reader& r);
 inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oa_recoverable_acceptance_get_history_window_arguments(Reader& r);
@@ -1865,6 +2006,7 @@ inline OARecoverableAcceptanceReconcileArguments decode_oa_recoverable_acceptanc
 inline OARecoverableAcceptanceCancelWorkArguments decode_oa_recoverable_acceptance_cancel_work_arguments(Reader& r);
 inline OAOperationControlObserveWorkArguments decode_oa_operation_control_observe_work_arguments(Reader& r);
 inline OAOperationControlReadResultArguments decode_oa_operation_control_read_result_arguments(Reader& r);
+inline OAOperationControlLinkResultArguments decode_oa_operation_control_link_result_arguments(Reader& r);
 inline OAJobInventoryListWorkArguments decode_oa_job_inventory_list_work_arguments(Reader& r);
 inline OAJobOperatorListAccountWorkArguments decode_oa_job_operator_list_account_work_arguments(Reader& r);
 inline OAJobOperatorCancelOperationArguments decode_oa_job_operator_cancel_operation_arguments(Reader& r);
@@ -1877,6 +2019,7 @@ inline OARecoverableAcceptanceReconcileResult decode_oa_recoverable_acceptance_r
 inline OARecoverableAcceptanceCancelWorkResult decode_oa_recoverable_acceptance_cancel_work_result(Reader& r);
 inline OAOperationControlObserveWorkResult decode_oa_operation_control_observe_work_result(Reader& r);
 inline OAOperationControlReadResultResult decode_oa_operation_control_read_result_result(Reader& r);
+inline OAOperationControlLinkResultResult decode_oa_operation_control_link_result_result(Reader& r);
 inline OAJobInventoryListWorkResult decode_oa_job_inventory_list_work_result(Reader& r);
 inline OAJobOperatorListAccountWorkResult decode_oa_job_operator_list_account_work_result(Reader& r);
 inline OAJobOperatorCancelOperationResult decode_oa_job_operator_cancel_operation_result(Reader& r);
@@ -2461,6 +2604,55 @@ inline ResultRead decode_result_read(Reader& r) {
     return v;
 }
 
+inline ResultLink decode_result_link(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    ResultLink v;
+    std::optional<std::string> wire_outcome;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "outcome") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                wire_outcome = r.str();
+            } else if (key == "receipt") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.receipt = decode_receipt(r);
+            } else if (key == "size") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.size = r.integer(INT64_MIN, INT64_MAX);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 5u) != 5u) r.refuse("missing_field");
+    if (wire_outcome) {
+        const auto parsed = parse_link_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
+    return v;
+}
+
 inline InventoryPage decode_inventory_page(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
@@ -2560,7 +2752,6 @@ inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oa_recoverable_ac
     r.enter();
     ++r.pos;
     OARecoverableAcceptanceGetHistoryWindowArguments v;
-    std::uint32_t seen = 0;
     r.skip_ws();
     if (r.at() != '}') {
         for (;;) {
@@ -2766,6 +2957,45 @@ inline OAOperationControlReadResultArguments decode_oa_operation_control_read_re
     ++r.pos;
     --r.depth;
     if ((seen & 7u) != 7u) r.refuse("missing_field");
+    return v;
+}
+
+inline OAOperationControlLinkResultArguments decode_oa_operation_control_link_result_arguments(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAOperationControlLinkResultArguments v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "identity") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.identity = decode_request_identity(r);
+            } else if (key == "destination") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.destination = r.str();
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 3u) != 3u) r.refuse("missing_field");
     return v;
 }
 
@@ -3229,6 +3459,41 @@ inline OAOperationControlReadResultResult decode_oa_operation_control_read_resul
     return v;
 }
 
+inline OAOperationControlLinkResultResult decode_oa_operation_control_link_result_result(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAOperationControlLinkResultResult v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "value") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.value = decode_result_link(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
+    return v;
+}
+
 inline OAJobInventoryListWorkResult decode_oa_job_inventory_list_work_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
@@ -3498,6 +3763,7 @@ throw ServiceError("unknown_method","");}catch(const ServiceError&e){return deta
 }
 private:
 Raw invoke_get_history_window(const detail::OARecoverableAcceptanceGetHistoryWindowArguments&args){
+(void)args;
 HistoryWindow result{};
 try{
 result=handler.get_history_window();
@@ -3548,6 +3814,7 @@ bool(*ready_hook_)(void*,std::string&)=nullptr;
 struct OperationControl{virtual ~OperationControl()=default;
 virtual ObservationResult observe_work(const RequestIdentity& identity)=0;
 virtual ResultRead read_result(const RequestIdentity& identity,const std::int64_t& offset,const std::int64_t& max_bytes)=0;
+virtual ResultLink link_result(const RequestIdentity& identity,const std::string& destination)=0;
 };
 template<class Transport>struct OperationControlClient:OperationControl{Transport& transport_;explicit OperationControlClient(Transport&t):transport_(t){}
 ObservationResult observe_work(const RequestIdentity& identity)override{detail::OAOperationControlObserveWorkArguments args;
@@ -3564,6 +3831,13 @@ detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.
 auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_read_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
+ResultLink link_result(const RequestIdentity& identity,const std::string& destination)override{detail::OAOperationControlLinkResultArguments args;
+args.identity=identity;
+args.destination=destination;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="LinkResult";detail::enc_oa_operation_control_link_result_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_link_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+return result.value;
+}
 };
 struct OperationControlService{inline static constexpr std::string_view kWireName="abstraction.job/operations@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=OperationControlClient<Transport>;};
 struct OperationControlDispatcher:FrameWriter,FrameExchanger{OperationControl&handler;explicit OperationControlDispatcher(OperationControl&h):handler(h){}
@@ -3576,6 +3850,8 @@ if(v.method=="ObserveWork"){
 throw DispatchError("wrong_mode");}
 if(v.method=="ReadResult"){
 throw DispatchError("wrong_mode");}
+if(v.method=="LinkResult"){
+throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
 std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operations@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
@@ -3583,6 +3859,8 @@ if(v.method=="ObserveWork"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_observe_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_observe_work(args);return detail::service_reply(v,payload);}
 if(v.method=="ReadResult"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_read_result_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_read_result(args);return detail::service_reply(v,payload);}
+if(v.method=="LinkResult"){
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_link_result_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_link_result(args);return detail::service_reply(v,payload);}
 throw ServiceError("unknown_method","");}catch(const ServiceError&e){return detail::service_reply(v,"",&e);}catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
 private:
@@ -3606,6 +3884,17 @@ try{
 detail::OAOperationControlReadResultResult value;
 value.value=result;
 Raw payload;detail::enc_oa_operation_control_read_result_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_read_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+}catch(...){throw ServiceError("invalid_result","");}
+}
+Raw invoke_link_result(const detail::OAOperationControlLinkResultArguments&args){
+ResultLink result{};
+try{
+result=handler.link_result(args.identity,args.destination);
+}catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
+try{
+detail::OAOperationControlLinkResultResult value;
+value.value=result;
+Raw payload;detail::enc_oa_operation_control_link_result_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_link_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
 private:

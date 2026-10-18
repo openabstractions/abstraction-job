@@ -98,6 +98,11 @@ type Provider struct {
 	fault func(string) error
 	// report receives failures no reply carries; see SetErrorReporter.
 	report func(error)
+	// linkAuthority decides LinkResult's caller authority; nil is
+	// SameAuthority [JOB-A17].
+	linkAuthority LinkAuthority
+	// standing decides accepted work again while it runs [JOB-A18].
+	standing standingState
 }
 
 type journalSubject struct {
@@ -106,6 +111,42 @@ type journalSubject struct {
 	origin      string
 	evidence    string
 	journalPath string
+	// kind is the accepted submission's kind, which a standing decision
+	// names [JOB-A18].
+	kind string
+}
+
+// ErrOperationScope reports an operation accepted in another caller scope.
+var ErrOperationScope = errors.New("acceptance: operation scope mismatch")
+
+// OperationOwnedBy reports whether this provider accepted the operation in the
+// given caller scope. Another scope's operation and an unknown one report
+// false with no error; an unreadable index entry is an error.
+func (p *Provider) OperationOwnedBy(operationID, scope string) (bool, error) {
+	if !validOperationID(operationID) {
+		return false, nil
+	}
+	_, found, err := p.SubjectForOperation(operationID, scope)
+	if errors.Is(err, ErrOperationScope) || !found {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// OperationEnded reports whether an accepted operation has reached a terminal
+// state. found is false for an operation this provider does not hold.
+func (p *Provider) OperationEnded(operationID string) (ended, found bool, err error) {
+	if !validOperationID(operationID) {
+		return false, false, nil
+	}
+	record, err := p.loadOperationRecord(operationID)
+	if errors.Is(err, job.ErrNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, true, err
+	}
+	return record.State.Terminal(), true, nil
 }
 
 // SubjectForOperation returns the subject retained with this exact operation.
@@ -119,7 +160,7 @@ func (p *Provider) SubjectForOperation(operationID, scope string) (*Authenticate
 		return nil, false, nil
 	}
 	if record.scope != scope {
-		return nil, true, errors.New("acceptance: operation scope mismatch")
+		return nil, true, ErrOperationScope
 	}
 	if record.subject == nil {
 		return nil, true, nil
@@ -155,7 +196,11 @@ func (p *Provider) indexJournal(path string, j *journal) error {
 		copy := *j.Subject
 		subject = &copy
 	}
-	p.subjects[id] = journalSubject{scope: j.Scope, subject: subject, origin: j.SubjectOrigin, evidence: j.SubjectEvidence, journalPath: path}
+	kind := ""
+	if j.Arguments != nil {
+		kind = j.Arguments.Kind
+	}
+	p.subjects[id] = journalSubject{scope: j.Scope, subject: subject, origin: j.SubjectOrigin, evidence: j.SubjectEvidence, journalPath: path, kind: kind}
 	return nil
 }
 
@@ -233,10 +278,11 @@ type RecoverableExecutor interface {
 // AdmissionChecker refuses a submission its executor can never serve for the
 // submitting caller, before the provider journals, accepts or seals anything
 // [JOB-A16]. The provider asks it only for an identity with no journal whose
-// guarantees it supports. It returns "" to admit, "invalid" with the
-// executor's reason for a refusal the caller can repair (the same identity is
-// admissible afterwards), or "unavailable" when the executor could not obtain
-// its decision [JOB-A9]. It has no effects.
+// guarantees it supports. It returns "" to admit, "forbidden" with the
+// executor's reason when a rights decision refused this caller, "invalid"
+// with the reason for any other refusal the caller can repair (the same
+// identity is admissible afterwards in both cases), or "unavailable" when the
+// executor could not obtain its decision [JOB-A9]. It has no effects.
 type AdmissionChecker interface {
 	CheckAdmission(scope, kind string, spec []byte, required []string) (api.AcceptanceOutcome, string)
 }
@@ -444,10 +490,28 @@ func (p *Provider) Execute(ctx context.Context) error {
 	if p.executor == nil {
 		return errors.New("acceptance: execution not configured")
 	}
-	if executor, ok := p.executor.(SubjectServingExecutor); ok {
-		return executor.ServeWithSubjectLookup(ctx, p.store, p.SubjectForOperation)
+	// With a standing decision the executor's store decides each claim,
+	// renewal and progress write again, and a clock decides the rest
+	// [JOB-A18].
+	store := p.executorStore(ctx)
+	if p.standing.decide != nil {
+		// The clock's pass returns before Execute does, so nothing it
+		// started writes to the store afterwards.
+		clock, stop := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			p.standingClock(clock)
+		}()
+		defer func() {
+			stop()
+			<-done
+		}()
 	}
-	return p.executor.Serve(ctx, p.store)
+	if executor, ok := p.executor.(SubjectServingExecutor); ok {
+		return executor.ServeWithSubjectLookup(ctx, store, p.SubjectForOperation)
+	}
+	return p.executor.Serve(ctx, store)
 }
 
 // Open is a service configuration API. root is private, local, service-owned
@@ -921,6 +985,16 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 	if err := p.indexJournal(path, j); err != nil {
 		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
 	}
+	// A rights refusal is no result of the work: the same request submitted
+	// again is decided again and, when it is now permitted, runs again under
+	// this identity [JOB-A19].
+	if s != nil && j.Phase == "published" && j.Receipt != nil && j.Arguments != nil && api.ReconcileEvidence(b.scope, p.config.Owner, id, s, api.Evidence{CallerScope: j.Scope, Identity: j.Identity, Arguments: j.Arguments, Receipt: j.Receipt, HistoryAvailable: true}).Outcome == api.AcceptanceOutcomeAccepted {
+		next, refused := b.rerunRefused(path, j, *s)
+		if refused != nil {
+			return *refused, nil
+		}
+		j = next
+	}
 	v := api.ReconcileEvidence(b.scope, p.config.Owner, id, s, api.Evidence{CallerScope: j.Scope, Identity: j.Identity, Arguments: j.Arguments, Receipt: j.Receipt, HistoryAvailable: true, SealedNonAcceptance: j.Phase == "sealed"})
 	if j.Phase == "sealed" {
 		v.Reason = j.Reason
@@ -946,11 +1020,25 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 // while the executor decides, the journal answers instead.
 func (b *bound) checkAdmission(id api.RequestIdentity, s api.Submission) (api.AcceptanceResult, bool) {
 	p := b.provider
-	checker, ok := p.executor.(AdmissionChecker)
+	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+		return api.AcceptanceResult{}, false
+	}
+	refused, ok := b.admission(s)
 	if !ok {
 		return api.AcceptanceResult{}, false
 	}
 	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+		return api.AcceptanceResult{}, false
+	}
+	return refused, true
+}
+
+// admission asks the executor about s and reports its refusal, if any
+// [JOB-A16]. It reads no journal.
+func (b *bound) admission(s api.Submission) (api.AcceptanceResult, bool) {
+	p := b.provider
+	checker, ok := p.executor.(AdmissionChecker)
+	if !ok {
 		return api.AcceptanceResult{}, false
 	}
 	if _, err := p.acceptedGuarantees(s.RequiredGuarantees); err != nil {
@@ -972,14 +1060,11 @@ func (b *bound) checkAdmission(id api.RequestIdentity, s api.Submission) (api.Ac
 	} else {
 		word, reason = checker.CheckAdmission(b.scope, s.Kind, bytes.Clone(s.Spec), extra)
 	}
-	if word != api.AcceptanceOutcomeInvalid && word != api.AcceptanceOutcomeUnavailable {
+	if word != api.AcceptanceOutcomeInvalid && word != api.AcceptanceOutcomeForbidden && word != api.AcceptanceOutcomeUnavailable {
 		return api.AcceptanceResult{}, false
 	}
 	if reason == "" || len(reason) > 1024 || !utf8.ValidString(reason) {
 		reason = "the executor refused this submission"
-	}
-	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
-		return api.AcceptanceResult{}, false
 	}
 	return outcome(word, reason), true
 }
@@ -1018,9 +1103,8 @@ func (p *Provider) materialize(path string) error {
 		if err != nil {
 			return nil, err
 		}
-		var a, c bytes.Buffer
-		if json.Compact(&a, r.Spec) != nil || json.Compact(&c, j.workSpec()) != nil || r.ID != j.Receipt.OperationID || r.Kind != j.Arguments.Kind || !bytes.Equal(a.Bytes(), c.Bytes()) || !slices.Equal(r.Requires, j.WorkRequires) {
-			return nil, fmt.Errorf("acceptance: operation does not match admission")
+		if err := validateOperationRecord(j, r); err != nil {
+			return nil, err
 		}
 		if j.Phase == "published" {
 			return cur, nil
@@ -1028,6 +1112,16 @@ func (p *Provider) materialize(path string) error {
 		j.Phase = "published"
 		return json.Marshal(j)
 	})
+}
+
+// validateOperationRecord binds every observation to the immutable admission
+// evidence, whether recovery required the journal lock or was already published.
+func validateOperationRecord(j *journal, r *job.Record) error {
+	var a, c bytes.Buffer
+	if json.Compact(&a, r.Spec) != nil || json.Compact(&c, j.workSpec()) != nil || r.ID != j.Receipt.OperationID || r.Kind != j.Arguments.Kind || !bytes.Equal(a.Bytes(), c.Bytes()) || !slices.Equal(r.Requires, j.WorkRequires) {
+		return fmt.Errorf("acceptance: operation does not match admission")
+	}
+	return nil
 }
 
 func (b *bound) CancelWork(id api.RequestIdentity) (api.CancellationResult, error) {

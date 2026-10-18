@@ -14,10 +14,16 @@ import (
 // the pipe closes when this process exits, however it exits, and cat goes with
 // it. That is the lifetime a D-Bus inhibitor fd has, without a D-Bus client.
 // The echo arrives once the inhibitor is in place, so the hold is real on return.
-func keepAwake(who, why string) (func(), error) {
+// With display, macOS also keeps the display on (caffeinate -d), as Windows
+// does for GPU work; a display turning off is no standby entry on Linux.
+func keepAwake(who, why string, display bool) (func(), error) {
 	var c *exec.Cmd
 	if runtime.GOOS == "darwin" {
-		c = exec.Command("caffeinate", "-i", "sh", "-c", "echo; exec cat")
+		flags := "-i"
+		if display {
+			flags = "-di"
+		}
+		c = exec.Command("caffeinate", flags, "sh", "-c", "echo; exec cat")
 	} else {
 		c = exec.Command("systemd-inhibit", "--what=idle:sleep", "--mode=block",
 			"--who="+who, "--why="+why, "sh", "-c", "echo; exec cat")

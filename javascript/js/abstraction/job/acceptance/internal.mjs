@@ -232,6 +232,20 @@ export const ResultOutcome = Object.freeze({
   Invalid: "invalid",
 });
 
+export const LinkOutcome = Object.freeze({
+  Linked: "linked",
+  NotReady: "not_ready",
+  Unavailable: "unavailable",
+  Unsupported: "unsupported",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  Exists: "exists",
+  OtherVolume: "other_volume",
+  NoHardLinks: "no_hard_links",
+  Remote: "remote",
+});
+
 export const InventoryOutcome = Object.freeze({
   Page: "page",
   Gap: "gap",
@@ -632,6 +646,34 @@ function writeResultRead(out, v, depth) {
   out.byte(0x7d);
 }
 
+function writeResultLink(out, v, depth) {
+    if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
+    if (v.outcome !== "linked" && v.outcome !== "not_ready" && v.outcome !== "unavailable" && v.outcome !== "unsupported" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "exists" && v.outcome !== "other_volume" && v.outcome !== "no_hard_links" && v.outcome !== "remote") { throw new Refusal("bad_enum",0); }
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "outcome");
+  out.ascii(": ");
+  esc(out, v.outcome);
+  if (v.receipt !== undefined && v.receipt !== null) {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "receipt");
+    out.ascii(": ");
+    writeReceipt(out, v.receipt, depth + 1);
+  }
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "size");
+  out.ascii(": ");
+  num(out, v.size);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
 function writeInventoryPage(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "page" && v.outcome !== "gap" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
@@ -750,6 +792,24 @@ function writeOAOperationControlReadResultArguments(out, v, depth) {
   esc(out, "max_bytes");
   out.ascii(": ");
   num(out, v.maxBytes);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAOperationControlLinkResultArguments(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "identity");
+  out.ascii(": ");
+  writeRequestIdentity(out, v.identity, depth + 1);
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "destination");
+  out.ascii(": ");
+  esc(out, v.destination);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -954,6 +1014,18 @@ function writeOAOperationControlReadResultResult(out, v, depth) {
   esc(out, "value");
   out.ascii(": ");
   writeResultRead(out, v.value, depth + 1);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAOperationControlLinkResultResult(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "value");
+  out.ascii(": ");
+  writeResultLink(out, v.value, depth + 1);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -1408,6 +1480,17 @@ export function newResultRead() {
   return { outcome: "", chunk: null };
 }
 
+// Exactly linked carries the original receipt and the result's size in bytes;
+// other outcomes forbid a receipt and carry size zero. Linked means the
+// destination is a second name for the provider's own verified result bytes;
+// the provider keeps its name and retention. Other_volume and no_hard_links
+// name why no hard link could be made; remote refuses a caller without
+// receiver-verified local peer evidence, which keeps reading with ReadResult;
+// exists names a destination already present, which stays as it was (JOB-A17).
+export function newResultLink() {
+  return { outcome: "", receipt: null, size: 0n };
+}
+
 // Caller-scoped accepted-operation observations without paths. Only page
 // carries snapshots. A noncomplete page always has a next cursor, even when no
 // own operations were scanned. Complete pages have empty next. Refusals carry
@@ -1451,6 +1534,10 @@ function newOAOperationControlObserveWorkArguments() {
 
 function newOAOperationControlReadResultArguments() {
   return { identity: newRequestIdentity(), offset: 0n, maxBytes: 0n };
+}
+
+function newOAOperationControlLinkResultArguments() {
+  return { identity: newRequestIdentity(), destination: "" };
 }
 
 function newOAJobInventoryListWorkArguments() {
@@ -1499,6 +1586,10 @@ function newOAOperationControlObserveWorkResult() {
 
 function newOAOperationControlReadResultResult() {
   return { value: newResultRead() };
+}
+
+function newOAOperationControlLinkResultResult() {
+  return { value: newResultLink() };
 }
 
 function newOAJobInventoryListWorkResult() {
@@ -2063,6 +2154,50 @@ function readResultRead(r) {
   return v;
 }
 
+function readResultLink(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newResultLink();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "outcome") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.outcome = r.string();
+      } else if (key === "receipt") {
+        if (seen & 2) throw r.refuse("duplicate_field");
+        seen |= 2;
+        v.receipt = readReceipt(r);
+      } else if (key === "size") {
+        if (seen & 4) throw r.refuse("duplicate_field");
+        seen |= 4;
+        v.size = r.integer(-9223372036854775808n, 9223372036854775807n);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 5) >>> 0) !== 5) throw r.refuse("missing_field");
+    if (v.outcome !== "linked" && v.outcome !== "not_ready" && v.outcome !== "unavailable" && v.outcome !== "unsupported" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "exists" && v.outcome !== "other_volume" && v.outcome !== "no_hard_links" && v.outcome !== "remote") { throw r.refuse("bad_enum"); }
+  return v;
+}
+
 function readInventoryPage(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
@@ -2358,6 +2493,45 @@ function readOAOperationControlReadResultArguments(r) {
   r.pos++;
   r.depth--;
   if (((seen & 7) >>> 0) !== 7) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAOperationControlLinkResultArguments(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAOperationControlLinkResultArguments();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "identity") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.identity = readRequestIdentity(r);
+      } else if (key === "destination") {
+        if (seen & 2) throw r.refuse("duplicate_field");
+        seen |= 2;
+        v.destination = r.string();
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 3) >>> 0) !== 3) throw r.refuse("missing_field");
   return v;
 }
 
@@ -2821,6 +2995,41 @@ function readOAOperationControlReadResultResult(r) {
   return v;
 }
 
+function readOAOperationControlLinkResultResult(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAOperationControlLinkResultResult();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "value") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.value = readResultLink(r);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
 function readOAJobInventoryListWorkResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
@@ -3008,6 +3217,7 @@ _serviceRecords["OperationSnapshot"] = [["receipt","Receipt","never"],["state","
 _serviceRecords["ObservationResult"] = [["outcome","string","never"],["snapshot","OperationSnapshot","absent"],];
 _serviceRecords["ResultChunk"] = [["receipt","Receipt","never"],["offset","i64","never"],["total","i64","never"],["data","binary","never"],["eof","bool","never"],];
 _serviceRecords["ResultRead"] = [["outcome","string","never"],["chunk","ResultChunk","absent"],];
+_serviceRecords["ResultLink"] = [["outcome","string","never"],["receipt","Receipt","absent"],["size","i64","never"],];
 _serviceRecords["InventoryPage"] = [["outcome","string","never"],["snapshots","list<OperationSnapshot>","never"],["next","string","never"],["complete","bool","never"],];
 _serviceRecords["OperatorCancellation"] = [["outcome","string","never"],];
 _serviceRecords["OARecoverableAcceptanceGetHistoryWindowArguments"] = [];
@@ -3016,6 +3226,7 @@ _serviceRecords["OARecoverableAcceptanceReconcileArguments"] = [["identity","Req
 _serviceRecords["OARecoverableAcceptanceCancelWorkArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OAOperationControlObserveWorkArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OAOperationControlReadResultArguments"] = [["identity","RequestIdentity","never"],["offset","i64","never"],["maxBytes","i64","never"],];
+_serviceRecords["OAOperationControlLinkResultArguments"] = [["identity","RequestIdentity","never"],["destination","string","never"],];
 _serviceRecords["OAJobInventoryListWorkArguments"] = [["cursor","string","never"],["limit","i64","never"],];
 _serviceRecords["OAJobOperatorListAccountWorkArguments"] = [["cursor","string","never"],["limit","i64","never"],];
 _serviceRecords["OAJobOperatorCancelOperationArguments"] = [["operationId","string","never"],];
@@ -3028,6 +3239,7 @@ _serviceRecords["OARecoverableAcceptanceReconcileResult"] = [["value","Acceptanc
 _serviceRecords["OARecoverableAcceptanceCancelWorkResult"] = [["value","CancellationResult","never"],];
 _serviceRecords["OAOperationControlObserveWorkResult"] = [["value","ObservationResult","never"],];
 _serviceRecords["OAOperationControlReadResultResult"] = [["value","ResultRead","never"],];
+_serviceRecords["OAOperationControlLinkResultResult"] = [["value","ResultLink","never"],];
 _serviceRecords["OAJobInventoryListWorkResult"] = [["value","InventoryPage","never"],];
 _serviceRecords["OAJobOperatorListAccountWorkResult"] = [["value","InventoryPage","never"],];
 _serviceRecords["OAJobOperatorCancelOperationResult"] = [["value","OperatorCancellation","never"],];
@@ -3129,6 +3341,19 @@ export class OperationControlClient {
     const _request = _serviceRequest("abstraction.job/operations@1", "ReadResult", _payload);
     const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operations@1", "ReadResult");
     const _result = _serviceDecode(readOAOperationControlReadResultResult, _reply, 1);
+    return _result.value;
+  }
+
+  async linkResult(identity, destination) {
+    const _args = newOAOperationControlLinkResultArguments();
+    _args.identity = identity;
+    _args.destination = destination;
+    _serviceCheck("OAOperationControlLinkResultArguments", _args);
+    const _payload = _serviceEncode(writeOAOperationControlLinkResultArguments, _args, 1);
+    _serviceDecode(readOAOperationControlLinkResultArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operations@1", "LinkResult", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operations@1", "LinkResult");
+    const _result = _serviceDecode(readOAOperationControlLinkResultResult, _reply, 1);
     return _result.value;
   }
 }
