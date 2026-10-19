@@ -14,7 +14,7 @@
   },
   "type": "module",
   "types": "./js/abstraction/job/acceptance/index.d.mts",
-  "exports": {".": {"types": "./js/abstraction/job/acceptance/index.d.mts", "default": "./js/abstraction/job/acceptance/index.mjs"}},
+  "exports": {".": {"types": "./js/abstraction/job/acceptance/index.d.mts", "default": "./js/abstraction/job/acceptance/index.mjs"}, "./internal": "./js/abstraction/job/acceptance/internal.mjs"},
   "files": [
     "js"
   ],

@@ -4,11 +4,14 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
-	holdLockFileEx   = syscall.NewLazyDLL("kernel32.dll").NewProc("LockFileEx")
-	holdUnlockFileEx = syscall.NewLazyDLL("kernel32.dll").NewProc("UnlockFileEx")
+	kernel32         = windows.NewLazySystemDLL("kernel32.dll")
+	holdLockFileEx   = kernel32.NewProc("LockFileEx")
+	holdUnlockFileEx = kernel32.NewProc("UnlockFileEx")
 )
 
 // holdLock takes an exclusive byte-range lock without waiting and reports

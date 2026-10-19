@@ -11,9 +11,13 @@ import (
 var ErrHostActive = errors.New("acceptance: another host owns this store")
 
 // AcquireHost reserves a service's private root before recovery or execution.
-// The caller retains the returned handle until all admitted calls and workers
-// have drained. OS process death also releases ownership. The lock file stays
-// in place: deleting it would allow a second lock inode for the same store.
+// The caller retains the returned handle until all admitted calls have
+// drained. Admitted calls hold no lease and no epoch fences them. Its executor
+// may be left running once its drain bound passed and YieldHeld(0) lapsed
+// every lease the executor still holds [JOB-R9]; the store refuses that
+// executor's later record writes by epoch. OS process death also releases
+// ownership. The lock file stays in place: deleting it would allow a second
+// lock inode for the same store.
 // Direct provider users retain responsibility for their own lifecycle. Older
 // hosts that predate this guard must be stopped before replacement or migration.
 func AcquireHost(path string) (io.Closer, error) {

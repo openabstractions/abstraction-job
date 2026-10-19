@@ -95,6 +95,26 @@ export declare class JobOperatorClient {
 
 export declare const JobOperatorService: Readonly<{ wireName: "abstraction.job/operator@1"; Client: typeof JobOperatorClient }>;
 
+// JsonRecords maps each record name toJson and fromJson take to its type.
+export interface JsonRecords {
+  RequestIdentity: RequestIdentity;
+  Submission: Submission;
+  Receipt: Receipt;
+  AcceptanceResult: AcceptanceResult;
+  HistoryWindow: HistoryWindow;
+  CancellationResult: CancellationResult;
+  WorkProgress: WorkProgress;
+  WorkFailure: WorkFailure;
+  OperationSnapshot: OperationSnapshot;
+  ObservationResult: ObservationResult;
+  ResultChunk: ResultChunk;
+  ResultRead: ResultRead;
+  ResultLink: ResultLink;
+  WorkObservation: WorkObservation;
+  InventoryPage: InventoryPage;
+  OperatorCancellation: OperatorCancellation;
+}
+
 export type LinkOutcome = (typeof LinkOutcome)[keyof typeof LinkOutcome];
 export declare const LinkOutcome: Readonly<{ Linked: "linked"; NotReady: "not_ready"; Unavailable: "unavailable"; Unsupported: "unsupported"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid"; Exists: "exists"; OtherVolume: "other_volume"; NoHardLinks: "no_hard_links"; Remote: "remote" }>;
 
@@ -116,6 +136,9 @@ export declare class OperationControlClient {
   constructor(transport: FrameTransport);
   /** Observe in the original authenticated acceptance scope. Absent identities remain unsealed; may recover an already accepted journal. */
   observeWork(identity: RequestIdentity): Promise<ObservationResult>;
+  /** Wait at most 30000ms for JOB-N1 visible change through job.Watch and watch.Gate. Recheck receiving authority after every read and wake. Provider restart gives gap; a foreign scope or identity cursor is forbidden. Cancellation ends only this read. An older operations@1 provider's unknown_method reads unsupported. */
+  followWork(identity: RequestIdentity, after: string, waitMs: bigint): Promise<WorkObservation>;
+  followWorkPages(identity: RequestIdentity, after: string, waitMs: bigint): AsyncIterableIterator<WorkObservation>;
   /** Read complete immutable bytes without exposing paths. Offset must be nonnegative; max_bytes must be in 1..65536. Data obeys ResultChunk bounds. Absence, failure, incomplete work and transport errors are never EOF. This read never seals an absent identity. */
   readResult(identity: RequestIdentity, offset: bigint, maxBytes: bigint): Promise<ResultRead>;
   /** Hard-link a complete result to destination for a local caller on this machine, under the caller's own authority to create that path, and never copy it. Destination is an absolute clean path of 1..4096 bytes whose parent directory exists, outside the provider's own root, and that does not exist yet. This call never seals an absent identity (JOB-A17). */
@@ -157,7 +180,8 @@ export interface OperatorCancellation {
 export type OperatorCancellationOutcome = (typeof OperatorCancellationOutcome)[keyof typeof OperatorCancellationOutcome];
 export declare const OperatorCancellationOutcome: Readonly<{ Requested: "requested"; AlreadyTerminal: "already_terminal"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid"; Unavailable: "unavailable" }>;
 
-// Recoverable acceptance evidence. Retention is a minimum duration from
+// [Receipt](https://openabstractions.github.io/reference.html#concept-job.acceptance-receipt):
+// recoverable acceptance evidence. Retention is a minimum duration from
 // original acceptance, never renewed by replay. Expiry does not end work,
 // transfer ownership or authorize duplicate execution. IDs confer no authority.
 export interface Receipt {
@@ -168,7 +192,7 @@ export interface Receipt {
   historyRetentionMs: bigint;
 }
 
-/** Version 1 recoverable acceptance vocabulary, local or remote. Providers must implement atomic recovery and downstream deduplication before advertising those guarantees. Legacy Store is not implicitly upgraded. */
+/** Version 1 recoverable acceptance vocabulary, local or remote. Providers must implement atomic recovery and downstream deduplication before advertising those guarantees. Legacy [Store](https://openabstractions.github.io/reference.html#concept-job.store) is not implicitly upgraded. */
 export declare class RecoverableAcceptanceClient {
   constructor(transport: FrameTransport);
   /** Obtain the logical owner and history epoch before first submission; creates no work. */
@@ -185,7 +209,7 @@ export declare const RecoverableAcceptanceService: Readonly<{ wireName: "abstrac
 
 export declare class Refusal extends Error {
   constructor(word: string, offset: number);
-  word: "malformed" | "bad_string" | "number_spelling" | "wrong_type" | "depth_exceeded" | "duplicate_key" | "duplicate_field" | "unknown_field" | "missing_field" | "bad_binary" | "bad_enum" | "trailing_bytes";
+  word: "malformed" | "bad_string" | "number_spelling" | "wrong_type" | "depth_exceeded" | "duplicate_key" | "duplicate_field" | "unknown_field" | "missing_field" | "bad_binary" | "bad_enum" | "bad_value" | "trailing_bytes";
   offset: number;
 }
 
@@ -272,8 +296,28 @@ export interface WorkFailure {
   cause: FailureCause | (string & {});
 }
 
-// Advisory nonnegative progress. Zero total means unknown. Progress does not
-// authorize delivery or imply completion.
+// Exactly changed carries the current snapshot. Changed and unchanged carry the
+// next cursor; gap retains the supplied cursor and requires a fresh
+// empty-cursor snapshot. Other outcomes carry neither snapshot nor cursor. The
+// cursor binds provider instance, authenticated acceptance scope, request
+// identity and JOB-N1 visible state. Observation never seals absence or cancels
+// work.
+export interface WorkObservation {
+  outcome: WorkObservationOutcome;
+  next: string;
+  snapshot: OperationSnapshot | null;
+  mechanism: WorkObservationMechanism;
+}
+
+export type WorkObservationMechanism = (typeof WorkObservationMechanism)[keyof typeof WorkObservationMechanism];
+export declare const WorkObservationMechanism: Readonly<{ Native: "native"; Polled: "polled" }>;
+
+export type WorkObservationOutcome = (typeof WorkObservationOutcome)[keyof typeof WorkObservationOutcome];
+export declare const WorkObservationOutcome: Readonly<{ Changed: "changed"; Unchanged: "unchanged"; Gap: "gap"; Unknown: "unknown"; Forbidden: "forbidden"; Invalid: "invalid"; Unavailable: "unavailable"; Unsupported: "unsupported" }>;
+
+// Advisory nonnegative progress. Zero total means unknown.
+// [WorkProgress](https://openabstractions.github.io/reference.html#concept-job.progress)
+// does not authorize delivery or imply completion.
 export interface WorkProgress {
   done: bigint;
   total: bigint;
@@ -288,7 +332,73 @@ export declare const admissionGuarantees: readonly ["abstraction.job/caller-exit
 
 export declare function decode(data: Uint8Array): AcceptanceResult;
 
+export declare function decodeAcceptanceResult(data: Uint8Array): AcceptanceResult;
+
+export declare function decodeCancellationResult(data: Uint8Array): CancellationResult;
+
+export declare function decodeHistoryWindow(data: Uint8Array): HistoryWindow;
+
+export declare function decodeInventoryPage(data: Uint8Array): InventoryPage;
+
+export declare function decodeObservationResult(data: Uint8Array): ObservationResult;
+
+export declare function decodeOperationSnapshot(data: Uint8Array): OperationSnapshot;
+
+export declare function decodeOperatorCancellation(data: Uint8Array): OperatorCancellation;
+
+export declare function decodeReceipt(data: Uint8Array): Receipt;
+
+export declare function decodeRequestIdentity(data: Uint8Array): RequestIdentity;
+
+export declare function decodeResultChunk(data: Uint8Array): ResultChunk;
+
+export declare function decodeResultLink(data: Uint8Array): ResultLink;
+
+export declare function decodeResultRead(data: Uint8Array): ResultRead;
+
+export declare function decodeSubmission(data: Uint8Array): Submission;
+
+export declare function decodeWorkFailure(data: Uint8Array): WorkFailure;
+
+export declare function decodeWorkObservation(data: Uint8Array): WorkObservation;
+
+export declare function decodeWorkProgress(data: Uint8Array): WorkProgress;
+
 export declare function encode(v: AcceptanceResult): Uint8Array;
+
+export declare function encodeAcceptanceResult(v: AcceptanceResult): Uint8Array;
+
+export declare function encodeCancellationResult(v: CancellationResult): Uint8Array;
+
+export declare function encodeHistoryWindow(v: HistoryWindow): Uint8Array;
+
+export declare function encodeInventoryPage(v: InventoryPage): Uint8Array;
+
+export declare function encodeObservationResult(v: ObservationResult): Uint8Array;
+
+export declare function encodeOperationSnapshot(v: OperationSnapshot): Uint8Array;
+
+export declare function encodeOperatorCancellation(v: OperatorCancellation): Uint8Array;
+
+export declare function encodeReceipt(v: Receipt): Uint8Array;
+
+export declare function encodeRequestIdentity(v: RequestIdentity): Uint8Array;
+
+export declare function encodeResultChunk(v: ResultChunk): Uint8Array;
+
+export declare function encodeResultLink(v: ResultLink): Uint8Array;
+
+export declare function encodeResultRead(v: ResultRead): Uint8Array;
+
+export declare function encodeSubmission(v: Submission): Uint8Array;
+
+export declare function encodeWorkFailure(v: WorkFailure): Uint8Array;
+
+export declare function encodeWorkObservation(v: WorkObservation): Uint8Array;
+
+export declare function encodeWorkProgress(v: WorkProgress): Uint8Array;
+
+export declare const fromJson: <K extends keyof JsonRecords>(kind: K, data: Uint8Array) => JsonRecords[K];
 
 export declare function newAcceptanceResult(): AcceptanceResult;
 
@@ -318,8 +428,12 @@ export declare function newSubmission(): Submission;
 
 export declare function newWorkFailure(): WorkFailure;
 
+export declare function newWorkObservation(): WorkObservation;
+
 export declare function newWorkProgress(): WorkProgress;
 
 export declare const resourceActions: readonly ["abstraction.job/acceptance.submit", "abstraction.job/acceptance.cancel", "abstraction.job/inventory.read"];
+
+export declare const toJson: <K extends keyof JsonRecords>(kind: K, value: JsonRecords[K]) => Uint8Array;
 
 export {};

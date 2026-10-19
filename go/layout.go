@@ -27,10 +27,9 @@ import "strings"
 // answer for a caller that has not been given an id yet.
 //
 // Case is folded and a trailing dot or space is trimmed from every segment, on
-// every platform. That is deliberately unlike the containment comparison, which
-// folds case only where the filesystem does: containment compares two paths on
-// THIS machine, and this compares a record's path against names the contract
-// fixed. A record refused by Windows and accepted by Linux would mean the
+// every platform. This compares a record's locator against the fixed reserved
+// namespace in DL-S9–S14. Filesystem containment is checked separately.
+// A record refused by Windows and accepted by Linux would mean the
 // refusal depends on who looked — and `Jobs/x.json` does land in `jobs/` on
 // NTFS, as does `jobs./x.json`.
 func Reserved(owner, rel string) bool {
@@ -64,8 +63,8 @@ func RootName(rel string) string {
 	return segs[0]
 }
 
-// storeSegments reduces a relative path to the segments a store would see, in
-// the one spelling two of them can be compared in.
+// storeSegments applies the fixed reserved-namespace grammar to a relative
+// locator before membership is checked.
 //
 // A path that climbs above the root returns nothing: that is containment's
 // question, already answered before this one is asked, and answering it again
@@ -89,7 +88,7 @@ func storeSegments(rel string) []string {
 
 func isSeparator(r rune) bool { return r == '/' || r == '\\' }
 
-// foldSegment is one segment in the spelling a filesystem would give it.
+// foldSegment applies DL-S12's fixed reserved-name spelling to one segment.
 //
 // Windows drops a trailing dot or space from a name, so `jobs.` opens `jobs`.
 // Dropping it here too keeps the answer the same on both platforms, which is

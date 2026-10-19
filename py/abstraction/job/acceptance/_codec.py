@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 
+
 _HEX = b"0123456789abcdef"
 _WS = (0x20, 0x09, 0x0A, 0x0D)
 _SHORT = {0x22: b'\\"', 0x5C: b"\\\\", 0x08: b"\\b", 0x0C: b"\\f",
@@ -45,53 +46,9 @@ def _strs(out, v, depth):
 
 
 def _raw(out, s, depth):
-    b = s.encode("utf-8") if isinstance(s, str) else s
-    i, n = 0, len(b)
-    while i < n:
-        c = b[i]
-        if c in _WS:
-            i += 1
-        elif c == 0x22:
-            j = i + 1
-            while j < n:
-                if b[j] == 0x5C:
-                    j += 2
-                    continue
-                if b[j] == 0x22:
-                    j += 1
-                    break
-                j += 1
-            out += b[i:j]
-            i = j
-        elif c in (0x7B, 0x5B):
-            out.append(c)
-            i += 1
-            j = i
-            while j < n and b[j] in _WS:
-                j += 1
-            if j < n and b[j] in (0x7D, 0x5D):
-                out.append(b[j])
-                i = j + 1
-            else:
-                depth += 1
-                out += b"\n"
-                _pad(out, depth)
-        elif c in (0x7D, 0x5D):
-            depth -= 1
-            out += b"\n"
-            _pad(out, depth)
-            out.append(c)
-            i += 1
-        elif c == 0x2C:
-            out += b",\n"
-            _pad(out, depth)
-            i += 1
-        elif c == 0x3A:
-            out += b": "
-            i += 1
-        else:
-            out.append(c)
-            i += 1
+    # An opaque value's bytes as they are ([DEF-A3]).
+    # Whitespace around the value is not part of it.
+    out += (s.encode("utf-8") if isinstance(s, str) else bytes(s)).strip(bytes(_WS))
 
 
 def _rawmap(out, m, depth):
@@ -238,6 +195,22 @@ class LinkOutcome(_StrEnum):
     REMOTE = "remote"
 
 
+class WorkObservationOutcome(_StrEnum):
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+    GAP = "gap"
+    UNKNOWN = "unknown"
+    FORBIDDEN = "forbidden"
+    INVALID = "invalid"
+    UNAVAILABLE = "unavailable"
+    UNSUPPORTED = "unsupported"
+
+
+class WorkObservationMechanism(_StrEnum):
+    NATIVE = "native"
+    POLLED = "polled"
+
+
 class InventoryOutcome(_StrEnum):
     PAGE = "page"
     GAP = "gap"
@@ -306,7 +279,8 @@ class Submission:
 
 @dataclasses.dataclass(kw_only=True)
 class Receipt:
-    """Recoverable acceptance evidence. Retention is a minimum duration from
+    """[Receipt](https://openabstractions.github.io/reference.html#concept-job.acceptance-receipt):
+    recoverable acceptance evidence. Retention is a minimum duration from
     original acceptance, never renewed by replay. Expiry does not end work,
     transfer ownership or authorize duplicate execution. IDs confer no
     authority."""
@@ -359,8 +333,9 @@ class CancellationResult:
 
 @dataclasses.dataclass(kw_only=True)
 class WorkProgress:
-    """Advisory nonnegative progress. Zero total means unknown. Progress does not
-    authorize delivery or imply completion."""
+    """Advisory nonnegative progress. Zero total means unknown.
+    [WorkProgress](https://openabstractions.github.io/reference.html#concept-job.progress)
+    does not authorize delivery or imply completion."""
 
     done: int = 0
     total: int = 0
@@ -457,6 +432,21 @@ class ResultLink:
 
 
 @dataclasses.dataclass(kw_only=True)
+class WorkObservation:
+    """Exactly changed carries the current snapshot. Changed and unchanged carry
+    the next cursor; gap retains the supplied cursor and requires a fresh
+    empty-cursor snapshot. Other outcomes carry neither snapshot nor cursor. The
+    cursor binds provider instance, authenticated acceptance scope, request
+    identity and JOB-N1 visible state. Observation never seals absence or
+    cancels work."""
+
+    outcome: WorkObservationOutcome | None = None
+    next: str = ""
+    snapshot: OperationSnapshot | None = None
+    mechanism: WorkObservationMechanism | None = None
+
+
+@dataclasses.dataclass(kw_only=True)
 class InventoryPage:
     """Caller-scoped accepted-operation observations without paths. Only page
     carries snapshots. A noncomplete page always has a next cursor, even when no
@@ -507,6 +497,13 @@ class _RecoverableAcceptanceCancelWorkArguments:
 @dataclasses.dataclass(kw_only=True)
 class _OperationControlObserveWorkArguments:
     identity: RequestIdentity = dataclasses.field(default_factory=RequestIdentity)
+
+
+@dataclasses.dataclass(kw_only=True)
+class _OperationControlFollowWorkArguments:
+    identity: RequestIdentity = dataclasses.field(default_factory=RequestIdentity)
+    after: str = ""
+    wait_ms: int = 0
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -585,6 +582,11 @@ class _RecoverableAcceptanceCancelWorkResult:
 @dataclasses.dataclass(kw_only=True)
 class _OperationControlObserveWorkResult:
     value: ObservationResult = dataclasses.field(default_factory=ObservationResult)
+
+
+@dataclasses.dataclass(kw_only=True)
+class _OperationControlFollowWorkResult:
+    value: WorkObservation = dataclasses.field(default_factory=WorkObservation)
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -988,6 +990,43 @@ def _write_result_link(out, v, depth):
     out += b"}"
 
 
+def _write_work_observation(out, v, depth):
+    if isinstance(v.next, str):
+        _size = len(v.next.encode("utf-8", "surrogatepass"))
+        if _size > 256: raise Refusal("bad_value", 0)
+    if isinstance(v.next, str) and any(c < "\x20" or "\x7f" <= c <= "\x9f" for c in v.next): raise Refusal("bad_value", 0)
+    _closed_enum(WorkObservationOutcome, v.outcome)
+    _closed_enum(WorkObservationMechanism, v.mechanism)
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "outcome")
+    out += b": "
+    _esc(out, v.outcome)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "next")
+    out += b": "
+    _esc(out, v.next)
+    if v.snapshot is not None:
+        out += b","
+        out += b"\n"
+        _pad(out, depth + 1)
+        _esc(out, "snapshot")
+        out += b": "
+        _write_operation_snapshot(out, v.snapshot, depth + 1)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "mechanism")
+    out += b": "
+    _esc(out, v.mechanism)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
 def _write_inventory_page(out, v, depth):
     _closed_enum(InventoryOutcome, v.outcome)
     out += b"{"
@@ -1080,6 +1119,36 @@ def _write_oa_operation_control_observe_work_arguments(out, v, depth):
     _esc(out, "identity")
     out += b": "
     _write_request_identity(out, v.identity, depth + 1)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
+def _write_oa_operation_control_follow_work_arguments(out, v, depth):
+    if isinstance(v.after, str):
+        _size = len(v.after.encode("utf-8", "surrogatepass"))
+        if _size > 256: raise Refusal("bad_value", 0)
+    if isinstance(v.after, str) and any(c < "\x20" or "\x7f" <= c <= "\x9f" for c in v.after): raise Refusal("bad_value", 0)
+    if type(v.wait_ms) is not int: raise Refusal("wrong_type", 0)
+    if v.wait_ms < 0 or v.wait_ms > 30000: raise Refusal("bad_value", 0)
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "identity")
+    out += b": "
+    _write_request_identity(out, v.identity, depth + 1)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "after")
+    out += b": "
+    _esc(out, v.after)
+    out += b","
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "wait_ms")
+    out += b": "
+    _num(out, v.wait_ms)
     out += b"\n"
     _pad(out, depth)
     out += b"}"
@@ -1319,6 +1388,18 @@ def _write_oa_operation_control_observe_work_result(out, v, depth):
     out += b"}"
 
 
+def _write_oa_operation_control_follow_work_result(out, v, depth):
+    out += b"{"
+    out += b"\n"
+    _pad(out, depth + 1)
+    _esc(out, "value")
+    out += b": "
+    _write_work_observation(out, v.value, depth + 1)
+    out += b"\n"
+    _pad(out, depth)
+    out += b"}"
+
+
 def _write_oa_operation_control_read_result_result(out, v, depth):
     out += b"{"
     out += b"\n"
@@ -1405,12 +1486,13 @@ class Refusal(ValueError):
 
 
 class _Reader:
-    __slots__ = ("buf", "pos", "depth")
+    __slots__ = ("buf", "pos", "depth", "limit")
 
     def __init__(self, buf):
         self.buf = buf
         self.pos = 0
         self.depth = 0
+        self.limit = _DEPTH_LIMIT
 
     def refuse(self, word):
         return Refusal(word, self.pos)
@@ -1424,7 +1506,7 @@ class _Reader:
 
     def enter(self):
         self.depth += 1
-        if self.depth > _DEPTH_LIMIT:
+        if self.depth > self.limit:
             raise self.refuse("depth_exceeded")
 
     def digit(self):
@@ -2417,6 +2499,71 @@ def _read_result_link(r):
     return v
 
 
+def _read_work_observation(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = WorkObservation()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "outcome":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.outcome = r.string()
+            elif key == "next":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.next = r.string()
+            elif key == "snapshot":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.snapshot = _read_operation_snapshot(r)
+            elif key == "mechanism":
+                if seen & 8:
+                    raise r.refuse("duplicate_field")
+                seen |= 8
+                v.mechanism = r.string()
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 11 != 11:
+        raise r.refuse("missing_field")
+    _size = len(v.next.encode("utf-8", "surrogatepass"))
+    if _size > 256: raise r.refuse("bad_value")
+    if any(c < "\x20" or "\x7f" <= c <= "\x9f" for c in v.next): raise r.refuse("bad_value")
+    try:
+        v.outcome = WorkObservationOutcome(v.outcome)
+    except ValueError:
+        raise r.refuse("bad_enum") from None
+    try:
+        v.mechanism = WorkObservationMechanism(v.mechanism)
+    except ValueError:
+        raise r.refuse("bad_enum") from None
+    return v
+
+
 def _read_inventory_page(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -2705,6 +2852,59 @@ def _read_oa_operation_control_observe_work_arguments(r):
     r.depth -= 1
     if seen & 1 != 1:
         raise r.refuse("missing_field")
+    return v
+
+
+def _read_oa_operation_control_follow_work_arguments(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = _OperationControlFollowWorkArguments()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "identity":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.identity = _read_request_identity(r)
+            elif key == "after":
+                if seen & 2:
+                    raise r.refuse("duplicate_field")
+                seen |= 2
+                v.after = r.string()
+            elif key == "wait_ms":
+                if seen & 4:
+                    raise r.refuse("duplicate_field")
+                seen |= 4
+                v.wait_ms = r.integer(-9223372036854775808, 9223372036854775807)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 7 != 7:
+        raise r.refuse("missing_field")
+    _size = len(v.after.encode("utf-8", "surrogatepass"))
+    if _size > 256: raise r.refuse("bad_value")
+    if any(c < "\x20" or "\x7f" <= c <= "\x9f" for c in v.after): raise r.refuse("bad_value")
+    if v.wait_ms < 0 or v.wait_ms > 30000: raise r.refuse("bad_value")
     return v
 
 
@@ -3280,6 +3480,45 @@ def _read_oa_operation_control_observe_work_result(r):
     return v
 
 
+def _read_oa_operation_control_follow_work_result(r):
+    if r.at() != _LBRACE:
+        raise r.refuse("wrong_type")
+    r.enter()
+    r.pos += 1
+    v = _OperationControlFollowWorkResult()
+    seen = 0
+    r.ws()
+    if r.at() != _RBRACE:
+        while True:
+            r.ws()
+            if r.at() != _QUOTE:
+                raise r.refuse("malformed")
+            key = r.string()
+            r.ws()
+            if r.at() != _COLON:
+                raise r.refuse("malformed")
+            r.pos += 1
+            r.ws()
+            if key == "value":
+                if seen & 1:
+                    raise r.refuse("duplicate_field")
+                seen |= 1
+                v.value = _read_work_observation(r)
+            else:
+                raise r.refuse("unknown_field")
+            r.ws()
+            if r.at() != _COMMA:
+                break
+            r.pos += 1
+    if r.at() != _RBRACE:
+        raise r.refuse("malformed")
+    r.pos += 1
+    r.depth -= 1
+    if seen & 1 != 1:
+        raise r.refuse("missing_field")
+    return v
+
+
 def _read_oa_operation_control_read_result_result(r):
     if r.at() != _LBRACE:
         raise r.refuse("wrong_type")
@@ -3485,9 +3724,54 @@ def decode(data):
     return v
 
 
+_JSON_RECORDS = {
+    RequestIdentity: (_write_request_identity, _read_request_identity),
+    Submission: (_write_submission, _read_submission),
+    Receipt: (_write_receipt, _read_receipt),
+    AcceptanceResult: (_write_acceptance_result, _read_acceptance_result),
+    HistoryWindow: (_write_history_window, _read_history_window),
+    CancellationResult: (_write_cancellation_result, _read_cancellation_result),
+    WorkProgress: (_write_work_progress, _read_work_progress),
+    WorkFailure: (_write_work_failure, _read_work_failure),
+    OperationSnapshot: (_write_operation_snapshot, _read_operation_snapshot),
+    ObservationResult: (_write_observation_result, _read_observation_result),
+    ResultChunk: (_write_result_chunk, _read_result_chunk),
+    ResultRead: (_write_result_read, _read_result_read),
+    ResultLink: (_write_result_link, _read_result_link),
+    WorkObservation: (_write_work_observation, _read_work_observation),
+    InventoryPage: (_write_inventory_page, _read_inventory_page),
+    OperatorCancellation: (_write_operator_cancellation, _read_operator_cancellation),
+}
+
+
+def to_json(value):
+    """One record as JSON bytes, laid out as this module's documents are and
+    without the document terminator."""
+    codec = _JSON_RECORDS.get(type(value))
+    if codec is None:
+        raise TypeError("to_json takes a record of this module, not %s" % type(value).__name__)
+    out = bytearray()
+    codec[0](out, value, 0)
+    return bytes(out)
+
+
+def from_json(kind, data):
+    """Read one record of class kind from data; a refused input raises Refusal."""
+    codec = _JSON_RECORDS.get(kind)
+    if codec is None:
+        raise TypeError("from_json takes a record class of this module, not %r" % (kind,))
+    r = _Reader(bytes(data))
+    r.ws()
+    v = codec[1](r)
+    r.ws()
+    if r.pos < len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
 # _REFUSALS is in the order two of them are chosen between.
 
-_REFUSALS = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"]
+_REFUSALS = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "bad_value", "trailing_bytes"]
 
 
 def _refusal_rank(word):
@@ -3639,6 +3923,7 @@ _SERVICE_RECORDS = {
     "ResultChunk": (ResultChunk, [("receipt", "Receipt", "never"), ("offset", "i64", "never"), ("total", "i64", "never"), ("data", "binary", "never"), ("eof", "bool", "never"), ]),
     "ResultRead": (ResultRead, [("outcome", "enum", "never"), ("chunk", "ResultChunk", "absent"), ]),
     "ResultLink": (ResultLink, [("outcome", "enum", "never"), ("receipt", "Receipt", "absent"), ("size", "i64", "never"), ]),
+    "WorkObservation": (WorkObservation, [("outcome", "enum", "never"), ("next", "string", "never"), ("snapshot", "OperationSnapshot", "absent"), ("mechanism", "enum", "never"), ]),
     "InventoryPage": (InventoryPage, [("outcome", "enum", "never"), ("snapshots", "list<OperationSnapshot>", "never"), ("next", "string", "never"), ("complete", "bool", "never"), ]),
     "OperatorCancellation": (OperatorCancellation, [("outcome", "enum", "never"), ]),
     "OARecoverableAcceptanceGetHistoryWindowArguments": (_RecoverableAcceptanceGetHistoryWindowArguments, []),
@@ -3646,6 +3931,7 @@ _SERVICE_RECORDS = {
     "OARecoverableAcceptanceReconcileArguments": (_RecoverableAcceptanceReconcileArguments, [("identity", "RequestIdentity", "never"), ]),
     "OARecoverableAcceptanceCancelWorkArguments": (_RecoverableAcceptanceCancelWorkArguments, [("identity", "RequestIdentity", "never"), ]),
     "OAOperationControlObserveWorkArguments": (_OperationControlObserveWorkArguments, [("identity", "RequestIdentity", "never"), ]),
+    "OAOperationControlFollowWorkArguments": (_OperationControlFollowWorkArguments, [("identity", "RequestIdentity", "never"), ("after", "string", "never"), ("wait_ms", "i64", "never"), ]),
     "OAOperationControlReadResultArguments": (_OperationControlReadResultArguments, [("identity", "RequestIdentity", "never"), ("offset", "i64", "never"), ("max_bytes", "i64", "never"), ]),
     "OAOperationControlLinkResultArguments": (_OperationControlLinkResultArguments, [("identity", "RequestIdentity", "never"), ("destination", "string", "never"), ]),
     "OAJobInventoryListWorkArguments": (_JobInventoryListWorkArguments, [("cursor", "string", "never"), ("limit", "i64", "never"), ]),
@@ -3659,6 +3945,7 @@ _SERVICE_RECORDS = {
     "OARecoverableAcceptanceReconcileResult": (_RecoverableAcceptanceReconcileResult, [("value", "AcceptanceResult", "never"), ]),
     "OARecoverableAcceptanceCancelWorkResult": (_RecoverableAcceptanceCancelWorkResult, [("value", "CancellationResult", "never"), ]),
     "OAOperationControlObserveWorkResult": (_OperationControlObserveWorkResult, [("value", "ObservationResult", "never"), ]),
+    "OAOperationControlFollowWorkResult": (_OperationControlFollowWorkResult, [("value", "WorkObservation", "never"), ]),
     "OAOperationControlReadResultResult": (_OperationControlReadResultResult, [("value", "ResultRead", "never"), ]),
     "OAOperationControlLinkResultResult": (_OperationControlLinkResultResult, [("value", "ResultLink", "never"), ]),
     "OAJobInventoryListWorkResult": (_JobInventoryListWorkResult, [("value", "InventoryPage", "never"), ]),
@@ -3670,7 +3957,9 @@ _SERVICE_RECORDS = {
 class RecoverableAcceptance:
     """Version 1 recoverable acceptance vocabulary, local or remote. Providers must
     implement atomic recovery and downstream deduplication before advertising
-    those guarantees. Legacy Store is not implicitly upgraded."""
+    those guarantees. Legacy
+    [Store](https://openabstractions.github.io/reference.html#concept-job.store)
+    is not implicitly upgraded."""
 
     def get_history_window(self) -> HistoryWindow:
         """Obtain the logical owner and history epoch before first submission;
@@ -3755,6 +4044,14 @@ class OperationControl:
         identities remain unsealed; may recover an already accepted journal."""
         raise NotImplementedError
 
+    def follow_work(self, identity: RequestIdentity, after: str, wait_ms: int) -> WorkObservation:
+        """Wait at most 30000ms for JOB-N1 visible change through job.Watch and
+        watch.Gate. Recheck receiving authority after every read and wake.
+        Provider restart gives gap; a foreign scope or identity cursor is
+        forbidden. Cancellation ends only this read. An older operations@1
+        provider's unknown_method reads unsupported."""
+        raise NotImplementedError
+
     def read_result(self, identity: RequestIdentity, offset: int, max_bytes: int) -> ResultRead:
         """Read complete immutable bytes without exposing paths. Offset must be
         nonnegative; max_bytes must be in 1..65536. Data obeys ResultChunk
@@ -3787,6 +4084,34 @@ class OperationControlClient(OperationControl):
         _payload = _service_response(self._transport.exchange_frame(_request), "abstraction.job/operations@1", "ObserveWork")
         _result = _service_decode(_read_oa_operation_control_observe_work_result, _payload, 1)
         return _result.value
+
+    def follow_work(self, identity: RequestIdentity, after: str, wait_ms: int) -> WorkObservation:
+        _service_check("RequestIdentity", identity)
+        _service_check("string", after)
+        _service_check("i64", wait_ms)
+        _args = _OperationControlFollowWorkArguments()
+        _args.identity = identity
+        _args.after = after
+        _args.wait_ms = wait_ms
+        _arguments = _service_encode(_write_oa_operation_control_follow_work_arguments, _args, 1)
+        _service_decode(_read_oa_operation_control_follow_work_arguments, _arguments, 1)
+        _request = _service_request("abstraction.job/operations@1", "FollowWork", _arguments)
+        _payload = _service_response(self._transport.exchange_frame(_request), "abstraction.job/operations@1", "FollowWork")
+        _result = _service_decode(_read_oa_operation_control_follow_work_result, _payload, 1)
+        return _result.value
+
+    def follow_work_pages(self, identity: RequestIdentity, after: str, wait_ms: int):
+        if type(wait_ms) is not int or not 0 <= wait_ms <= 30000:
+            raise ValueError("observe wait_ms is 0..30000")
+        _observe_client = self
+        class _ObservePages:
+            def __iter__(self): return self
+            def __next__(self):
+                nonlocal after
+                _observe_page = _observe_client.follow_work(identity, after, wait_ms)
+                after = _observe_page.next
+                return _observe_page
+        return _ObservePages()
 
     def read_result(self, identity: RequestIdentity, offset: int, max_bytes: int) -> ResultRead:
         _service_check("RequestIdentity", identity)
@@ -3916,3 +4241,700 @@ class JobOperatorClient(JobOperator):
         _payload = _service_response(self._transport.exchange_frame(_request), "abstraction.job/operator@1", "CancelOperation")
         _result = _service_decode(_read_oa_job_operator_cancel_operation_result, _payload, 1)
         return _result.value
+
+
+_NAMED_IMPORTED = {}
+
+_NAMED_RECORDS = {
+    "RequestIdentity": (RequestIdentity, [("key", "string", "never"), ("history_epoch", "string", "never"), ("attempt", "i64", "zero"), ]),
+    "Submission": (Submission, [("identity", "RequestIdentity", "never"), ("kind", "string", "never"), ("spec", "binary", "never"), ("required_guarantees", "list<string>", "never"), ("label", "string", "absent"), ]),
+    "Receipt": (Receipt, [("identity", "RequestIdentity", "never"), ("logical_owner", "string", "never"), ("operation_id", "string", "never"), ("accepted_guarantees", "list<string>", "never"), ("history_retention_ms", "i64", "never"), ]),
+    "AcceptanceResult": (AcceptanceResult, [("outcome", "enum", "never"), ("receipt", "Receipt", "absent"), ("reason", "string", "never"), ]),
+    "HistoryWindow": (HistoryWindow, [("logical_owner", "string", "never"), ("history_epoch", "string", "never"), ("minimum_retention_ms", "i64", "never"), ("result_retention_ms", "i64", "zero"), ]),
+    "CancellationResult": (CancellationResult, [("outcome", "enum", "never"), ]),
+    "WorkProgress": (WorkProgress, [("done", "i64", "never"), ("total", "i64", "never"), ]),
+    "WorkFailure": (WorkFailure, [("classification", "enum", "never"), ("message", "string", "never"), ("cause", "enum", "zero"), ]),
+    "OperationSnapshot": (OperationSnapshot, [("receipt", "Receipt", "never"), ("state", "enum", "never"), ("progress", "WorkProgress", "never"), ("cancellation_requested", "bool", "never"), ("failure", "WorkFailure", "absent"), ("label", "string", "absent"), ("label_derived", "bool", "zero"), ("waiting", "string", "zero"), ]),
+    "ObservationResult": (ObservationResult, [("outcome", "enum", "never"), ("snapshot", "OperationSnapshot", "absent"), ]),
+    "ResultChunk": (ResultChunk, [("receipt", "Receipt", "never"), ("offset", "i64", "never"), ("total", "i64", "never"), ("data", "binary", "never"), ("eof", "bool", "never"), ]),
+    "ResultRead": (ResultRead, [("outcome", "enum", "never"), ("chunk", "ResultChunk", "absent"), ]),
+    "ResultLink": (ResultLink, [("outcome", "enum", "never"), ("receipt", "Receipt", "absent"), ("size", "i64", "never"), ]),
+    "WorkObservation": (WorkObservation, [("outcome", "enum", "never"), ("next", "string", "never"), ("snapshot", "OperationSnapshot", "absent"), ("mechanism", "enum", "never"), ]),
+    "InventoryPage": (InventoryPage, [("outcome", "enum", "never"), ("snapshots", "list<OperationSnapshot>", "never"), ("next", "string", "never"), ("complete", "bool", "never"), ]),
+    "OperatorCancellation": (OperatorCancellation, [("outcome", "enum", "never"), ]),
+}
+
+
+def _named_check(kind, value, depth=0, limit=_DEPTH_LIMIT):
+    # Python coercions must not silently change typed service arguments.
+    if depth >= limit and (kind.startswith(("list<", "map<")) or kind in _NAMED_RECORDS):
+        raise Refusal("depth_exceeded", 0)
+    if kind == "binary":
+        valid = type(value) is bytes
+    elif kind == "string":
+        valid = type(value) is str
+    elif kind == "enum":
+        valid = value is None or isinstance(value, str)
+    elif kind in ("i32", "i64"):
+        valid = type(value) is int
+        if valid:
+            limit = 1 << (31 if kind == "i32" else 63)
+            if not -limit <= value < limit:
+                raise Refusal("number_spelling", 0)
+    elif kind == "bool":
+        valid = type(value) is bool
+    elif kind == "json":
+        valid = isinstance(value, (str, bytes, bytearray, memoryview))
+    elif kind.startswith("list<"):
+        valid = type(value) is list
+        if valid:
+            for item in value:
+                _named_check(kind[5:-1], item, depth + 1, limit)
+    elif kind.startswith("map<string,"):
+        valid = type(value) is dict
+        if valid:
+            for key, item in value.items():
+                _named_check("string", key, depth + 1, limit)
+                _named_check(kind[11:-1], item, depth + 1, limit)
+    elif kind in _NAMED_IMPORTED:
+        cls, check = _NAMED_IMPORTED[kind]
+        valid = isinstance(value, cls)
+        if valid:
+            check(value, depth, limit)
+    else:
+        cls, fields = _NAMED_RECORDS[kind]
+        valid = isinstance(value, cls)
+        if valid:
+            for name, field_kind, omit in fields:
+                if not hasattr(value, name):
+                    raise Refusal("missing_field", 0)
+                item = getattr(value, name)
+                if omit == "absent" and item is None:
+                    continue
+                _named_check(field_kind, item, depth + 1, limit)
+    if not valid:
+        raise Refusal("wrong_type", 0)
+
+
+def _check_request_identity(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("RequestIdentity", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_submission(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("Submission", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_receipt(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("Receipt", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_acceptance_result(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("AcceptanceResult", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_history_window(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("HistoryWindow", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_cancellation_result(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("CancellationResult", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_work_progress(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("WorkProgress", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_work_failure(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("WorkFailure", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_operation_snapshot(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("OperationSnapshot", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_observation_result(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("ObservationResult", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_result_chunk(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("ResultChunk", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_result_read(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("ResultRead", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_result_link(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("ResultLink", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_work_observation(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("WorkObservation", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_inventory_page(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("InventoryPage", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _check_operator_cancellation(v, depth=0, limit=_DEPTH_LIMIT):
+    _named_check("OperatorCancellation", v, depth, min(limit, _DEPTH_LIMIT))
+
+
+def _decode_request_identity_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_request_identity(r)
+    return v, r.pos
+
+
+def _encode_request_identity_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_request_identity(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_request_identity(out, v, depth)
+    _decode_request_identity_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_request_identity(v):
+    return _encode_request_identity_at(v, 0) + "\n".encode()
+
+
+def decode_request_identity(data):
+    v, n = _decode_request_identity_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_submission_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_submission(r)
+    return v, r.pos
+
+
+def _encode_submission_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_submission(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_submission(out, v, depth)
+    _decode_submission_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_submission(v):
+    return _encode_submission_at(v, 0) + "\n".encode()
+
+
+def decode_submission(data):
+    v, n = _decode_submission_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_receipt_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_receipt(r)
+    return v, r.pos
+
+
+def _encode_receipt_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_receipt(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_receipt(out, v, depth)
+    _decode_receipt_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_receipt(v):
+    return _encode_receipt_at(v, 0) + "\n".encode()
+
+
+def decode_receipt(data):
+    v, n = _decode_receipt_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_acceptance_result_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_acceptance_result(r)
+    return v, r.pos
+
+
+def _encode_acceptance_result_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_acceptance_result(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_acceptance_result(out, v, depth)
+    _decode_acceptance_result_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_acceptance_result(v):
+    return _encode_acceptance_result_at(v, 0) + "\n".encode()
+
+
+def decode_acceptance_result(data):
+    v, n = _decode_acceptance_result_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_history_window_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_history_window(r)
+    return v, r.pos
+
+
+def _encode_history_window_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_history_window(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_history_window(out, v, depth)
+    _decode_history_window_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_history_window(v):
+    return _encode_history_window_at(v, 0) + "\n".encode()
+
+
+def decode_history_window(data):
+    v, n = _decode_history_window_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_cancellation_result_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_cancellation_result(r)
+    return v, r.pos
+
+
+def _encode_cancellation_result_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_cancellation_result(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_cancellation_result(out, v, depth)
+    _decode_cancellation_result_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_cancellation_result(v):
+    return _encode_cancellation_result_at(v, 0) + "\n".encode()
+
+
+def decode_cancellation_result(data):
+    v, n = _decode_cancellation_result_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_work_progress_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_work_progress(r)
+    return v, r.pos
+
+
+def _encode_work_progress_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_work_progress(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_work_progress(out, v, depth)
+    _decode_work_progress_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_work_progress(v):
+    return _encode_work_progress_at(v, 0) + "\n".encode()
+
+
+def decode_work_progress(data):
+    v, n = _decode_work_progress_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_work_failure_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_work_failure(r)
+    return v, r.pos
+
+
+def _encode_work_failure_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_work_failure(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_work_failure(out, v, depth)
+    _decode_work_failure_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_work_failure(v):
+    return _encode_work_failure_at(v, 0) + "\n".encode()
+
+
+def decode_work_failure(data):
+    v, n = _decode_work_failure_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_operation_snapshot_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_operation_snapshot(r)
+    return v, r.pos
+
+
+def _encode_operation_snapshot_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_operation_snapshot(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_operation_snapshot(out, v, depth)
+    _decode_operation_snapshot_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_operation_snapshot(v):
+    return _encode_operation_snapshot_at(v, 0) + "\n".encode()
+
+
+def decode_operation_snapshot(data):
+    v, n = _decode_operation_snapshot_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_observation_result_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_observation_result(r)
+    return v, r.pos
+
+
+def _encode_observation_result_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_observation_result(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_observation_result(out, v, depth)
+    _decode_observation_result_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_observation_result(v):
+    return _encode_observation_result_at(v, 0) + "\n".encode()
+
+
+def decode_observation_result(data):
+    v, n = _decode_observation_result_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_result_chunk_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_result_chunk(r)
+    return v, r.pos
+
+
+def _encode_result_chunk_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_result_chunk(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_result_chunk(out, v, depth)
+    _decode_result_chunk_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_result_chunk(v):
+    return _encode_result_chunk_at(v, 0) + "\n".encode()
+
+
+def decode_result_chunk(data):
+    v, n = _decode_result_chunk_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_result_read_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_result_read(r)
+    return v, r.pos
+
+
+def _encode_result_read_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_result_read(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_result_read(out, v, depth)
+    _decode_result_read_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_result_read(v):
+    return _encode_result_read_at(v, 0) + "\n".encode()
+
+
+def decode_result_read(data):
+    v, n = _decode_result_read_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_result_link_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_result_link(r)
+    return v, r.pos
+
+
+def _encode_result_link_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_result_link(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_result_link(out, v, depth)
+    _decode_result_link_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_result_link(v):
+    return _encode_result_link_at(v, 0) + "\n".encode()
+
+
+def decode_result_link(data):
+    v, n = _decode_result_link_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_work_observation_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_work_observation(r)
+    return v, r.pos
+
+
+def _encode_work_observation_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_work_observation(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_work_observation(out, v, depth)
+    _decode_work_observation_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_work_observation(v):
+    return _encode_work_observation_at(v, 0) + "\n".encode()
+
+
+def decode_work_observation(data):
+    v, n = _decode_work_observation_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_inventory_page_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_inventory_page(r)
+    return v, r.pos
+
+
+def _encode_inventory_page_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_inventory_page(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_inventory_page(out, v, depth)
+    _decode_inventory_page_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_inventory_page(v):
+    return _encode_inventory_page_at(v, 0) + "\n".encode()
+
+
+def decode_inventory_page(data):
+    v, n = _decode_inventory_page_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v
+
+
+def _decode_operator_cancellation_at(data, depth, limit):
+    r = _Reader(bytes(data))
+    if depth < 0 or limit < 1:
+        raise r.refuse("depth_exceeded")
+    r.depth = depth
+    r.limit = min(limit, _DEPTH_LIMIT)
+    r.ws()
+    v = _read_operator_cancellation(r)
+    return v, r.pos
+
+
+def _encode_operator_cancellation_at(v, depth):
+    if depth < 0 or depth >= _DEPTH_LIMIT:
+        raise _Reader(b"").refuse("depth_exceeded")
+    _check_operator_cancellation(v, depth, _DEPTH_LIMIT)
+    out = bytearray()
+    _write_operator_cancellation(out, v, depth)
+    _decode_operator_cancellation_at(out, depth, _DEPTH_LIMIT)
+    return bytes(out)
+
+
+def encode_operator_cancellation(v):
+    return _encode_operator_cancellation_at(v, 0) + "\n".encode()
+
+
+def decode_operator_cancellation(data):
+    v, n = _decode_operator_cancellation_at(data, 0, _DEPTH_LIMIT)
+    r = _Reader(bytes(data))
+    r.pos = n
+    r.ws()
+    if r.pos != len(r.buf):
+        raise r.refuse("trailing_bytes")
+    return v

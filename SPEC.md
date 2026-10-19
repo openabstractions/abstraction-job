@@ -6,10 +6,15 @@ locks are the implementation's; examples are the corpus's. See `METHOD.md` § 11
 the four jurisdictions and which artefact holds each.
 
 **Status.** Drawn from `abstraction-job/CONTRACT.md`'s tagged rules, `abstraction-job/job.thrift`,
-`abstraction-job/go/interface.go`, the three stores, and the scenarios under
+`abstraction-job/go/interface.go`, the Go store, and the scenarios under
 `abstraction-download/testdata/scenarios/`. Where those disagree the disagreement is
 recorded in § 12, not resolved by fiat. Nothing here is invented: a behaviour
 none of them settles is in § 11, *Undecided*, and nowhere else.
+
+**One implementation.** The Python and C++ file stores were removed on
+2026-09-17 (`docs/REMOVED.md` entry 10). Where this page compares "three"
+implementations, Go's behaviour is the one that ships; the Python and C++
+halves are history.
 
 **Reading it.** Every rule carries a tag. A `JOB-` tag that already appears on
 `abstraction-job/CONTRACT.md` is the same rule, cited by the same scenarios. A tag minted
@@ -17,7 +22,9 @@ here is listed in § 13 so the harness can be pointed at this page; until it is,
 those rules are counted UNEXERCISED by `behaviour-conformance.sh` whatever a
 scenario does. Each rule names the scenario that fails it, or says none does.
 
-Verdict classes are the contract; their wording is not:
+The conventions every OA contract carries are stated once in [CONVENTIONS.md](https://github.com/openabstractions/abstractions/blob/main/idl/CONVENTIONS.md); a rule here that applies one cites its `CONV-` id.
+
+[Verdict](https://openabstractions.github.io/reference.html#concept-job.wire-verdict) classes are the contract; their wording is not:
 `ok` · `not_found` · `lease_held` · `stale_epoch` · `lease_expired` ·
 `terminal` · `unknown_schema` · `invalid` · `refused` (JOB-D7; § 6).
 
@@ -68,8 +75,8 @@ So the final update carries everything — error, checkpoint, `done`. —
 **2.7 [JOB-T6]** `renew` is the one write a terminal record accepts. It changes
 nothing a reader branches on. — `matrix` 41, 50, 59.
 
-**2.8 [JOB-L6]** `release` turns `running` into `pending`. **All three
-implementations exempt a delegated record**, which stays `running` because a
+**2.8 [JOB-L6]** `release` turns `running` into `pending`. **Go exempts a
+delegated record**, which stays `running` because a
 sweep that saw `pending` would start the work a second time; `CONTRACT.md` states
 no exemption. The undelegated half is tested (`matrix` 17); the delegated half
 is asserted by nothing in the corpus. See § 12.1.
@@ -85,8 +92,7 @@ asserts a backward move lands. Whether the store should refuse one is § 11.1.
 **[JOB-S6] 2.10** Every state is reachable through the contract: the corpus
 drives all six with `finish` (`matrix`). *Four of six states are unreachable
 from the contract* is no longer true of the contract.
-It remains true of C++ product code, which writes `pending` and `running` and
-nothing else; the C++ conformance driver writes all six. See § 12.6.
+The C++ product code it described was removed with the C++ store. See § 12.6.
 
 Transitions the store allows, holder-written unless marked:
 
@@ -101,7 +107,7 @@ Transitions the store allows, holder-written unless marked:
 
 ## 3. Ownership
 
-A lease **in the Chubby sense**: time-bounded ownership kept by renewing and
+A [lease](https://openabstractions.github.io/reference.html#concept-job.lease) **in the Chubby sense**: time-bounded ownership kept by renewing and
 lost by lapsing, never by being asked. `coordination.k8s.io/v1 Lease`, etcd's
 TTL, SQS's visibility timeout, beanstalkd's TTR. The epoch-checked write is
 `If-Match` with a strong ETag (RFC 9110 § 13.1.1).
@@ -113,28 +119,28 @@ mismatch is `stale_epoch`. — `lease` 8.
 refuse unless the epoch is the one the acquirer read and no live lease stands
 in its way, write with epoch + 1. — `lease` 3, `recall` 7.
 
-**3.3 [JOB-L3]** The lock file is never deleted. — `abstraction-cas/mixed.py --job`; no
+**3.3 [JOB-L3]** The lock file is never deleted. — `abstraction-cas/tests/mixed.py --job`; no
 scenario can see it.
 
 **3.4 [JOB-L4]** An acquisition writes the record as found under the lock, never the
 acquirer's copy: an intent set since the acquirer read survives, and a record
 that moved is refused `lease_held`. — `lease` 3; the intent-survives half is
-asserted by Go's and Python's `a_claim_keeps_what_was_written_since_the_caller_read`,
-by no C++ test found, and by no scenario.
+asserted by Go's `TestAClaimKeepsWhatWasWrittenSinceTheCallerRead` and by no
+scenario.
 
 **[JOB-O1] 3.5** A live lease held by another owner refuses an acquisition
 `lease_held`. The plainest thing a lease does, cited by `lease` 3 and `matrix`
 11, stated on no page until now.
 
 **[JOB-O2] 3.6** The current holder may acquire again while its lease is live,
-and the epoch rises; it may not while under a yield request [JOB-R5]. Three implementations
-do this; no page says so; `recall` 7 tests the refusal and nothing tests the
+and the epoch rises; it may not while under a yield request [JOB-R5]. Go does this
+([FileStore](https://openabstractions.github.io/reference.html#concept-job.file-store) acquisition); no page says so; `recall` 7 tests the refusal and nothing tests the
 re-acquisition. It let one process race itself and report a delivered download as a
 failed install. Whether a
 same-owner re-acquisition should be a no-op returning the held epoch is § 11.2.
 
 **[JOB-O3] 3.7** An acquisition needs a non-empty owner. Refused; the verdict class is
-not fixed — Go answers a bare error, Python and C++ a `JobError`. § 11.3.
+not fixed — Go answers a bare error. § 11.3.
 
 **[JOB-O4] 3.8** `expires_at` is the acquisition's instant plus the ttl the acquirer
 asked for, on the store's own clock. A lease is held while `owner` is
@@ -207,7 +213,7 @@ One word, four operations, and a caller has to know which it is holding.
 | stopping the execution | the holder stopping itself at its next intent check | the holder [JOB-I8] | never — nothing here reaches into a process |
 | stopping the wait | a caller's local cancellation (a Go `ctx`) | the caller | no; writes nothing to the record |
 
-**4.1 [JOB-I3] [JOB-I4] [JOB-I5]** Intent is the one write with no epoch; it is
+**4.1 [JOB-I3] [JOB-I4] [JOB-I5]** [Intent](https://openabstractions.github.io/reference.html#concept-job.intent) is the one write with no epoch; it is
 idempotent; it is refused `terminal` once the job is over. — `matrix` 6, 14,
 45.
 
@@ -240,7 +246,7 @@ with a reason; one that can releases, so the record reads `pending`. —
 `pause-adoption` 6, `abstraction-download/README.md` [DL-R27]. Pause on a delegated
 record: no rule, § 11.6.
 
-**4.7** Store and handle disagree on a double cancel: the store refuses
+**4.7** [Store](https://openabstractions.github.io/reference.html#concept-job.store) and handle disagree on a double cancel: the store refuses
 `intent` on a `cancelled` record `terminal` [JOB-I5]; Go's handle absorbs it
 as a double click. The transcript verdict is `terminal`. § 12.10.
 
@@ -252,8 +258,8 @@ is **unknown**, and a retry starts a second job.
 
 **[JOB-U1] 5.1** A submission is accepted when the record exists under its
 id. The store mints the id unless the submitter supplies one; a supplied id
-that already exists is refused `invalid`, in all three. Not in the corpus;
-each language's own tests.
+that already exists is refused `invalid` (Go's `FileStore.Submit`). Not in
+the corpus.
 
 **[JOB-U2] 5.2** So a submitter whose answer was lost can tell only if it
 named the id: `invalid` then means *accepted, load it*. A submitter that let
@@ -320,10 +326,9 @@ from it. What it names now is § 11.11.
 **[JOB-E12] 6.4** A partial answer — some records read, some unreadable — is a
 fourth shape that neither a value nor an error carries alone. Go's `List` and
 `Orphans` return the records beside an `ErrUnreadable` naming the ids and
-unwrapping to the first reason. **Python and C++ skip an unreadable record
-and return success.** Elasticsearch's `_shards` and Kubernetes'
-`RemainingItemCount` are the shape. Live divergence; the cross-language rule is
-§ 11.12.
+unwrapping to the first reason. Elasticsearch's `_shards` and Kubernetes'
+`RemainingItemCount` are the shape. The removed Python and C++ stores skipped
+an unreadable record; Go's behaviour is the rule (§ 11.12).
 
 ## 7. Release
 
@@ -349,7 +354,7 @@ answer is § 11.13.
 
 **7.3** Effects: `expires_at` = now, `owner` = empty, `running` → `pending`
 unless delegated [JOB-L6, § 2.8]; `recall` survives [JOB-R6]. Release on a
-`transferred` record lands and leaves it `transferred` in all three; `matrix`
+`transferred` record lands and leaves it `transferred` in Go; `matrix`
 27 marks it undecided. § 11.14.
 
 ## 8. Retries and backoff
@@ -364,10 +369,10 @@ on an adoptable record [DL-E1]. The kind decides, at the place each error is
 defined, never in a list [DL-E3]. — `failure-endings`.
 
 **[JOB-B2] 8.2** The attempt count is the lease epoch: it rises on every acquisition,
-exists in three languages, and needs no field. The download kind reads
+exists in Go, and needs no field. The download kind reads
 `updated_at + min(15 s · 2^(epoch−1), 15 min)` for a record that carries an
 error, and adopts a record without one at once — a killed owner wrote nothing.
-Go and Python (`RetryAfter`, `retry_after`); C++ has no runner. The constants
+Go (`RetryAfter`). The constants
 are the kind's tuning. Tagged nowhere, cited by no scenario. § 11.15.
 
 **[JOB-B3] 8.3** Taking a lease in order to publish a refusal is a write: it
@@ -434,69 +439,69 @@ tagged on no page.
 
 ## 11. Undecided
 
-Each with what the three implementations do today, where they agree, and what
-would settle it. An adopter meets these as surprises.
+Go is the only implementation (§ Status). Each item is marked **Go decides**,
+where Go's behaviour is the rule until a scenario asserts it, **Moot**, where
+the question existed only between languages, or **Open**, with what would
+settle it. Item numbers are stable; other sections cite them.
 
-1. **Backward state moves.** All three let a holder write `transferred` →
-   `pending` or `running` → `pending`. Settled by a scenario asserting either
-   `ok` or a refusal class — and by naming the class, which does not exist.
-2. **Same-owner re-acquisition while live.** All three bump the epoch. Settled by a
-   scenario; the alternative is returning the held epoch unchanged.
-3. **Verdict class for an empty owner.** Go: bare error; Python, C++:
-   `JobError`. Neither is in the verdict list.
-4. **Whose clock.** Each store reads its own. Nothing says what two hosts on
-   one share may assume; the lock does not cross hosts either.
-5. **Delegated orphans.** The store offers them; the download kind declines.
-   Whether `delegation` withholds a record from `orphans` in the store.
-6. **Intent on a delegated record.** Who honours cancel and pause when the
-   holder released to a delegate. Download's Reconcile does; no rule, no
-   scenario.
-7. **Idempotency key on the write path.** An update's lost answer cannot be
-   asked about. Idempotency key (Stripe), operation name (AIP-151) or recovery
-   scan (XA) — the accept feedback picked XA for delegation; nothing picked for
-   the store.
-8. **Possibly delegated.** `external_id == id` is Go's encoding of unsettled.
-   A nullable handle plus an `accepted` flag on `delegation` is the schema
-   change that would say it; three-language.
-9. **A repeated yield request.** Rewrites `at`/`until`; may leave `until` past
-   `expires_at`. Extend, shorten, or refuse.
-10. **`unknown` in the job module.** No sentinel, no verdict class, no
+1. **Backward state moves.** Go decides: a holder may write `transferred` →
+   `pending` or `running` → `pending` ([JOB-S5]). Open only for the refusal
+   class a kind would need to forbid one.
+2. **Same-owner re-acquisition while live.** Go decides: the epoch rises
+   ([JOB-O2]). A scenario asserting it is missing.
+3. **Verdict class for an empty owner.** Open: Go answers a bare error, and
+   no verdict class names it.
+4. **Whose clock.** Open: the store reads its own clock, and two hosts on
+   one share have no rule; the lock does not cross hosts either.
+5. **Delegated orphans.** Open: the store offers them, the download kind
+   declines; whether `delegation` withholds a record from `orphans`.
+6. **Intent on a delegated record.** Open: download's Reconcile honours
+   cancel and pause after a release to a delegate; no rule, no scenario.
+7. **Idempotency key on the write path.** Open for the store: the delegation
+   path uses a recovery scan; nothing is picked for the store.
+8. **Possibly delegated.** Open: `external_id == id` is Go's encoding of
+   unsettled. A nullable handle plus an `accepted` flag on `delegation` would
+   say it, now in one language.
+9. **A repeated yield request.** Go decides: it rewrites `at` and `until`,
+   and `until` may pass `expires_at`. Open whether to extend, shorten or
+   refuse.
+10. **`unknown` in the job module.** Open: no sentinel, no verdict class, no
     transcript shape.
-11. **What `refused` names** now that `unknown_schema` exists.
-12. **Partial enumeration across languages.** Go names the unreadable ids
-    beside the result; Python and C++ skip silently.
-13. **A distinguished answer for release after a final write.**
-14. **`matrix` 25–27:** update, intent and release on `transferred`. All three
-    answer `ok`; no page decides.
-15. **Where backoff lives.** In the download kind today, on the epoch. Whether
-    the job module owns the formula or only the counter.
-16. **The socket implementation's decoder and a connection-level declaration.**
-17. **`matrix` 2, 12:** renew on a never-held record (all three:
-    `lease_expired`) and renew on a live lease (all three: `ok`).
+11. **What `refused` names** now that `unknown_schema` exists. Open.
+12. **Partial enumeration.** Go decides: `List` and `Orphans` name the
+    unreadable ids beside the result ([JOB-E12]). Moot across languages.
+13. **A distinguished answer for release after a final write.** Open.
+14. **`matrix` 25–27:** update, intent and release on `transferred`. Go
+    decides: `ok`.
+15. **Where backoff lives.** Open: in the download kind today, on the epoch;
+    whether the job module owns the formula or only the counter.
+16. **The socket implementation's decoder and a connection-level
+    declaration.** Open.
+17. **`matrix` 2, 12:** Go decides: renew on a never-held record answers
+    `lease_expired`, and renew on a live lease answers `ok`.
 
 ## 12. Where the sources disagree
 
-1. [JOB-L6] README: release turns `running` into `pending`. Go, Python,
-   C++: unless delegated. Corpus tests only the undelegated case.
-2. **Release.** `interface.go`, `job.thrift`, README: a courtesy. Three stores
-   and three test suites: refuses `terminal`, `stale_epoch`, `lease_expired`.
+1. [JOB-L6] README: release turns `running` into `pending`. Go: unless
+   delegated. Corpus tests only the undelegated case.
+2. **Release.** `interface.go`, `job.thrift`, README: a courtesy. The store
+   and its tests: refuses `terminal`, `stale_epoch`, `lease_expired`.
    Decided § 7.1 in the code's favour, with the cost named.
 3. **`job.thrift` exception lists** predated the terminal rules: `claim` listed
    no `Invalid`, `release` no `LeaseExpired` or `Terminal`, `renew` and
    `update` no `Terminal`. Closed 2026-09-08: the file is now the generated
    definition, it declares no exceptions and no per-operation `throws` list, and
    the eleven verdict words are one flat enum every operation may answer with.
-4. **Partial enumeration.** Go beside; Python and C++ skip. § 6.4.
+4. **Partial enumeration.** Moot: one implementation. § 6.4.
 5. **`refused`** survives in the verdict list; README says Go used it for
    what is now `unknown_schema`.
-6. **Reachability.** *Four of six states are unreachable* is stale for the
-   contract; still true of C++ product code. § 2.10.
+6. **Reachability.** *Four of six states are unreachable* is stale; the C++
+   product code it described is removed. § 2.10.
 7. **Intent absent from the contract** and **no backoff anywhere** are answered
    by [JOB-I1..I12] and § 8.2.
-8. **Same-owner re-acquisition.** Three implementations, no page, one measured
-   corruption. § 3.6.
-9. **Unsettled delegation as an equality.** Go only; a Python or C++ reader
-   sees a settled delegation and can never settle it. § 5.6.
+8. **Same-owner re-acquisition.** No page, one measured corruption. § 3.6.
+9. **Unsettled delegation as an equality.** Moot: the Python and C++ readers
+   that could not settle it are removed. § 5.6.
 10. **Double cancel.** Store: `terminal`; Go handle: `ok`. § 4.7.
 11. **Delegated orphans.** Store offers; download declines; README silent.
     § 3.14.

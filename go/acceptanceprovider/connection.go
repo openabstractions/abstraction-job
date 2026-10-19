@@ -116,25 +116,35 @@ func HandleConnectionWithBindingPolicy(ctx context.Context, conn listen.Conn, pr
 	if err := call.Recheck(); err != nil {
 		return err
 	}
+	refusalReason := ""
 	permit := func(service, method, kind string) access {
-		if binding.Scope == "" || ctx.Err() != nil {
+		refusalReason = ""
+		methodCtx := ctx
+		if service == "abstraction.job/operations@1" && method == "FollowWork" {
+			methodCtx = call.WaitContext()
+		}
+		if binding.Scope == "" || methodCtx.Err() != nil {
 			return accessDenied
 		}
 		granted := accessAllowed
 		if policy != nil {
-			if err := policy(policyContext(ctx, method, kind), peer, service, method); err != nil {
+			if err := policy(policyContext(methodCtx, method, kind), peer, service, method); err != nil {
 				if !errors.Is(err, ErrPolicyUnavailable) {
+					var detail interface{ PermissionRefusalReason() string }
+					if errors.As(err, &detail) {
+						refusalReason = detail.PermissionRefusalReason()
+					}
 					return accessDenied
 				}
 				granted = accessUnavailable
 			}
 		}
-		if ctx.Err() != nil || call.Recheck() != nil {
+		if methodCtx.Err() != nil || call.Recheck() != nil {
 			return accessDenied
 		}
 		return granted
 	}
-	reply, err := provider.dispatchFrameBinding(call.Frame, binding, permit, policy != nil)
+	reply, err := provider.dispatchFrameBindingContext(call.WaitContext, call.Frame, binding, permit, policy != nil, func() string { return refusalReason })
 	if err != nil {
 		return err
 	}
@@ -152,17 +162,26 @@ func (provider *Provider) dispatchFrame(frame []byte, scope string, permit permi
 }
 
 func (provider *Provider) dispatchFrameBinding(frame []byte, binding Binding, permit permitFunc, decided bool) ([]byte, error) {
+	return provider.dispatchFrameBindingRefusal(frame, binding, permit, decided, nil)
+}
+
+func (provider *Provider) dispatchFrameBindingRefusal(frame []byte, binding Binding, permit permitFunc, decided bool, refusalReason func() string) ([]byte, error) {
+	return provider.dispatchFrameBindingContext(context.Background, frame, binding, permit, decided, refusalReason)
+}
+
+func (provider *Provider) dispatchFrameBindingContext(ctx func() context.Context, frame []byte, binding Binding, permit permitFunc, decided bool, refusalReason func() string) ([]byte, error) {
 	scope := binding.Scope
 	return api.ServeEndpoint(frame, "openabstractions", "",
-		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.BindBinding(binding), denied: provider.Bind(""), permit: permit}},
-		&api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.BindInventory(scope), denied: provider.BindInventory(""), permit: permit}},
-		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperationsBinding(binding), denied: provider.BindOperations(""), permit: permit}},
-		&api.JobOperatorDispatcher{Handler: methodOperator{bound: &bound{provider: provider, scope: boundScope(scope)}, permit: permit, decided: decided}})
+		&api.RecoverableAcceptanceDispatcher{Handler: methodAcceptance{allowed: provider.BindBinding(binding), denied: provider.Bind(""), permit: permit, refusalReason: refusalReason}},
+		&api.JobInventoryDispatcher{Handler: methodInventory{allowed: provider.bindInventoryBinding(binding), denied: provider.BindInventory(""), permit: permit}},
+		&api.OperationControlDispatcher{Handler: methodOperations{allowed: provider.BindOperationsBinding(binding), denied: provider.BindOperations(""), permit: permit, ctx: ctx}},
+		&api.JobOperatorDispatcher{Handler: methodOperator{bound: &bound{provider: provider, scope: boundScope(scope), binding: binding}, permit: permit, decided: decided}})
 }
 
 type methodAcceptance struct {
 	allowed, denied api.RecoverableAcceptance
 	permit          permitFunc
+	refusalReason   func() string
 }
 
 func (h methodAcceptance) handler(method string) (api.RecoverableAcceptance, access) {
@@ -189,6 +208,16 @@ func (h methodAcceptance) Submit(s api.Submission) (api.AcceptanceResult, error)
 	if granted == accessUnavailable {
 		return outcome(api.AcceptanceOutcomeUnavailable, policyUnavailableReason), nil
 	}
+	if granted == accessDenied && h.refusalReason != nil {
+		if reason := h.refusalReason(); reason != "" {
+			// A not_granted submit decision whose question was asked also
+			// names the questions admission raises, in one refusal [JOB-A16].
+			if b, ok := h.allowed.(*bound); ok {
+				reason = b.nameAdmissionQuestions(reason, s)
+			}
+			return outcome(api.AcceptanceOutcomeForbidden, reason), nil
+		}
+	}
 	return handler.Submit(s)
 }
 func (h methodAcceptance) Reconcile(id api.RequestIdentity) (api.AcceptanceResult, error) {
@@ -209,6 +238,23 @@ func (h methodAcceptance) CancelWork(id api.RequestIdentity) (api.CancellationRe
 type methodOperations struct {
 	allowed, denied api.OperationControl
 	permit          permitFunc
+	ctx             func() context.Context
+}
+
+func (h methodOperations) FollowWork(id api.RequestIdentity, after string, waitMS int64) (api.WorkObservation, error) {
+	permit := func() access { return h.permit("abstraction.job/operations@1", "FollowWork", "") }
+	mechanism := api.WorkObservationMechanismPolled
+	switch permit() {
+	case accessUnavailable:
+		return api.WorkObservation{Outcome: api.WorkObservationOutcomeUnavailable, Mechanism: mechanism}, nil
+	case accessDenied:
+		return api.WorkObservation{Outcome: api.WorkObservationOutcomeForbidden, Mechanism: mechanism}, nil
+	}
+	ctx := context.Background()
+	if h.ctx != nil {
+		ctx = h.ctx()
+	}
+	return h.allowed.(*bound).followWork(ctx, id, after, waitMS, permit)
 }
 
 func (h methodOperations) ObserveWork(id api.RequestIdentity) (api.ObservationResult, error) {

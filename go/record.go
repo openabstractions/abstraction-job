@@ -42,10 +42,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	timestampwire "github.com/openabstractions/abstraction-job/go/rec"
+	"math"
 	"sort"
 	"strings"
 	"time"
+
+	input "github.com/openabstractions/abstraction-job/go/internal/recordinput"
+	"github.com/openabstractions/abstraction-job/go/rec"
 )
 
 // SchemaVersion is bumped when a change would stop an older reader from safely
@@ -197,29 +201,29 @@ func Understands(critical []string) (string, bool) {
 // participant, not the most.
 type Timestamp struct{ time.Time }
 
-const timestampLayout = "2006-01-02T15:04:05.000000Z"
-
 func At(t time.Time) Timestamp { return Timestamp{t.UTC().Truncate(time.Microsecond)} }
 
 func (t Timestamp) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + t.Time.UTC().Format(timestampLayout) + `"`), nil
+	b, err := json.Marshal(wireTime(t))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := input.DecodeTimestampValue(append(append([]byte(`{"value":`), b...), '}')); err != nil {
+		return nil, codecError(err)
+	}
+	return b, nil
 }
 
 func (t *Timestamp) UnmarshalJSON(b []byte) error {
-	s := strings.Trim(string(b), `"`)
-	if s == "" || s == "null" {
-		t.Time = time.Time{}
-		return nil
-	}
-	// Accept anything RFC 3339 on the way in — another implementation may be
-	// less careful than this one, and refusing to read a job over a timezone
-	// suffix would be absurd. Only what we WRITE is pinned.
-	parsed, err := time.Parse(time.RFC3339Nano, s)
+	v, err := input.DecodeTimestampValue(append(append([]byte(`{"value":`), b...), '}'))
 	if err != nil {
-		return fmt.Errorf("%w: timestamp %q: %v", ErrInvalid, s, err)
+		return codecError(err)
 	}
-	t.Time = parsed.UTC()
-	return nil
+	parsed, err := nativeTime(v.Value)
+	if err == nil {
+		*t = parsed
+	}
+	return err
 }
 
 // State is where a job is. The states that matter are the ones that exist
@@ -652,7 +656,7 @@ var (
 // binding — which used json.Unmarshal directly — carried records past it in both
 // directions.
 func Decode(b []byte) (*Record, error) {
-	r, err := decodeRecord(b)
+	r, err := decodeInput(b, false)
 	if err != nil {
 		return nil, err
 	}
@@ -670,77 +674,102 @@ func Decode(b []byte) (*Record, error) {
 func DecodeProposal(b []byte) (*Record, error) { return decodeRecord(b) }
 
 func decodeRecord(b []byte) (*Record, error) {
-	if err := refuseDeepNesting(b); err != nil {
-		return nil, err
-	}
-	if err := refuseDuplicateNames(b); err != nil {
-		return nil, err
-	}
+	return decodeInput(b, true)
+}
 
-	// legacy carries the integer this format used to write. Decoding through a
-	// shim rather than a field on Record keeps the old number out of the type
-	// entirely: nothing downstream can branch on it, and nothing can write it
-	// back out by accident.
-	var legacy struct {
-		Schema *int `json:"schema"`
-	}
-	_ = json.Unmarshal(b, &legacy)
-
-	var r Record
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&r); err != nil {
-		if legacy.Schema == nil {
-			// An unknown field is far more likely to be a newer writer than a
-			// typo, and continuing a job whose description we only partly
-			// understand is exactly the risk this refuses to take.
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
-		// A legacy record: strip the one field this format no longer has and
-		// try again, so stores full of version 3 and 4 records keep working
-		// rather than being orphaned by a format change.
-		var raw map[string]json.RawMessage
-		if uerr := json.Unmarshal(b, &raw); uerr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, uerr)
-		}
-		delete(raw, "schema")
-		stripped, merr := marshalCompact(raw)
-		if merr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, merr)
-		}
-		r = Record{}
-		dec2 := json.NewDecoder(bytes.NewReader(stripped))
-		dec2.DisallowUnknownFields()
-		if err2 := dec2.Decode(&r); err2 != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err2)
-		}
-	}
-
-	if len(r.Content) == 0 && legacy.Schema != nil {
-		features, ok := legacySchemas[*legacy.Schema]
+// decodeInput selects a generated structural profile. The frozen legacy feature
+// mapping and current native validation remain this provider's responsibility.
+func decodeInput(b []byte, proposal bool) (*Record, error) {
+	header, err := input.DecodeLegacyHeader(b)
+	var r *Record
+	if err == nil {
+		features, ok := legacySchemas[int(header.Schema)]
 		if !ok {
-			return nil, fmt.Errorf("%w: legacy schema %d", ErrUnknownSchema, *legacy.Schema)
+			return nil, fmt.Errorf("%w: legacy schema %d", ErrUnknownSchema, header.Schema)
 		}
-		// The mapping is exact rather than a guess: those versions are frozen
-		// and it is known precisely what each one could contain.
-		r.Content = append([]string(nil), features...)
-		r.Critical = nil
-		for _, m := range features {
-			if m != FeatureStep {
-				r.Critical = append(r.Critical, m)
+		v, e := input.Decode(b)
+		if e != nil {
+			return nil, codecError(e)
+		}
+		r, e = fromInput(v)
+		if e != nil {
+			return nil, e
+		}
+		if len(r.Content) == 0 {
+			r.Content = append([]string(nil), features...)
+			r.Critical = nil
+			for _, name := range features {
+				if name != FeatureStep {
+					r.Critical = append(r.Critical, name)
+				}
+			}
+			if r.Delegation != nil {
+				r.Content = append(r.Content, FeatureDelegation)
+				r.Critical = append(r.Critical, FeatureDelegation)
 			}
 		}
-		if r.Delegation != nil {
-			r.Content = append(r.Content, FeatureDelegation)
-			r.Critical = append(r.Critical, FeatureDelegation)
+	} else {
+		var refusal *input.Refusal
+		if !errors.As(err, &refusal) || refusal.Word != "missing_field" {
+			return nil, codecError(err)
+		}
+		if proposal {
+			v, e := input.Decode(b)
+			if e != nil {
+				return nil, codecError(e)
+			}
+			r, err = fromInput(v)
+		} else {
+			v, e := rec.Decode(b)
+			if e != nil {
+				r, err = decodeHistoricalTerminal(b, e)
+			} else {
+				r, err = fromGenerated(v)
+			}
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
-
-	// The whole point of the mechanism: refuse only what must be understood.
 	if name, ok := Understands(r.Critical); !ok {
-		return nil, fmt.Errorf("%w: this record requires %q, which this implementation cannot read", ErrUnknownSchema, name)
+		return nil, fmt.Errorf("%w: requires %q", ErrUnknownSchema, name)
 	}
-	return &r, nil
+	return r, nil
+}
+
+// Historical native writers could finish a base@1 record before terminal@1
+// was named. Read that one omission through the existing structural profile;
+// the public generated reader and every other derivation remain strict.
+func decodeHistoricalTerminal(b []byte, original error) (*Record, error) {
+	var refusal *rec.Refusal
+	if !errors.As(original, &refusal) || refusal.Word != "content_mismatch" {
+		return nil, codecError(original)
+	}
+	v, err := input.Decode(b)
+	if err != nil {
+		return nil, codecError(err)
+	}
+	if !State(v.State).Terminal() || contains(v.Content, FeatureTerminal) {
+		return nil, codecError(original)
+	}
+	declared := v.Content
+	v.Content = append(append([]string(nil), declared...), FeatureTerminal)
+	// Prove that the omitted terminal declaration was the only mismatch.
+	// Generated codecs retain duplicate/depth/type/critical and other content
+	// refusals. No missing field or declaration is filled on this path.
+	if _, err := rec.Decode(input.Encode(v)); err != nil {
+		return nil, codecError(err)
+	}
+	v.Content = declared
+	return fromInput(v)
+}
+
+func codecError(err error) error {
+	var refusal *rec.Refusal
+	if errors.As(err, &refusal) && refusal.Word == "unknown_critical" {
+		return fmt.Errorf("%w: %w", ErrUnknownSchema, err)
+	}
+	return fmt.Errorf("%w: %w", ErrInvalid, err)
 }
 
 // Encode writes the record in the form every implementation agrees on:
@@ -789,23 +818,10 @@ func (r *Record) canonicalise() error {
 	return nil
 }
 
-// marshalJSON encodes v under the escape policy on the contract page [JOB-J6].
-//
-// Go's default escapes & < > so that output is safe to paste inside an HTML
-// <script>. Nothing reads a record that way, and while that default stood a
-// download URL's query separator was spelled "\u0026" here and "&" by the
-// other two implementations -- a byte difference in the one file the whole
-// conformance argument rests on. The setting reaches a json.RawMessage too, so
-// an opaque spec keeps the spelling its author chose instead of acquiring ours
-// in transit [JOB-J7].
-//
-// U+2028 and U+2029 are the pair this encoder will not leave alone: it escapes
-// them in a string field and carries them raw inside a RawMessage, and no
-// exported setting reaches both. Those bytes are legal in a JSON document only
-// inside a string, so escaping them across a finished document is exact rather
-// than a guess. Escaping is also the only safe direction, because a string
-// holding the six literal characters "\u2028" is written "\\u2028", which a
-// search for the escape matches one byte into.
+// marshalJSON converts caller-supplied native payload values for SetSpec and
+// SetCheckpoint. Record serialization uses the generated codec. The encoder's
+// owned-string escaping and RawMessage token preservation stay separate, as
+// JOB-J6/J7 require; no finished-document escape rewrite is applied.
 func marshalJSON(v any, indent string) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -814,13 +830,18 @@ func marshalJSON(v any, indent string) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
-	b := bytes.ReplaceAll(buf.Bytes(), []byte("\u2028"), []byte(`\u2028`))
-	return bytes.ReplaceAll(b, []byte("\u2029"), []byte(`\u2029`)), nil
+	return buf.Bytes(), nil
 }
 
 // marshalCompact is the form an opaque payload is held in: marshalJSON without
 // the indent, and without the trailing newline an Encoder always writes.
+// A json.RawMessage keeps its token spelling (JOB-J7/J8): only whitespace
+// outside strings is removed, since newer encoding/json releases escape
+// U+2028 and U+2029 inside a raw message.
 func marshalCompact(v any) ([]byte, error) {
+	if raw, ok := v.(json.RawMessage); ok && json.Valid(raw) {
+		return compactRaw(raw), nil
+	}
 	b, err := marshalJSON(v, "")
 	if err != nil {
 		return nil, err
@@ -828,107 +849,62 @@ func marshalCompact(v any) ([]byte, error) {
 	return bytes.TrimSuffix(b, []byte("\n")), nil
 }
 
-func marshalRecord(r *Record) ([]byte, error) {
-	return marshalJSON(r, "  ")
+// compactRaw drops insignificant whitespace from valid JSON and leaves every
+// token byte as written.
+func compactRaw(raw []byte) []byte {
+	out := make([]byte, 0, len(raw))
+	inString, escaped := false, false
+	for _, c := range raw {
+		switch {
+		case inString:
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+		case c == '"':
+			inString = true
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
-// depthLimit is the nesting a record may carry, from job.thrift's
-// `depth_limit = "64"`, which is what the five generated readers enforce.
+func marshalRecord(r *Record) ([]byte, error) {
+	v, err := toGenerated(r)
+	if err != nil {
+		return nil, err
+	}
+	b := rec.Encode(v)
+	// Generated writers encode typed values; their shared reader supplies the
+	// grammar/width check for caller-created native values before bytes leave.
+	if _, err := rec.Decode(b); err != nil {
+		return nil, codecError(err)
+	}
+	return b, nil
+}
+
+// The generated profile's whole-document depth budget, also used by native
+// boundary controls. Grammar enforcement belongs to the generated reader.
 const depthLimit = 64
 
-// refuseDeepNesting enforces [JOB-J8]'s depth limit over a whole JSON document.
-//
-// The limit belongs to the record and reaches an opaque value at the same
-// depth, so the count starts at the record's own object and never restarts:
-// a spec is not entitled to a fresh budget of its own.
-func refuseDeepNesting(b []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	depth := 0
-	for {
-		t, err := dec.Token()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
-		d, ok := t.(json.Delim)
-		if !ok {
-			continue
-		}
-		if d == '{' || d == '[' {
-			depth++
-			if depth > depthLimit {
-				return fmt.Errorf("%w: nested deeper than %d", ErrInvalid, depthLimit)
-			}
-			continue
-		}
-		depth--
-	}
-}
-
-// refuseDuplicateNames enforces [JOB-J9] over a whole JSON document, including
-// every object nested inside an opaque value.
-//
-// encoding/json does not do this and cannot be made to: json.Valid and
-// json.Unmarshal both accept a repeated name and keep the last one, so the same
-// record read here and by a first-wins reader in another language is two
-// different documents built from one file. Measured, not assumed, and
-// TestEncodingJSONKeepsTheLastOfARepeatedName is that measurement.
-//
-// The scan reads a copy and returns nothing. Names are decoded because that is
-// what they are compared as; the bytes the record carries are untouched, which
-// is what [JOB-J7] promises and what TestOpaqueBytesSurviveNameComparison holds
-// this to.
+// Validate opaque values with the same generated grammar used by the record.
+// Wrapping adds the record object's depth, preserving the whole-record budget.
 func refuseDuplicateNames(b []byte) error {
-	type frame struct {
-		object bool
-		seen   map[string]bool
-		key    bool
+	if len(b) == 0 {
+		return nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	var stack []*frame
-	for {
-		t, err := dec.Token()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalid, err)
-		}
-		var top *frame
-		if n := len(stack); n > 0 {
-			top = stack[n-1]
-		}
-		if d, ok := t.(json.Delim); ok {
-			switch d {
-			case '{':
-				stack = append(stack, &frame{object: true, seen: map[string]bool{}, key: true})
-			case '[':
-				stack = append(stack, &frame{})
-			default:
-				stack = stack[:len(stack)-1]
-				if n := len(stack); n > 0 && stack[n-1].object {
-					stack[n-1].key = true
-				}
-			}
-			continue
-		}
-		if top != nil && top.object && top.key {
-			name := t.(string)
-			if top.seen[name] {
-				return fmt.Errorf("%w: object member %q appears twice; a repeated name means one thing to a first-wins reader and another to a last-wins reader", ErrInvalid, name)
-			}
-			top.seen[name] = true
-			top.key = false
-			continue
-		}
-		if top != nil && top.object {
-			top.key = true
-		}
+	wrapped := append([]byte(`{"value":`), b...)
+	wrapped = append(wrapped, '}')
+	if _, err := input.DecodePayload(wrapped); err != nil {
+		return codecError(err)
 	}
+	return nil
 }
 
 func (r *Record) Validate() error {
@@ -1171,4 +1147,121 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// These adapters translate native values. All JSON grammar is generated from
+// job.thrift and the provider's frozen input profiles.
+func wireTime(t Timestamp) string { return timestampwire.FormatTimestamp(t.Time) }
+func nativeTime(s string) (Timestamp, error) {
+	if s == "" {
+		return Timestamp{}, nil
+	}
+	// The shared timestamp grammar permits lowercase RFC3339 separators.
+	// Go's native parser requires their uppercase spelling; grammar was already
+	// checked by the generated input codec before this value conversion.
+	t, err := time.Parse(time.RFC3339Nano, strings.ToUpper(s))
+	if err != nil {
+		return Timestamp{}, fmt.Errorf("%w: timestamp: %v", ErrInvalid, err)
+	}
+	return Timestamp{t.UTC()}, nil
+}
+
+func toGenerated(r *Record) (*rec.Record, error) {
+	v := &rec.Record{Content: r.Content, Critical: r.Critical, ID: r.ID, Kind: r.Kind, State: string(r.State), Spec: rec.Raw(r.Spec), Checkpoint: rec.Raw(r.Checkpoint), Requires: r.Requires, Error: r.Error, CreatedAt: wireTime(r.CreatedAt), UpdatedAt: wireTime(r.UpdatedAt)}
+	if r.Envelope != nil {
+		v.Envelope = &rec.Envelope{Schema: r.Envelope.Schema, Actions: r.Envelope.Actions}
+	}
+	v.Progress = rec.Progress{Done: r.Progress.Done, Total: r.Progress.Total, UpdatedAt: wireTime(r.Progress.UpdatedAt)}
+	if s := r.Progress.Step; s != nil {
+		if s.Ordinal < math.MinInt32 || s.Ordinal > math.MaxInt32 || s.Of < math.MinInt32 || s.Of > math.MaxInt32 {
+			return nil, fmt.Errorf("%w: step ordinal/of exceeds i32", ErrInvalid)
+		}
+		v.Progress.Step = &rec.Step{Name: s.Name, Ordinal: int32(s.Ordinal), Of: int32(s.Of), Done: s.Done, Total: s.Total}
+	}
+	v.Lease = rec.Lease{Owner: r.Lease.Owner, Epoch: r.Lease.Epoch, ExpiresAt: wireTime(r.Lease.ExpiresAt)}
+	if x := r.Lease.Recall; x != nil {
+		v.Lease.Recall = &rec.Recall{Reason: x.Reason, By: x.By, At: wireTime(x.At), Until: wireTime(x.Until)}
+	}
+	if x := r.Delegation; x != nil {
+		v.Delegation = &rec.Delegation{System: x.System, ExternalID: x.ExternalID, Delivered: x.Delivered}
+	}
+	if x := r.Intent; x != nil {
+		v.Intent = &rec.Intent{Want: string(x.Want), By: x.By, At: wireTime(x.At)}
+	}
+	if r.Extensions != nil {
+		v.Extensions = make(map[string]rec.Raw, len(r.Extensions))
+		for k, b := range r.Extensions {
+			v.Extensions[k] = rec.Raw(b)
+		}
+	}
+	return v, nil
+}
+
+func fromGenerated(v *rec.Record) (*Record, error) {
+	r := &Record{Content: v.Content, Critical: v.Critical, ID: v.ID, Kind: v.Kind, State: State(v.State), Spec: json.RawMessage(v.Spec), Checkpoint: json.RawMessage(v.Checkpoint), Requires: v.Requires, Error: v.Error}
+	var err error
+	if r.CreatedAt, err = nativeTime(v.CreatedAt); err != nil {
+		return nil, err
+	}
+	if r.UpdatedAt, err = nativeTime(v.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if v.Envelope != nil {
+		r.Envelope = &Envelope{Schema: v.Envelope.Schema, Actions: v.Envelope.Actions}
+	}
+	r.Progress = Progress{Done: v.Progress.Done, Total: v.Progress.Total}
+	if r.Progress.UpdatedAt, err = nativeTime(v.Progress.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if x := v.Progress.Step; x != nil {
+		r.Progress.Step = &Step{Name: x.Name, Ordinal: int(x.Ordinal), Of: int(x.Of), Done: x.Done, Total: x.Total}
+	}
+	r.Lease = Lease{Owner: v.Lease.Owner, Epoch: v.Lease.Epoch}
+	if r.Lease.ExpiresAt, err = nativeTime(v.Lease.ExpiresAt); err != nil {
+		return nil, err
+	}
+	if x := v.Lease.Recall; x != nil {
+		y := &Recall{Reason: x.Reason, By: x.By}
+		if y.At, err = nativeTime(x.At); err != nil {
+			return nil, err
+		}
+		if y.Until, err = nativeTime(x.Until); err != nil {
+			return nil, err
+		}
+		r.Lease.Recall = y
+	}
+	if x := v.Delegation; x != nil {
+		r.Delegation = &Delegation{System: x.System, ExternalID: x.ExternalID, Delivered: x.Delivered}
+	}
+	if x := v.Intent; x != nil {
+		y := &Intent{Want: Want(x.Want), By: x.By}
+		if y.At, err = nativeTime(x.At); err != nil {
+			return nil, err
+		}
+		r.Intent = y
+	}
+	if v.Extensions != nil {
+		r.Extensions = make(map[string]json.RawMessage, len(v.Extensions))
+		for k, b := range v.Extensions {
+			r.Extensions[k] = json.RawMessage(b)
+		}
+	}
+	return r, nil
+}
+
+func fromInput(v *input.InputRecord) (*Record, error) {
+	current := &rec.Record{Content: v.Content, Critical: v.Critical, ID: v.ID, Kind: v.Kind, Envelope: v.Envelope, State: v.State, Spec: rec.Raw(v.Spec), Checkpoint: rec.Raw(v.Checkpoint), Delegation: v.Delegation, Requires: v.Requires, Error: v.Error, Intent: v.Intent, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
+	if v.Progress != nil {
+		current.Progress = *v.Progress
+	}
+	if v.Lease != nil {
+		current.Lease = *v.Lease
+	}
+	if v.Extensions != nil {
+		current.Extensions = make(map[string]rec.Raw, len(v.Extensions))
+		for k, b := range v.Extensions {
+			current.Extensions[k] = rec.Raw(b)
+		}
+	}
+	return fromGenerated(current)
 }

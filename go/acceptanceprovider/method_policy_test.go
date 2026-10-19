@@ -60,6 +60,64 @@ func methodExchange(t *testing.T, p *Provider, policy MethodPolicy, invoke func(
 		return context.DeadlineExceeded
 	}
 }
+
+type pendingPermissionPolicyError struct{}
+
+func (pendingPermissionPolicyError) Error() string { return "missing permission" }
+func (pendingPermissionPolicyError) PermissionRefusalReason() string {
+	return "rights:not_granted rights:question_pending:q1"
+}
+
+func TestMethodPolicyPendingQuestionKeepsIdentityAndNoEffect(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("native Program proof has its existing Darwin ceiling")
+	}
+	root := t.TempDir()
+	p := openTest(t, root)
+	s := submission(p, "pending-question")
+	before := storageTree(t, root)
+	allowed := false
+	unavailable := false
+	policy := func(context.Context, *identity.Peer, string, string) error {
+		if unavailable {
+			return errors.Join(ErrPolicyUnavailable, pendingPermissionPolicyError{})
+		}
+		if !allowed {
+			return pendingPermissionPolicyError{}
+		}
+		return nil
+	}
+	var result api.AcceptanceResult
+	var clientErr error
+	serverErr := methodExchange(t, p, policy, func(transport listen.FrameClient) {
+		result, clientErr = api.NewRecoverableAcceptanceClient(transport).Submit(s)
+	})
+	if serverErr != nil || clientErr != nil || result.Outcome != api.AcceptanceOutcomeForbidden || result.Reason != "rights:not_granted rights:question_pending:q1" || !reflect.DeepEqual(before, storageTree(t, root)) {
+		t.Fatal(result, clientErr, serverErr)
+	}
+	unavailable = true
+	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
+		result, clientErr = api.NewRecoverableAcceptanceClient(transport).Submit(s)
+	})
+	if serverErr != nil || clientErr != nil || result.Outcome != api.AcceptanceOutcomeUnavailable || result.Reason != policyUnavailableReason || !reflect.DeepEqual(before, storageTree(t, root)) {
+		t.Fatal("uncertainty became permission pending", result, clientErr, serverErr)
+	}
+	unavailable = false
+	allowed = true
+	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
+		result, clientErr = api.NewRecoverableAcceptanceClient(transport).Submit(s)
+	})
+	if serverErr != nil || clientErr != nil || result.Outcome != api.AcceptanceOutcomeAccepted || result.Receipt == nil {
+		t.Fatal(result, clientErr, serverErr)
+	}
+	operation := result.Receipt.OperationID
+	serverErr = methodExchange(t, p, policy, func(transport listen.FrameClient) {
+		result, clientErr = api.NewRecoverableAcceptanceClient(transport).Submit(s)
+	})
+	if serverErr != nil || clientErr != nil || result.Receipt == nil || result.Receipt.OperationID != operation {
+		t.Fatal("same identity created another operation", result, clientErr, serverErr)
+	}
+}
 func TestMethodPolicyAllowsObservationAndRefusesEffects(t *testing.T) {
 	root := t.TempDir()
 	p := openTest(t, root)

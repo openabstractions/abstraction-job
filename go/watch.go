@@ -11,10 +11,14 @@ import (
 )
 
 // Notice is the present of one kind's jobs, and whether it has stopped moving.
+// Unavailable says the store could not be read: Records is the last good read
+// and Unread the time since it.
 type Notice struct {
-	Records []*Record
-	Quiet   bool
-	Silence time.Duration
+	Records     []*Record
+	Quiet       bool
+	Silence     time.Duration
+	Unavailable bool
+	Unread      time.Duration
 }
 
 // Subscription is a live view of the jobs of one kind. Records is what was true
@@ -88,7 +92,7 @@ func (w *watcher) Records() []*Record { return snapshotOf(w.sub.Current()) }
 
 func (w *watcher) Next(ctx context.Context) (Notice, error) {
 	n, err := w.sub.Next(ctx)
-	return Notice{Records: snapshotOf(n.Now), Quiet: n.Quiet, Silence: n.Silence}, err
+	return Notice{Records: snapshotOf(n.Now), Quiet: n.Quiet, Silence: n.Silence, Unavailable: n.Unavailable, Unread: n.Unread}, err
 }
 
 func (w *watcher) Changes() <-chan []*Record {
@@ -96,13 +100,15 @@ func (w *watcher) Changes() <-chan []*Record {
 	return w.ch
 }
 
+// forward reports nothing during an outage (WATCH-U1); the notice that ends it
+// carries any change made meanwhile, the first snapshot included.
 func (w *watcher) forward() {
 	for {
 		n, err := w.sub.Next(context.Background())
 		if err != nil {
 			return
 		}
-		if n.Quiet {
+		if n.Quiet || n.Unavailable {
 			continue
 		}
 		select {

@@ -51,7 +51,7 @@ func serveOne(conn net.Conn, store Store) {
 
 func apply(store Store, req wire.Request) wire.Response {
 	switch req.Op {
-	case "submit":
+	case wire.OpSubmit:
 		r, err := DecodeProposal([]byte(req.Record))
 		if err != nil {
 			return fail(err)
@@ -62,48 +62,48 @@ func apply(store Store, req wire.Request) wire.Response {
 		}
 		return wire.Response{ID: id}
 
-	case "load":
+	case wire.OpLoad:
 		r, err := store.Load(req.ID)
 		return one(r, err)
 
-	case "list":
+	case wire.OpList:
 		rs, err := store.List()
 		return many(rs, err)
 
-	case "orphans":
+	case wire.OpOrphans:
 		rs, err := store.Orphans()
 		return many(rs, err)
 
-	case "claimable":
+	case wire.OpClaimable:
 		r, err := store.Load(req.ID)
 		if err != nil {
 			return fail(err)
 		}
 		return wire.Response{Bool: store.Claimable(r)}
 
-	case "claim":
+	case wire.OpClaim:
 		r, err := store.Claim(req.ID, req.Owner, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
-	case "renew":
+	case wire.OpRenew:
 		r, err := store.Renew(req.ID, req.Epoch, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
-	case "release":
+	case wire.OpRelease:
 		if err := store.Release(req.ID, req.Epoch); err != nil {
 			return fail(err)
 		}
 		return wire.Response{}
 
-	case "set_intent":
+	case wire.OpSetIntent:
 		r, err := store.SetIntent(req.ID, Want(req.Want), req.By)
 		return one(r, err)
 
-	case "recall":
+	case wire.OpRecall:
 		r, err := store.Recall(req.ID, req.Epoch, req.Reason, req.By, time.Duration(req.TTLMs)*time.Millisecond)
 		return one(r, err)
 
-	case "write":
+	case wire.OpWrite:
 		want, err := Decode([]byte(req.Record))
 		if err != nil {
 			return fail(err)

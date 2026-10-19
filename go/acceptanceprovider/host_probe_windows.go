@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-var hostUnlockFileEx = syscall.NewLazyDLL("kernel32.dll").NewProc("UnlockFileEx")
+var hostUnlockFileEx = kernel32.NewProc("UnlockFileEx")
 
 // probeHost takes a shared lock on the byte lockHost holds exclusively. A
 // read-only handle may lock, and a shared lock conflicts only with a host.

@@ -39,46 +39,14 @@ function strs(out, v, depth) {
 
 const isWs = (c) => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
 
+// raw writes an opaque value's bytes as they are ([DEF-A3]).
 function raw(out, s, depth) {
   const b = typeof s === "string" ? ENC.encode(s) : s;
-  let i = 0;
-  while (i < b.length) {
-    const c = b[i];
-    if (isWs(c)) { i++; continue; }
-    if (c === 0x22) {
-      let j = i + 1;
-      while (j < b.length) {
-        if (b[j] === 0x5c) { j += 2; continue; }
-        if (b[j] === 0x22) { j++; break; }
-        j++;
-      }
-      for (let k = i; k < j; k++) out.byte(b[k]);
-      i = j;
-    } else if (c === 0x7b || c === 0x5b) {
-      out.byte(c);
-      i++;
-      let j = i;
-      while (j < b.length && isWs(b[j])) j++;
-      if (j < b.length && (b[j] === 0x7d || b[j] === 0x5d)) { out.byte(b[j]); i = j + 1; }
-      else { depth++; out.byte(0x0a); pad(out, depth); }
-    } else if (c === 0x7d || c === 0x5d) {
-      depth--;
-      out.byte(0x0a);
-      pad(out, depth);
-      out.byte(c);
-      i++;
-    } else if (c === 0x2c) {
-      out.ascii(",\n");
-      pad(out, depth);
-      i++;
-    } else if (c === 0x3a) {
-      out.ascii(": ");
-      i++;
-    } else {
-      out.byte(c);
-      i++;
-    }
-  }
+  // Whitespace around the value is not part of it.
+  let i = 0, j = b.length;
+  while (i < j && isWs(b[i])) i++;
+  while (j > i && isWs(b[j - 1])) j--;
+  for (let k = i; k < j; k++) out.byte(b[k]);
 }
 
 // A JavaScript string sorts by UTF-16 code unit, which puts U+1D11E before
@@ -244,6 +212,22 @@ export const LinkOutcome = Object.freeze({
   OtherVolume: "other_volume",
   NoHardLinks: "no_hard_links",
   Remote: "remote",
+});
+
+export const WorkObservationOutcome = Object.freeze({
+  Changed: "changed",
+  Unchanged: "unchanged",
+  Gap: "gap",
+  Unknown: "unknown",
+  Forbidden: "forbidden",
+  Invalid: "invalid",
+  Unavailable: "unavailable",
+  Unsupported: "unsupported",
+});
+
+export const WorkObservationMechanism = Object.freeze({
+  Native: "native",
+  Polled: "polled",
 });
 
 export const InventoryOutcome = Object.freeze({
@@ -674,6 +658,44 @@ function writeResultLink(out, v, depth) {
   out.byte(0x7d);
 }
 
+function writeWorkObservation(out, v, depth) {
+  { const n = ENC.encode(v.next).length; if (n > 256) throw new Refusal("bad_value",0); }
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(v.next)) throw new Refusal("bad_value",0);
+    if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
+    if (v.outcome !== "changed" && v.outcome !== "unchanged" && v.outcome !== "gap" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable" && v.outcome !== "unsupported") { throw new Refusal("bad_enum",0); }
+    if (typeof v.mechanism !== "string") throw new Refusal("wrong_type",0);
+    if (v.mechanism !== "native" && v.mechanism !== "polled") { throw new Refusal("bad_enum",0); }
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "outcome");
+  out.ascii(": ");
+  esc(out, v.outcome);
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "next");
+  out.ascii(": ");
+  esc(out, v.next);
+  if (v.snapshot !== undefined && v.snapshot !== null) {
+    out.byte(0x2c);
+    out.byte(0x0a);
+    pad(out, depth + 1);
+    esc(out, "snapshot");
+    out.ascii(": ");
+    writeOperationSnapshot(out, v.snapshot, depth + 1);
+  }
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "mechanism");
+  out.ascii(": ");
+  esc(out, v.mechanism);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
 function writeInventoryPage(out, v, depth) {
     if (typeof v.outcome !== "string") throw new Refusal("wrong_type",0);
     if (v.outcome !== "page" && v.outcome !== "gap" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable") { throw new Refusal("bad_enum",0); }
@@ -768,6 +790,33 @@ function writeOAOperationControlObserveWorkArguments(out, v, depth) {
   esc(out, "identity");
   out.ascii(": ");
   writeRequestIdentity(out, v.identity, depth + 1);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
+function writeOAOperationControlFollowWorkArguments(out, v, depth) {
+  { const n = ENC.encode(v.after).length; if (n > 256) throw new Refusal("bad_value",0); }
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(v.after)) throw new Refusal("bad_value",0);
+  if (v.waitMs < 0n || v.waitMs > 30000n) throw new Refusal("bad_value",0);
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "identity");
+  out.ascii(": ");
+  writeRequestIdentity(out, v.identity, depth + 1);
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "after");
+  out.ascii(": ");
+  esc(out, v.after);
+  out.byte(0x2c);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "wait_ms");
+  out.ascii(": ");
+  num(out, v.waitMs);
   out.byte(0x0a);
   pad(out, depth);
   out.byte(0x7d);
@@ -1007,6 +1056,18 @@ function writeOAOperationControlObserveWorkResult(out, v, depth) {
   out.byte(0x7d);
 }
 
+function writeOAOperationControlFollowWorkResult(out, v, depth) {
+  out.byte(0x7b);
+  out.byte(0x0a);
+  pad(out, depth + 1);
+  esc(out, "value");
+  out.ascii(": ");
+  writeWorkObservation(out, v.value, depth + 1);
+  out.byte(0x0a);
+  pad(out, depth);
+  out.byte(0x7d);
+}
+
 function writeOAOperationControlReadResultResult(out, v, depth) {
   out.byte(0x7b);
   out.byte(0x0a);
@@ -1120,7 +1181,7 @@ function validUtf8(b) {
 }
 
 class Reader {
-  constructor(buf) { this.buf = buf; this.pos = 0; this.depth = 0; }
+  constructor(buf) { this.buf = buf; this.pos = 0; this.depth = 0; this.limit = DEPTH_LIMIT; }
 
   refuse(word) { return new Refusal(word, this.pos); }
 
@@ -1132,7 +1193,7 @@ class Reader {
 
   enter() {
     this.depth++;
-    if (this.depth > DEPTH_LIMIT) throw this.refuse("depth_exceeded");
+    if (this.depth > this.limit) throw this.refuse("depth_exceeded");
   }
 
   string() {
@@ -1390,7 +1451,8 @@ export function newSubmission() {
   return { identity: newRequestIdentity(), kind: "", spec: new Uint8Array(0), requiredGuarantees: [], label: "" };
 }
 
-// Recoverable acceptance evidence. Retention is a minimum duration from
+// [Receipt](https://openabstractions.github.io/reference.html#concept-job.acceptance-receipt):
+// recoverable acceptance evidence. Retention is a minimum duration from
 // original acceptance, never renewed by replay. Expiry does not end work,
 // transfer ownership or authorize duplicate execution. IDs confer no authority.
 export function newReceipt() {
@@ -1425,8 +1487,9 @@ export function newCancellationResult() {
   return { outcome: "" };
 }
 
-// Advisory nonnegative progress. Zero total means unknown. Progress does not
-// authorize delivery or imply completion.
+// Advisory nonnegative progress. Zero total means unknown.
+// [WorkProgress](https://openabstractions.github.io/reference.html#concept-job.progress)
+// does not authorize delivery or imply completion.
 export function newWorkProgress() {
   return { done: 0n, total: 0n };
 }
@@ -1491,6 +1554,16 @@ export function newResultLink() {
   return { outcome: "", receipt: null, size: 0n };
 }
 
+// Exactly changed carries the current snapshot. Changed and unchanged carry the
+// next cursor; gap retains the supplied cursor and requires a fresh
+// empty-cursor snapshot. Other outcomes carry neither snapshot nor cursor. The
+// cursor binds provider instance, authenticated acceptance scope, request
+// identity and JOB-N1 visible state. Observation never seals absence or cancels
+// work.
+export function newWorkObservation() {
+  return { outcome: "", next: "", snapshot: null, mechanism: "" };
+}
+
 // Caller-scoped accepted-operation observations without paths. Only page
 // carries snapshots. A noncomplete page always has a next cursor, even when no
 // own operations were scanned. Complete pages have empty next. Refusals carry
@@ -1530,6 +1603,10 @@ function newOARecoverableAcceptanceCancelWorkArguments() {
 
 function newOAOperationControlObserveWorkArguments() {
   return { identity: newRequestIdentity() };
+}
+
+function newOAOperationControlFollowWorkArguments() {
+  return { identity: newRequestIdentity(), after: "", waitMs: 0n };
 }
 
 function newOAOperationControlReadResultArguments() {
@@ -1582,6 +1659,10 @@ function newOARecoverableAcceptanceCancelWorkResult() {
 
 function newOAOperationControlObserveWorkResult() {
   return { value: newObservationResult() };
+}
+
+function newOAOperationControlFollowWorkResult() {
+  return { value: newWorkObservation() };
 }
 
 function newOAOperationControlReadResultResult() {
@@ -2198,6 +2279,57 @@ function readResultLink(r) {
   return v;
 }
 
+function readWorkObservation(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newWorkObservation();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "outcome") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.outcome = r.string();
+      } else if (key === "next") {
+        if (seen & 2) throw r.refuse("duplicate_field");
+        seen |= 2;
+        v.next = r.string();
+      } else if (key === "snapshot") {
+        if (seen & 4) throw r.refuse("duplicate_field");
+        seen |= 4;
+        v.snapshot = readOperationSnapshot(r);
+      } else if (key === "mechanism") {
+        if (seen & 8) throw r.refuse("duplicate_field");
+        seen |= 8;
+        v.mechanism = r.string();
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 11) >>> 0) !== 11) throw r.refuse("missing_field");
+  { const n = ENC.encode(v.next).length; if (n > 256) throw r.refuse("bad_value"); }
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(v.next)) throw r.refuse("bad_value");
+    if (v.outcome !== "changed" && v.outcome !== "unchanged" && v.outcome !== "gap" && v.outcome !== "unknown" && v.outcome !== "forbidden" && v.outcome !== "invalid" && v.outcome !== "unavailable" && v.outcome !== "unsupported") { throw r.refuse("bad_enum"); }
+    if (v.mechanism !== "native" && v.mechanism !== "polled") { throw r.refuse("bad_enum"); }
+  return v;
+}
+
 function readInventoryPage(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
@@ -2450,6 +2582,52 @@ function readOAOperationControlObserveWorkArguments(r) {
   r.pos++;
   r.depth--;
   if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
+function readOAOperationControlFollowWorkArguments(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAOperationControlFollowWorkArguments();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "identity") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.identity = readRequestIdentity(r);
+      } else if (key === "after") {
+        if (seen & 2) throw r.refuse("duplicate_field");
+        seen |= 2;
+        v.after = r.string();
+      } else if (key === "wait_ms") {
+        if (seen & 4) throw r.refuse("duplicate_field");
+        seen |= 4;
+        v.waitMs = r.integer(-9223372036854775808n, 9223372036854775807n);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 7) >>> 0) !== 7) throw r.refuse("missing_field");
+  { const n = ENC.encode(v.after).length; if (n > 256) throw r.refuse("bad_value"); }
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(v.after)) throw r.refuse("bad_value");
+  if (v.waitMs < 0n || v.waitMs > 30000n) throw r.refuse("bad_value");
   return v;
 }
 
@@ -2960,6 +3138,41 @@ function readOAOperationControlObserveWorkResult(r) {
   return v;
 }
 
+function readOAOperationControlFollowWorkResult(r) {
+  if (r.at() !== 0x7b) throw r.refuse("wrong_type");
+  r.enter();
+  r.pos++;
+  const v = newOAOperationControlFollowWorkResult();
+  let seen = 0;
+  r.ws();
+  if (r.at() !== 0x7d) {
+    for (;;) {
+      r.ws();
+      if (r.at() !== 0x22) throw r.refuse("malformed");
+      const key = r.string();
+      r.ws();
+      if (r.at() !== 0x3a) throw r.refuse("malformed");
+      r.pos++;
+      r.ws();
+      if (key === "value") {
+        if (seen & 1) throw r.refuse("duplicate_field");
+        seen |= 1;
+        v.value = readWorkObservation(r);
+      } else {
+        throw r.refuse("unknown_field");
+      }
+      r.ws();
+      if (r.at() !== 0x2c) break;
+      r.pos++;
+    }
+  }
+  if (r.at() !== 0x7d) throw r.refuse("malformed");
+  r.pos++;
+  r.depth--;
+  if (((seen & 1) >>> 0) !== 1) throw r.refuse("missing_field");
+  return v;
+}
+
 function readOAOperationControlReadResultResult(r) {
   if (r.at() !== 0x7b) throw r.refuse("wrong_type");
   r.enter();
@@ -3144,8 +3357,49 @@ export function decode(data) {
   return v;
 }
 
+const JSON_RECORDS = Object.freeze({
+  RequestIdentity: [writeRequestIdentity, readRequestIdentity],
+  Submission: [writeSubmission, readSubmission],
+  Receipt: [writeReceipt, readReceipt],
+  AcceptanceResult: [writeAcceptanceResult, readAcceptanceResult],
+  HistoryWindow: [writeHistoryWindow, readHistoryWindow],
+  CancellationResult: [writeCancellationResult, readCancellationResult],
+  WorkProgress: [writeWorkProgress, readWorkProgress],
+  WorkFailure: [writeWorkFailure, readWorkFailure],
+  OperationSnapshot: [writeOperationSnapshot, readOperationSnapshot],
+  ObservationResult: [writeObservationResult, readObservationResult],
+  ResultChunk: [writeResultChunk, readResultChunk],
+  ResultRead: [writeResultRead, readResultRead],
+  ResultLink: [writeResultLink, readResultLink],
+  WorkObservation: [writeWorkObservation, readWorkObservation],
+  InventoryPage: [writeInventoryPage, readInventoryPage],
+  OperatorCancellation: [writeOperatorCancellation, readOperatorCancellation],
+});
+
+// toJson writes one record, named by kind, as JSON laid out as this module's
+// documents are and without the document terminator.
+export function toJson(kind, value) {
+  const codec = Object.hasOwn(JSON_RECORDS, kind) ? JSON_RECORDS[kind] : undefined;
+  if (codec === undefined) throw new TypeError("toJson takes a record name of this module, not " + String(kind));
+  const out = new Out();
+  codec[0](out, value, 0);
+  return out.bytes();
+}
+
+// fromJson reads one record, named by kind, from data; a refused input throws Refusal.
+export function fromJson(kind, data) {
+  const codec = Object.hasOwn(JSON_RECORDS, kind) ? JSON_RECORDS[kind] : undefined;
+  if (codec === undefined) throw new TypeError("fromJson takes a record name of this module, not " + String(kind));
+  const r = new Reader(data);
+  r.ws();
+  const v = codec[1](r);
+  r.ws();
+  if (r.pos < r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
 // refusals is in the order two of them are chosen between.
-const refusals = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"];
+const refusals = ["malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "bad_value", "trailing_bytes"];
 
 function refusalRank(word) {
   return refusals.indexOf(word);
@@ -3218,6 +3472,7 @@ _serviceRecords["ObservationResult"] = [["outcome","string","never"],["snapshot"
 _serviceRecords["ResultChunk"] = [["receipt","Receipt","never"],["offset","i64","never"],["total","i64","never"],["data","binary","never"],["eof","bool","never"],];
 _serviceRecords["ResultRead"] = [["outcome","string","never"],["chunk","ResultChunk","absent"],];
 _serviceRecords["ResultLink"] = [["outcome","string","never"],["receipt","Receipt","absent"],["size","i64","never"],];
+_serviceRecords["WorkObservation"] = [["outcome","string","never"],["next","string","never"],["snapshot","OperationSnapshot","absent"],["mechanism","string","never"],];
 _serviceRecords["InventoryPage"] = [["outcome","string","never"],["snapshots","list<OperationSnapshot>","never"],["next","string","never"],["complete","bool","never"],];
 _serviceRecords["OperatorCancellation"] = [["outcome","string","never"],];
 _serviceRecords["OARecoverableAcceptanceGetHistoryWindowArguments"] = [];
@@ -3225,6 +3480,7 @@ _serviceRecords["OARecoverableAcceptanceSubmitArguments"] = [["submission","Subm
 _serviceRecords["OARecoverableAcceptanceReconcileArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OARecoverableAcceptanceCancelWorkArguments"] = [["identity","RequestIdentity","never"],];
 _serviceRecords["OAOperationControlObserveWorkArguments"] = [["identity","RequestIdentity","never"],];
+_serviceRecords["OAOperationControlFollowWorkArguments"] = [["identity","RequestIdentity","never"],["after","string","never"],["waitMs","i64","never"],];
 _serviceRecords["OAOperationControlReadResultArguments"] = [["identity","RequestIdentity","never"],["offset","i64","never"],["maxBytes","i64","never"],];
 _serviceRecords["OAOperationControlLinkResultArguments"] = [["identity","RequestIdentity","never"],["destination","string","never"],];
 _serviceRecords["OAJobInventoryListWorkArguments"] = [["cursor","string","never"],["limit","i64","never"],];
@@ -3238,6 +3494,7 @@ _serviceRecords["OARecoverableAcceptanceSubmitResult"] = [["value","AcceptanceRe
 _serviceRecords["OARecoverableAcceptanceReconcileResult"] = [["value","AcceptanceResult","never"],];
 _serviceRecords["OARecoverableAcceptanceCancelWorkResult"] = [["value","CancellationResult","never"],];
 _serviceRecords["OAOperationControlObserveWorkResult"] = [["value","ObservationResult","never"],];
+_serviceRecords["OAOperationControlFollowWorkResult"] = [["value","WorkObservation","never"],];
 _serviceRecords["OAOperationControlReadResultResult"] = [["value","ResultRead","never"],];
 _serviceRecords["OAOperationControlLinkResultResult"] = [["value","ResultLink","never"],];
 _serviceRecords["OAJobInventoryListWorkResult"] = [["value","InventoryPage","never"],];
@@ -3330,6 +3587,28 @@ export class OperationControlClient {
     return _result.value;
   }
 
+  async followWork(identity, after, waitMs) {
+    const _args = newOAOperationControlFollowWorkArguments();
+    _args.identity = identity;
+    _args.after = after;
+    _args.waitMs = waitMs;
+    _serviceCheck("OAOperationControlFollowWorkArguments", _args);
+    const _payload = _serviceEncode(writeOAOperationControlFollowWorkArguments, _args, 1);
+    _serviceDecode(readOAOperationControlFollowWorkArguments, _payload, 1);
+    const _request = _serviceRequest("abstraction.job/operations@1", "FollowWork", _payload);
+    const _reply = _serviceResponse(await this._transport.exchangeFrame(_request), "abstraction.job/operations@1", "FollowWork");
+    const _result = _serviceDecode(readOAOperationControlFollowWorkResult, _reply, 1);
+    return _result.value;
+  }
+
+  followWorkPages(identity, after, waitMs) {
+    if (typeof waitMs!=="bigint" || waitMs < 0n || waitMs > 30000n) throw new RangeError("observe wait_ms is 0..30000");
+    const _observeClient=this; let _observeTail=Promise.resolve(), _observeClosed=false;
+    return { [Symbol.asyncIterator]() { return this; },
+      next() { const _observePending=_observeTail.then(async()=>{ if(_observeClosed)return {done:true,value:undefined}; const _observePage=await _observeClient.followWork(identity, after, waitMs); after=_observePage["next"];return {done:false,value:_observePage}; }); _observeTail=_observePending.catch(()=>{});return _observePending; },
+      async return() { _observeClosed=true;return {done:true,value:undefined}; } };
+  }
+
   async readResult(identity, offset, maxBytes) {
     const _args = newOAOperationControlReadResultArguments();
     _args.identity = identity;
@@ -3406,3 +3685,713 @@ export class JobOperatorClient {
   }
 }
 export const JobOperatorService = Object.freeze({wireName:"abstraction.job/operator@1",Client:JobOperatorClient});
+
+const _namedRecords = Object.create(null);
+_namedRecords["RequestIdentity"] = [["key","string","never"],["historyEpoch","string","never"],["attempt","i64","zero"],];
+_namedRecords["Submission"] = [["identity","RequestIdentity","never"],["kind","string","never"],["spec","binary","never"],["requiredGuarantees","list<string>","never"],["label","string","absent"],];
+_namedRecords["Receipt"] = [["identity","RequestIdentity","never"],["logicalOwner","string","never"],["operationId","string","never"],["acceptedGuarantees","list<string>","never"],["historyRetentionMs","i64","never"],];
+_namedRecords["AcceptanceResult"] = [["outcome","string","never"],["receipt","Receipt","absent"],["reason","string","never"],];
+_namedRecords["HistoryWindow"] = [["logicalOwner","string","never"],["historyEpoch","string","never"],["minimumRetentionMs","i64","never"],["resultRetentionMs","i64","zero"],];
+_namedRecords["CancellationResult"] = [["outcome","string","never"],];
+_namedRecords["WorkProgress"] = [["done","i64","never"],["total","i64","never"],];
+_namedRecords["WorkFailure"] = [["classification","string","never"],["message","string","never"],["cause","string","zero"],];
+_namedRecords["OperationSnapshot"] = [["receipt","Receipt","never"],["state","string","never"],["progress","WorkProgress","never"],["cancellationRequested","bool","never"],["failure","WorkFailure","absent"],["label","string","absent"],["labelDerived","bool","zero"],["waiting","string","zero"],];
+_namedRecords["ObservationResult"] = [["outcome","string","never"],["snapshot","OperationSnapshot","absent"],];
+_namedRecords["ResultChunk"] = [["receipt","Receipt","never"],["offset","i64","never"],["total","i64","never"],["data","binary","never"],["eof","bool","never"],];
+_namedRecords["ResultRead"] = [["outcome","string","never"],["chunk","ResultChunk","absent"],];
+_namedRecords["ResultLink"] = [["outcome","string","never"],["receipt","Receipt","absent"],["size","i64","never"],];
+_namedRecords["WorkObservation"] = [["outcome","string","never"],["next","string","never"],["snapshot","OperationSnapshot","absent"],["mechanism","string","never"],];
+_namedRecords["InventoryPage"] = [["outcome","string","never"],["snapshots","list<OperationSnapshot>","never"],["next","string","never"],["complete","bool","never"],];
+_namedRecords["OperatorCancellation"] = [["outcome","string","never"],];
+function _namedCheck(kind, value, depth = 0, limit = DEPTH_LIMIT) {
+  if (depth > limit) throw new Refusal("depth_exceeded", 0);
+  let valid = false;
+  if (kind === "string") {
+    valid = typeof value === "string";
+    if (valid) for (const ch of value) {
+      const cp = ch.codePointAt(0);
+      if (cp >= 0xd800 && cp <= 0xdfff) throw new Refusal("bad_string", 0);
+    }
+  } else if (kind === "i32") {
+    valid = typeof value === "number" && Number.isInteger(value) && value >= -2147483648 && value <= 2147483647;
+  } else if (kind === "i64") {
+    valid = typeof value === "bigint" && value >= -9223372036854775808n && value <= 9223372036854775807n;
+  } else if (kind === "bool") valid = typeof value === "boolean";
+  else if (kind === "binary") valid = value instanceof Uint8Array;
+  else if (kind === "json") {
+    valid = typeof value === "string" || value instanceof Uint8Array;
+    if (valid) { const r = new Reader(typeof value === "string" ? ENC.encode(value) : value); r.depth = depth; r.ws(); r.rawValue(); r.ws(); if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes"); }
+  } else if (kind.startsWith("list<")) {
+    valid = Array.isArray(value);
+    if (valid) for (const item of value) _namedCheck(kind.slice(5,-1), item, depth + 1, limit);
+  } else if (kind.startsWith("map<string,")) {
+    valid = value !== null && typeof value === "object" && !Array.isArray(value);
+    if (valid) for (const [key,item] of Object.entries(value)) { _namedCheck("string",key,depth+1,limit); _namedCheck(kind.slice(11,-1),item,depth+1,limit); }
+  } else {
+    const fields = _namedRecords[kind];
+    valid = fields !== undefined && value !== null && typeof value === "object" && !Array.isArray(value);
+    if (valid) for (const [name,type,omit] of fields) {
+      if (!Object.hasOwn(value,name)) throw new Refusal("missing_field",0);
+      const item = value[name];
+      if (omit === "absent" && item === null) continue;
+      _namedCheck(type,item,depth+1,limit);
+    }
+  }
+  if (!valid) throw new Refusal("wrong_type", 0);
+}
+
+export function checkRequestIdentity(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("RequestIdentity", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkSubmission(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("Submission", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkReceipt(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("Receipt", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkAcceptanceResult(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("AcceptanceResult", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkHistoryWindow(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("HistoryWindow", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkCancellationResult(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("CancellationResult", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkWorkProgress(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("WorkProgress", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkWorkFailure(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("WorkFailure", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkOperationSnapshot(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("OperationSnapshot", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkObservationResult(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("ObservationResult", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkResultChunk(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("ResultChunk", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkResultRead(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("ResultRead", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkResultLink(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("ResultLink", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkWorkObservation(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("WorkObservation", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkInventoryPage(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("InventoryPage", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function checkOperatorCancellation(v, depth = 0, limit = DEPTH_LIMIT) {
+  _namedCheck("OperatorCancellation", v, depth, Math.min(limit, DEPTH_LIMIT));
+}
+
+export function decodeRequestIdentityAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readRequestIdentity(r);
+  return [v, r.pos];
+}
+
+export function encodeRequestIdentityAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkRequestIdentity(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeRequestIdentity(out, v, depth);
+  const bytes = out.bytes();
+  decodeRequestIdentityAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeRequestIdentity(v) {
+  const bytes = encodeRequestIdentityAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeRequestIdentity(data) {
+  const [v, n] = decodeRequestIdentityAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeSubmissionAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readSubmission(r);
+  return [v, r.pos];
+}
+
+export function encodeSubmissionAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkSubmission(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeSubmission(out, v, depth);
+  const bytes = out.bytes();
+  decodeSubmissionAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeSubmission(v) {
+  const bytes = encodeSubmissionAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeSubmission(data) {
+  const [v, n] = decodeSubmissionAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeReceiptAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readReceipt(r);
+  return [v, r.pos];
+}
+
+export function encodeReceiptAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkReceipt(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeReceipt(out, v, depth);
+  const bytes = out.bytes();
+  decodeReceiptAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeReceipt(v) {
+  const bytes = encodeReceiptAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeReceipt(data) {
+  const [v, n] = decodeReceiptAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeAcceptanceResultAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readAcceptanceResult(r);
+  return [v, r.pos];
+}
+
+export function encodeAcceptanceResultAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkAcceptanceResult(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeAcceptanceResult(out, v, depth);
+  const bytes = out.bytes();
+  decodeAcceptanceResultAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeAcceptanceResult(v) {
+  const bytes = encodeAcceptanceResultAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeAcceptanceResult(data) {
+  const [v, n] = decodeAcceptanceResultAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeHistoryWindowAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readHistoryWindow(r);
+  return [v, r.pos];
+}
+
+export function encodeHistoryWindowAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkHistoryWindow(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeHistoryWindow(out, v, depth);
+  const bytes = out.bytes();
+  decodeHistoryWindowAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeHistoryWindow(v) {
+  const bytes = encodeHistoryWindowAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeHistoryWindow(data) {
+  const [v, n] = decodeHistoryWindowAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeCancellationResultAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readCancellationResult(r);
+  return [v, r.pos];
+}
+
+export function encodeCancellationResultAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkCancellationResult(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeCancellationResult(out, v, depth);
+  const bytes = out.bytes();
+  decodeCancellationResultAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeCancellationResult(v) {
+  const bytes = encodeCancellationResultAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeCancellationResult(data) {
+  const [v, n] = decodeCancellationResultAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeWorkProgressAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readWorkProgress(r);
+  return [v, r.pos];
+}
+
+export function encodeWorkProgressAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkWorkProgress(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeWorkProgress(out, v, depth);
+  const bytes = out.bytes();
+  decodeWorkProgressAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeWorkProgress(v) {
+  const bytes = encodeWorkProgressAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeWorkProgress(data) {
+  const [v, n] = decodeWorkProgressAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeWorkFailureAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readWorkFailure(r);
+  return [v, r.pos];
+}
+
+export function encodeWorkFailureAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkWorkFailure(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeWorkFailure(out, v, depth);
+  const bytes = out.bytes();
+  decodeWorkFailureAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeWorkFailure(v) {
+  const bytes = encodeWorkFailureAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeWorkFailure(data) {
+  const [v, n] = decodeWorkFailureAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeOperationSnapshotAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readOperationSnapshot(r);
+  return [v, r.pos];
+}
+
+export function encodeOperationSnapshotAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkOperationSnapshot(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeOperationSnapshot(out, v, depth);
+  const bytes = out.bytes();
+  decodeOperationSnapshotAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeOperationSnapshot(v) {
+  const bytes = encodeOperationSnapshotAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeOperationSnapshot(data) {
+  const [v, n] = decodeOperationSnapshotAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeObservationResultAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readObservationResult(r);
+  return [v, r.pos];
+}
+
+export function encodeObservationResultAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkObservationResult(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeObservationResult(out, v, depth);
+  const bytes = out.bytes();
+  decodeObservationResultAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeObservationResult(v) {
+  const bytes = encodeObservationResultAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeObservationResult(data) {
+  const [v, n] = decodeObservationResultAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeResultChunkAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readResultChunk(r);
+  return [v, r.pos];
+}
+
+export function encodeResultChunkAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkResultChunk(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeResultChunk(out, v, depth);
+  const bytes = out.bytes();
+  decodeResultChunkAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeResultChunk(v) {
+  const bytes = encodeResultChunkAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeResultChunk(data) {
+  const [v, n] = decodeResultChunkAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeResultReadAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readResultRead(r);
+  return [v, r.pos];
+}
+
+export function encodeResultReadAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkResultRead(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeResultRead(out, v, depth);
+  const bytes = out.bytes();
+  decodeResultReadAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeResultRead(v) {
+  const bytes = encodeResultReadAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeResultRead(data) {
+  const [v, n] = decodeResultReadAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeResultLinkAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readResultLink(r);
+  return [v, r.pos];
+}
+
+export function encodeResultLinkAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkResultLink(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeResultLink(out, v, depth);
+  const bytes = out.bytes();
+  decodeResultLinkAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeResultLink(v) {
+  const bytes = encodeResultLinkAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeResultLink(data) {
+  const [v, n] = decodeResultLinkAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeWorkObservationAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readWorkObservation(r);
+  return [v, r.pos];
+}
+
+export function encodeWorkObservationAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkWorkObservation(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeWorkObservation(out, v, depth);
+  const bytes = out.bytes();
+  decodeWorkObservationAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeWorkObservation(v) {
+  const bytes = encodeWorkObservationAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeWorkObservation(data) {
+  const [v, n] = decodeWorkObservationAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeInventoryPageAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readInventoryPage(r);
+  return [v, r.pos];
+}
+
+export function encodeInventoryPageAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkInventoryPage(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeInventoryPage(out, v, depth);
+  const bytes = out.bytes();
+  decodeInventoryPageAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeInventoryPage(v) {
+  const bytes = encodeInventoryPageAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeInventoryPage(data) {
+  const [v, n] = decodeInventoryPageAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}
+
+export function decodeOperatorCancellationAt(data, depth, limit) {
+  const r = new Reader(data);
+  if (depth < 0 || limit < 1) throw r.refuse("depth_exceeded");
+  r.depth = depth;
+  r.limit = Math.min(limit, DEPTH_LIMIT);
+  r.ws();
+  const v = readOperatorCancellation(r);
+  return [v, r.pos];
+}
+
+export function encodeOperatorCancellationAt(v, depth) {
+  if (depth < 0 || depth >= DEPTH_LIMIT) throw new Refusal("depth_exceeded", 0);
+  checkOperatorCancellation(v, depth, DEPTH_LIMIT);
+  const out = new Out();
+  writeOperatorCancellation(out, v, depth);
+  const bytes = out.bytes();
+  decodeOperatorCancellationAt(bytes, depth, DEPTH_LIMIT);
+  return bytes;
+}
+
+export function encodeOperatorCancellation(v) {
+  const bytes = encodeOperatorCancellationAt(v, 0);
+  const out = new Uint8Array(bytes.length + 1);
+  out.set(bytes);
+  out[bytes.length] = 0x0a;
+  return out;
+}
+
+export function decodeOperatorCancellation(data) {
+  const [v, n] = decodeOperatorCancellationAt(data, 0, DEPTH_LIMIT);
+  const r = new Reader(data);
+  r.pos = n;
+  r.ws();
+  if (r.pos !== r.buf.length) throw r.refuse("trailing_bytes");
+  return v;
+}

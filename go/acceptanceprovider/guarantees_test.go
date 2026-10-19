@@ -117,7 +117,13 @@ func TestUnsupportedExecutionGuaranteeSealsBeforePreparation(t *testing.T) {
 	}
 	s.RequiredGuarantees = []string{testExecutionPromise}
 	r, err = p.Bind("alice").Submit(s)
-	if err != nil || r.Outcome.String() != "definitely_not_accepted" || count != 0 {
-		t.Fatalf("sealed identity became eligible: %+v %v", r, err)
+	if err != nil || r.Outcome.String() != "definitely_not_accepted" || count != 0 || jobs(t, root) != 0 {
+		t.Fatalf("sealed identity became eligible: %+v %v prepares=%d", r, err, count)
+	}
+	// The seal belongs to this identity; fresh supported work still prepares.
+	s.Identity.Key = "supported-fresh"
+	r, err = p.Bind("alice").Submit(s)
+	if err != nil || r.Outcome.String() != "accepted" || count == 0 || jobs(t, root) != 1 {
+		t.Fatalf("fresh supported identity: %+v %v prepares=%d", r, err, count)
 	}
 }

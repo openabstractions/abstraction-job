@@ -52,18 +52,19 @@ type configuration struct {
 // published means insertion succeeded; a missing published record is corruption,
 // not permission to create it again. sealed prevents delayed acceptance forever.
 type journal struct {
-	Version         int
-	Scope           string
-	Subject         *AuthenticatedSubject `json:",omitempty"`
-	SubjectOrigin   string                `json:",omitempty"`
-	SubjectEvidence string                `json:",omitempty"`
-	Identity        api.RequestIdentity
-	Phase           string
-	Arguments       *api.Submission
-	Receipt         *api.Receipt
-	Reason          string
-	WorkSpec        []byte   `json:",omitempty"`
-	WorkRequires    []string `json:",omitempty"`
+	OwnershipProfile string `json:",omitempty"`
+	Version          int
+	Scope            string
+	Subject          *AuthenticatedSubject `json:",omitempty"`
+	SubjectOrigin    string                `json:",omitempty"`
+	SubjectEvidence  string                `json:",omitempty"`
+	Identity         api.RequestIdentity
+	Phase            string
+	Arguments        *api.Submission
+	Receipt          *api.Receipt
+	Reason           string
+	WorkSpec         []byte   `json:",omitempty"`
+	WorkRequires     []string `json:",omitempty"`
 	// Origin is empty for admitted submissions. legacyMigrationOrigin marks work
 	// an operator mapping converted; only such journals use LegacyPreparer.
 	Origin string `json:",omitempty"`
@@ -85,13 +86,16 @@ func (j *journal) workSpec() []byte {
 }
 
 type Provider struct {
-	inventory  inventoryState
-	root       string
-	config     configuration
-	store      *job.FileStore
-	executor   Executor
-	subjectsMu sync.RWMutex
-	subjects   map[string]journalSubject
+	resultMu          sync.RWMutex // ReadResult/LinkResult share; collection excludes both.
+	observation       workObservationState
+	canonicalSubjects bool // configured before sharing; AcquireHost is the lifecycle owner
+	inventory         inventoryState
+	root              string
+	config            configuration
+	store             *job.FileStore
+	executor          Executor
+	subjectsMu        sync.RWMutex
+	subjects          map[string]journalSubject
 	// features caches storage features already recorded in the owner header.
 	features sync.Map
 	// Tests inject failures at durable admission boundaries.
@@ -165,17 +169,44 @@ func (p *Provider) SubjectForOperation(operationID, scope string) (*Authenticate
 	if record.subject == nil {
 		return nil, true, nil
 	}
-	// Re-read durable evidence instead of granting on a cached subject alone.
-	data, err := cas.Read(record.journalPath)
+	j, err := p.indexedJournal(operationID, record)
 	if err != nil {
 		return nil, true, err
 	}
-	j, err := p.decodeJournal(data)
-	if err != nil || j.Receipt == nil || j.Receipt.OperationID != operationID || j.Scope != scope || j.Subject == nil || j.SubjectOrigin != record.origin || j.SubjectEvidence != record.evidence || *j.Subject != *record.subject {
-		return nil, true, errors.New("acceptance: operation subject evidence unavailable")
-	}
-	subject := *record.subject
+	subject := *j.Subject
 	return &subject, true, nil
+}
+
+// executionSubjectForOperation lets the trusted executor ask for the owner of
+// its actual operation without rewriting prepared work to add a scope. Public
+// SubjectForOperation and nonempty scoped requests retain strict scope matching.
+func (p *Provider) executionSubjectForOperation(operationID, scope string) (*AuthenticatedSubject, bool, error) {
+	if scope == "" {
+		p.subjectsMu.RLock()
+		record, found := p.subjects[operationID]
+		p.subjectsMu.RUnlock()
+		if !found {
+			return nil, false, nil
+		}
+		scope = record.scope
+	}
+	return p.SubjectForOperation(operationID, scope)
+}
+
+func (p *Provider) indexedJournal(operationID string, record journalSubject) (*journal, error) {
+	// Re-read durable evidence instead of granting on a cached subject alone.
+	if err := regularFile(record.journalPath); err != nil {
+		return nil, err
+	}
+	data, err := cas.Read(record.journalPath)
+	if err != nil {
+		return nil, err
+	}
+	j, err := p.decodeJournal(data)
+	if err != nil || j.Receipt == nil || j.Receipt.OperationID != operationID || j.Scope != record.scope || j.SubjectOrigin != record.origin || j.SubjectEvidence != record.evidence || (j.Subject == nil) != (record.subject == nil) || (j.Subject != nil && *j.Subject != *record.subject) || p.requestPath(j.Scope, j.Identity) != record.journalPath {
+		return nil, errors.New("acceptance: operation subject evidence unavailable")
+	}
+	return j, nil
 }
 
 func (p *Provider) indexJournal(path string, j *journal) error {
@@ -228,6 +259,8 @@ type Executor interface {
 }
 
 // SubjectLookup reads private journal evidence for the actual claimed record.
+// An empty scope selects its receiving-side indexed scope for execution owner
+// attribution; a nonempty scope must match exactly. This callback is never wire input.
 type SubjectLookup func(operationID, scope string) (*AuthenticatedSubject, bool, error)
 
 // SubjectServingExecutor receives recovery evidence without changing the job
@@ -509,7 +542,7 @@ func (p *Provider) Execute(ctx context.Context) error {
 		}()
 	}
 	if executor, ok := p.executor.(SubjectServingExecutor); ok {
-		return executor.ServeWithSubjectLookup(ctx, store, p.SubjectForOperation)
+		return executor.ServeWithSubjectLookup(ctx, store, p.executionSubjectForOperation)
 	}
 	return p.executor.Serve(ctx, store)
 }
@@ -682,7 +715,11 @@ func (b *bound) attemptEvidence(id api.RequestIdentity) api.AttemptEvidence {
 	p := b.provider
 	previous := id
 	previous.Attempt--
-	j, path, err := p.readJournal(b.scope, previous)
+	previousOwner, err := b.ownershipSnapshot(previous)
+	if err != nil {
+		return api.AttemptEvidence{Previous: "contradictory"}
+	}
+	j, path, err := p.readJournal(previousOwner.scope, previous)
 	switch {
 	case err != nil:
 		return api.AttemptEvidence{Previous: "contradictory"}
@@ -712,7 +749,11 @@ func (b *bound) attemptEvidence(id api.RequestIdentity) api.AttemptEvidence {
 		}
 		earlier := walk.Identity
 		earlier.Attempt--
-		if walk, _, err = p.readJournal(b.scope, earlier); err != nil {
+		earlierOwner, lookupErr := b.ownershipSnapshot(earlier)
+		if lookupErr != nil {
+			return api.AttemptEvidence{Previous: "contradictory"}
+		}
+		if walk, _, err = p.readJournal(earlierOwner.scope, earlier); err != nil {
 			return api.AttemptEvidence{Previous: "contradictory"}
 		}
 	}
@@ -763,8 +804,15 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 		if !marked && !slices.Contains(p.config.Features, StorageFeatureSubjects) {
 			return nil, fmt.Errorf("acceptance: subject storage feature missing")
 		}
-		if err := (Binding{Scope: j.Scope, Subject: j.Subject, Origin: j.SubjectOrigin, Evidence: j.SubjectEvidence}).valid(); err != nil || j.Subject == nil {
+		if err := journalBinding(&j).valid(); err != nil || j.Subject == nil {
 			return nil, fmt.Errorf("acceptance: invalid recovery subject")
+		}
+	}
+	if j.OwnershipProfile != "" {
+		scope, err := canonicalSubjectScope(journalBinding(&j))
+		_, marked := p.features.Load(StorageFeatureCanonicalSubjects)
+		if j.OwnershipProfile != nativeOwnershipProfile || err != nil || scope != j.Scope || (!marked && !slices.Contains(p.config.Features, StorageFeatureCanonicalSubjects)) {
+			return nil, errors.New("acceptance: invalid native ownership profile")
 		}
 	}
 	if label, err := api.NormalizeLabel(j.Label); err != nil || label != j.Label || (j.LabelDerived && j.Label == "") {
@@ -893,6 +941,19 @@ func (p *Provider) label(s api.Submission) storedLabel {
 }
 
 func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedLabel) (api.AcceptanceResult, error) {
+	// Revalidation may lose to another admitted reservation/materialization.
+	// Re-read complete evidence outside the root lock; contention never creates
+	// a second operation or turns unreadable evidence into an empty namespace.
+	for range 16 {
+		v, err := b.resolveOnce(id, s, label)
+		if !errors.Is(err, errOwnershipChanged) {
+			return v, err
+		}
+	}
+	return outcome(api.AcceptanceOutcomeUnknown, "ownership evidence remained busy"), nil
+}
+
+func (b *bound) resolveOnce(id api.RequestIdentity, s *api.Submission, label storedLabel) (api.AcceptanceResult, error) {
 	p := b.provider
 	if id.Key == "" || len(id.Key) > 1024 || id.HistoryEpoch == "" || id.Attempt < 0 {
 		return outcome(api.AcceptanceOutcomeInvalid, "request identity required"), nil
@@ -901,6 +962,16 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 	if id.HistoryEpoch != p.config.Epoch {
 		return outcome(api.AcceptanceOutcomeUnknown, "history epoch unavailable"), nil
 	}
+	snapshot, err := b.ownershipSnapshot(id)
+	if errors.Is(err, errOwnershipConflict) {
+		return outcome(api.AcceptanceOutcomeKeyConflict, "conflicting retained ownership occurrences"), nil
+	}
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
+	}
+	selected := *b
+	selected.scope = snapshot.scope
+	b = &selected
 	path := p.requestPath(b.scope, id)
 	if err := regularFile(path); err != nil {
 		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), nil
@@ -930,31 +1001,69 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 			return refused, nil
 		}
 	}
-	if s != nil && b.binding.Subject != nil {
+	if b.binding.Subject != nil && (s != nil || p.canonicalSubjects) {
 		if err := p.ensureFeature(StorageFeatureSubjects); err != nil {
 			return outcome(api.AcceptanceOutcomeUnknown, "owner storage feature unavailable"), nil
 		}
 	}
+	operationID := job.NewID()
+	var accepted []string
+	var acceptanceErr error
+	if s != nil {
+		accepted, acceptanceErr = p.acceptedGuarantees(s.RequiredGuarantees)
+	}
+	var preparedWork []byte
+	var preparedRequires []string
+	var prepareErr error
+	// Retained ownership answers through its journal. Only an absent identity
+	// may prepare a new operation; a sealed identity never reaches preparation.
+	if s != nil && p.executor != nil && acceptanceErr == nil && snapshot.journals[path] == nil {
+		binding := b.binding
+		binding.Scope = b.scope
+		preparedWork, preparedRequires, prepareErr = p.prepareBinding(binding, operationID, *s)
+	}
+	unlock, err := p.lockAdmission()
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner admission lock unavailable"), nil
+	}
+	if err = p.checkCanonicalAdmission(); err == nil {
+		err = snapshot.unchanged(p)
+	}
+	if err != nil {
+		unlock()
+		if errors.Is(err, errOwnershipChanged) {
+			return api.AcceptanceResult{}, err
+		}
+		return outcome(api.AcceptanceOutcomeUnknown, "owner ownership admission unavailable"), nil
+	}
 	var j *journal
-	err := cas.Change(path, func(cur []byte) ([]byte, error) {
+	err = cas.Change(path, func(cur []byte) ([]byte, error) {
+		if !bytes.Equal(cur, snapshot.raw[path]) {
+			return nil, errOwnershipChanged
+		}
 		if cur != nil {
-			var err error
-			j, err = p.decodeJournal(cur)
-			return cur, err
+			j = snapshot.journals[path]
+			if j == nil {
+				return nil, errors.New("acceptance: reservation journal unavailable")
+			}
+			return cur, nil
 		}
 		if eligibility.Outcome != 0 {
 			return nil, errIneligibleAttempt
 		}
 		j = &journal{Version: p.config.Version, Scope: b.scope, Identity: id, Phase: "sealed", Reason: "identity sealed before acceptance"}
+		if snapshot.all {
+			j.OwnershipProfile = nativeOwnershipProfile
+			subject := *b.binding.Subject
+			j.Subject, j.SubjectOrigin, j.SubjectEvidence = &subject, b.binding.Origin, b.binding.Evidence
+		}
 		if s != nil {
-			accepted, err := p.acceptedGuarantees(s.RequiredGuarantees)
-			if err != nil {
-				j.Reason = err.Error()
+			if acceptanceErr != nil {
+				j.Reason = acceptanceErr.Error()
 				return json.Marshal(j)
 			}
-			operationID := job.NewID()
 			if p.executor != nil {
-				work, requires, err := p.prepareBinding(b.binding, operationID, *s)
+				work, requires, err := preparedWork, preparedRequires, prepareErr
 				if err != nil || len(work) > MaxSpecBytes || !json.Valid(work) {
 					j.Reason = "configured executor refused this work"
 					return json.Marshal(j)
@@ -973,6 +1082,10 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 		}
 		return json.Marshal(j)
 	})
+	unlock() // No executor, materialization or effect work under root admission lock.
+	if errors.Is(err, errOwnershipChanged) {
+		return api.AcceptanceResult{}, err
+	}
 	if errors.Is(err, errIneligibleAttempt) {
 		return eligibility, nil
 	}
@@ -1020,15 +1133,42 @@ func (b *bound) resolve(id api.RequestIdentity, s *api.Submission, label storedL
 // while the executor decides, the journal answers instead.
 func (b *bound) checkAdmission(id api.RequestIdentity, s api.Submission) (api.AcceptanceResult, bool) {
 	p := b.provider
-	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+	before, err := b.ownershipSnapshot(id)
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), true
+	}
+	if before.journals[p.requestPath(before.scope, id)] != nil {
 		return api.AcceptanceResult{}, false
 	}
 	refused, ok := b.admission(s)
 	if !ok {
 		return api.AcceptanceResult{}, false
 	}
-	if j, _, err := p.readJournal(b.scope, id); err != nil || j != nil {
+	after, err := b.ownershipSnapshot(id)
+	if errors.Is(err, errOwnershipConflict) {
+		return outcome(api.AcceptanceOutcomeKeyConflict, "conflicting retained ownership occurrences"), true
+	}
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), true
+	}
+	if after.journals[p.requestPath(after.scope, id)] != nil {
 		return api.AcceptanceResult{}, false
+	}
+	// Linearize the no-journal refusal against both namespace reservations.
+	// The callback and journal validation above run outside this lock.
+	unlock, err := p.lockAdmission()
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner admission lock unavailable"), true
+	}
+	if err = p.checkCanonicalAdmission(); err == nil {
+		err = after.unchanged(p)
+	}
+	unlock()
+	if errors.Is(err, errOwnershipChanged) {
+		return api.AcceptanceResult{}, false
+	}
+	if err != nil {
+		return outcome(api.AcceptanceOutcomeUnknown, "owner recovery evidence unavailable"), true
 	}
 	return refused, true
 }
@@ -1044,12 +1184,7 @@ func (b *bound) admission(s api.Submission) (api.AcceptanceResult, bool) {
 	if _, err := p.acceptedGuarantees(s.RequiredGuarantees); err != nil {
 		return api.AcceptanceResult{}, false
 	}
-	extra := []string{}
-	for _, g := range s.RequiredGuarantees {
-		if !slices.Contains(Guarantees(), g) {
-			extra = append(extra, g)
-		}
-	}
+	extra := executorGuarantees(s.RequiredGuarantees)
 	word, reason := api.AcceptanceOutcomeAccepted, ""
 	if b.binding.Subject != nil {
 		if subjectChecker, ok := p.executor.(SubjectAdmissionChecker); ok {

@@ -70,7 +70,7 @@ const (
 
 // SupportedStorageFeatures is the feature roster this provider reads.
 func SupportedStorageFeatures() []string {
-	return []string{StorageFeatureAttempts, StorageFeatureResultLost, StorageFeatureLabels, StorageFeatureSubjects}
+	return []string{StorageFeatureAttempts, StorageFeatureResultLost, StorageFeatureLabels, StorageFeatureSubjects, StorageFeatureCanonicalSubjects}
 }
 
 func validateConfiguration(data []byte, owner string, version int, profile string, managed bool) (configuration, error) {

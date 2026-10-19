@@ -37,8 +37,8 @@ while True:  # progress until the job ends
         raise SystemExit(f"\ndownload {job.state}")
     time.sleep(1)
 
-# The Python facade has no validated link_result yet (only the raw
-# generated call exists), so this copies the bytes.
+# Stream the bytes to this file. jobs.link_result(identity, path) instead
+# uses the generated OperationControl call to request a service-owned hard link.
 with open(path, "wb") as file:
     jobs.copy_result(identity, file)
 print("\nsaved", path)

@@ -77,7 +77,16 @@ func (e *ErrUnreadable) orNil() error {
 	return e
 }
 
+// NewFileStore opens the file store at root and creates jobs/ and work/ when
+// they are missing. Every record write takes the cas lock, which holds within
+// one host, so a root off this host's local volumes (a UNC path, a network
+// drive, a network file system) is refused here with cas's reason before
+// anything is created (cas CAS-L2). A record written from two hosts needs a
+// protocol this store does not have.
 func NewFileStore(root string) (*FileStore, error) {
+	if err := cas.LocalPath(root); err != nil {
+		return nil, fmt.Errorf("job: %w", err)
+	}
 	for _, d := range []string{filepath.Join(root, "jobs"), filepath.Join(root, "work")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, err
@@ -88,8 +97,24 @@ func NewFileStore(root string) (*FileStore, error) {
 
 func (s *FileStore) Root() string { return s.root }
 
-func (s *FileStore) recordPath(id string) string {
-	return filepath.Join(s.root, "jobs", id+".json")
+// recordPath is the file holding job id's record. An id names one file
+// directly under jobs/, so an empty id, one carrying a path separator, and one
+// that is not a local name (a "..", a volume, a reserved device name) are
+// refused before any path is built from it.
+func (s *FileStore) recordPath(id string) (string, error) {
+	if err := checkID(id); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.root, "jobs", id+".json"), nil
+}
+
+// checkID refuses a record id that would name anything other than one file in
+// the store's jobs/ directory.
+func checkID(id string) error {
+	if id == "" || strings.ContainsAny(id, `/\`) || !filepath.IsLocal(id) || !filepath.IsLocal(id+".json") {
+		return fmt.Errorf("%w: record id %q must name one file in the store", ErrInvalid, id)
+	}
+	return nil
 }
 
 // WorkPath is a name, not a shape: derived from the id so a successor finds
@@ -120,11 +145,15 @@ func (s *FileStore) Submit(r Record) (string, error) {
 	r.CreatedAt, r.UpdatedAt = At(now), At(now)
 	r.Progress.UpdatedAt = At(now)
 
+	path, err := s.recordPath(r.ID)
+	if err != nil {
+		return "", err
+	}
 	b, err := r.Encode()
 	if err != nil {
 		return "", err
 	}
-	err = cas.Write(s.recordPath(r.ID), nil, b)
+	err = cas.Write(path, nil, b)
 	if errors.Is(err, cas.ErrMoved) {
 		return "", fmt.Errorf("%w: %s already exists", ErrInvalid, r.ID)
 	}
@@ -137,7 +166,11 @@ func (s *FileStore) Submit(r Record) (string, error) {
 // Load never takes the lock: any process may read at any time, which is what
 // makes work observable from outside.
 func (s *FileStore) Load(id string) (*Record, error) {
-	b, err := readFile(s.recordPath(id))
+	path, err := s.recordPath(id)
+	if err != nil {
+		return nil, err
+	}
+	b, err := readFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
@@ -148,8 +181,12 @@ func (s *FileStore) Load(id string) (*Record, error) {
 }
 
 func (s *FileStore) change(id string, edit func(*Record) error) (*Record, error) {
+	path, err := s.recordPath(id)
+	if err != nil {
+		return nil, err
+	}
 	var out *Record
-	err := cas.Change(s.recordPath(id), func(cur []byte) ([]byte, error) {
+	err = cas.Change(path, func(cur []byte) ([]byte, error) {
 		if cur == nil {
 			return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 		}

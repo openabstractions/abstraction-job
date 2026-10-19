@@ -2,6 +2,8 @@
 
 package rec
 
+import "time"
+
 type Raw = string
 
 func escByte(out []byte, c byte) []byte {
@@ -73,6 +75,8 @@ func strs(out []byte, v []string, depth int) []byte {
 	return append(out, ']')
 }
 
+// raw writes an opaque value's tokens as they are and lays its whitespace out
+// again at the declared indent ([DEF-E6] opaque = "reindent").
 func raw(out []byte, s string, depth int) []byte {
 	ws := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 	for i := 0; i < len(s); {
@@ -94,6 +98,9 @@ func raw(out []byte, s string, depth int) []byte {
 					break
 				}
 				j++
+			}
+			if j > len(s) {
+				j = len(s)
 			}
 			out = append(out, s[i:j]...)
 			i = j
@@ -211,6 +218,9 @@ func VerdictValues() []Verdict {
 	return []Verdict{VerdictNotFound, VerdictLeaseHeld, VerdictStaleEpoch, VerdictConflict, VerdictLeaseExpired, VerdictTerminal, VerdictInvalid, VerdictUnknownSchema, VerdictUnknownOp, VerdictNotSupported, VerdictOther}
 }
 
+// IsKnown reports whether v is a declared member of Verdict.
+func (v Verdict) IsKnown() bool { return v.Known() }
+
 // Known reports whether v is a member of Verdict.
 func (v Verdict) Known() bool {
 	switch v {
@@ -235,6 +245,9 @@ type Step struct {
 	Total   int64
 }
 
+// [Progress](https://openabstractions.github.io/reference.html#concept-job.progress):
+// Best-effort work counters and their update time; they may decrease after
+// recovery and confer no authority.
 type Progress struct {
 	Done      int64
 	Total     int64
@@ -249,6 +262,9 @@ type Recall struct {
 	Until  string
 }
 
+// [Lease](https://openabstractions.github.io/reference.html#concept-job.lease):
+// The bounded execution ownership of one job, with an epoch that fences an
+// earlier owner.
 type Lease struct {
 	Owner     string
 	Epoch     int64
@@ -262,6 +278,9 @@ type Delegation struct {
 	Delivered  bool
 }
 
+// [Intent](https://openabstractions.github.io/reference.html#concept-job.intent):
+// The requested run, pause or cancel state of a job, recorded independently of
+// its execution owner.
 type Intent struct {
 	Want string
 	By   string
@@ -676,9 +695,22 @@ func decimal(n int64) string { return string(num(nil, n)) }
 const depthLimit = 64
 
 type reader struct {
-	buf   []byte
-	pos   int
-	depth int
+	buf     []byte
+	pos     int
+	depth   int
+	limit   int
+	ceiling int
+}
+
+func (r *reader) depthLimit() int {
+	ceiling := depthLimit
+	if r.ceiling > 0 {
+		ceiling = r.ceiling
+	}
+	if r.limit > 0 && r.limit < ceiling {
+		return r.limit
+	}
+	return ceiling
 }
 
 func (r *reader) refuse(word string) error { return &Refusal{Word: word, Offset: r.pos} }
@@ -703,7 +735,7 @@ func (r *reader) ws() {
 
 func (r *reader) enter() error {
 	r.depth++
-	if r.depth > depthLimit {
+	if r.depth > r.depthLimit() {
 		return r.refuse("depth_exceeded")
 	}
 	return nil
@@ -1309,6 +1341,12 @@ func writeTimestamp(s string) string {
 	}
 	return result
 }
+
+// TimestampLayout is the contract's UTC timestamp write layout.
+const TimestampLayout = "2006-01-02T15:04:05.000000Z"
+
+// FormatTimestamp returns the contract's UTC timestamp with six fractional digits.
+func FormatTimestamp(at time.Time) string { return at.UTC().Format(TimestampLayout) }
 
 func (r *reader) decodeStep() (*Step, error) {
 	if r.at() != '{' {
@@ -2131,6 +2169,7 @@ func (r *reader) decodeRequest() (*Request, error) {
 	}
 	r.pos++
 	v := &Request{}
+	var unknownKeys map[string]bool
 	var seen uint32
 	r.ws()
 	if r.at() != '}' {
@@ -2251,6 +2290,13 @@ func (r *reader) decodeRequest() (*Request, error) {
 				}
 				v.Base = x
 			default:
+				if unknownKeys[key] {
+					return nil, r.refuse("duplicate_key")
+				}
+				if unknownKeys == nil {
+					unknownKeys = map[string]bool{}
+				}
+				unknownKeys[key] = true
 				if err := r.skipValue(); err != nil {
 					return nil, err
 				}
@@ -2282,6 +2328,7 @@ func (r *reader) decodeResponse() (*Response, error) {
 	}
 	r.pos++
 	v := &Response{}
+	var unknownKeys map[string]bool
 	var seen uint32
 	r.ws()
 	if r.at() != '}' {
@@ -2372,6 +2419,13 @@ func (r *reader) decodeResponse() (*Response, error) {
 				}
 				v.Unreadable = x
 			default:
+				if unknownKeys[key] {
+					return nil, r.refuse("duplicate_key")
+				}
+				if unknownKeys == nil {
+					unknownKeys = map[string]bool{}
+				}
+				unknownKeys[key] = true
 				if err := r.skipValue(); err != nil {
 					return nil, err
 				}
@@ -2499,6 +2553,205 @@ func member(v Raw, name string) bool {
 	return false
 }
 
+// ToJSON writes one record of this package, given as a value or a pointer,
+// as JSON laid out as its documents are and without the document terminator.
+// Anything else, a nil pointer included, is refused with wrong_type.
+func ToJSON(v any) (out []byte, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if e, ok := p.(*Refusal); ok {
+				out, err = nil, e
+				return
+			}
+			panic(p)
+		}
+	}()
+	switch v := v.(type) {
+	case Step:
+		return encStep(nil, &v, 0), nil
+	case *Step:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encStep(nil, v, 0), nil
+	case Progress:
+		return encProgress(nil, &v, 0), nil
+	case *Progress:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encProgress(nil, v, 0), nil
+	case Recall:
+		return encRecall(nil, &v, 0), nil
+	case *Recall:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encRecall(nil, v, 0), nil
+	case Lease:
+		return encLease(nil, &v, 0), nil
+	case *Lease:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encLease(nil, v, 0), nil
+	case Delegation:
+		return encDelegation(nil, &v, 0), nil
+	case *Delegation:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encDelegation(nil, v, 0), nil
+	case Intent:
+		return encIntent(nil, &v, 0), nil
+	case *Intent:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encIntent(nil, v, 0), nil
+	case Envelope:
+		return encEnvelope(nil, &v, 0), nil
+	case *Envelope:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encEnvelope(nil, v, 0), nil
+	case Record:
+		return encRecord(nil, &v, 0), nil
+	case *Record:
+		if v == nil {
+			return nil, &Refusal{Word: "wrong_type"}
+		}
+		return encRecord(nil, v, 0), nil
+	}
+	return nil, &Refusal{Word: "wrong_type"}
+}
+
+// FromJSON reads one record from data into v, a pointer to a record of this
+// package. A refused input returns *Refusal.
+func FromJSON(data []byte, v any) error {
+	r := &reader{buf: data}
+	r.ws()
+	switch p := v.(type) {
+	case *Step:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeStep()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Progress:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeProgress()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Recall:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeRecall()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Lease:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeLease()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Delegation:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeDelegation()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Intent:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeIntent()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Envelope:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeEnvelope()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		*p = *x
+		return nil
+	case *Record:
+		if p == nil {
+			return &Refusal{Word: "wrong_type"}
+		}
+		x, err := r.decodeRecord()
+		if err != nil {
+			return err
+		}
+		r.ws()
+		if r.pos < len(r.buf) {
+			return r.refuse("trailing_bytes")
+		}
+		if err := r.derive(x); err != nil {
+			return err
+		}
+		*p = *x
+		return nil
+	}
+	return &Refusal{Word: "wrong_type"}
+}
+
 // refusals is in the order two of them are chosen between.
 
 var refusals = []string{"malformed", "bad_string", "number_spelling", "wrong_type", "bad_timestamp", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "trailing_bytes", "unknown_critical", "not_a_subset", "content_mismatch"}
@@ -2595,6 +2848,20 @@ func (r *reader) rawList() ([]Raw, error) {
 	r.depth--
 	return out, nil
 }
+
+const (
+	OpSubmit    = "submit"
+	OpLoad      = "load"
+	OpList      = "list"
+	OpOrphans   = "orphans"
+	OpClaimable = "claimable"
+	OpClaim     = "claim"
+	OpRenew     = "renew"
+	OpRelease   = "release"
+	OpSetIntent = "set_intent"
+	OpRecall    = "recall"
+	OpWrite     = "write"
+)
 
 var Operations = []string{"submit", "load", "list", "orphans", "claimable", "claim", "renew", "release", "set_intent", "recall", "write"}
 
@@ -2787,3 +3054,43 @@ func DecodeResponse(in []byte) (*Response, error) {
 	}
 	return v, nil
 }
+
+func DecodeStepAt(in []byte,depth,limit int)(*Step,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeStep();return v,r.pos,e}
+func EncodeStepAt(v *Step,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encStep(nil,v,depth);if _,_,e:=DecodeStepAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeStep(v *Step)[]byte{return append(EncodeStepAt(v,0),"\n"...)}
+func DecodeStep(in []byte)(*Step,error){v,n,e:=DecodeStepAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeProgressAt(in []byte,depth,limit int)(*Progress,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeProgress();return v,r.pos,e}
+func EncodeProgressAt(v *Progress,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encProgress(nil,v,depth);if _,_,e:=DecodeProgressAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeProgress(v *Progress)[]byte{return append(EncodeProgressAt(v,0),"\n"...)}
+func DecodeProgress(in []byte)(*Progress,error){v,n,e:=DecodeProgressAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeRecallAt(in []byte,depth,limit int)(*Recall,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeRecall();return v,r.pos,e}
+func EncodeRecallAt(v *Recall,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encRecall(nil,v,depth);if _,_,e:=DecodeRecallAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeRecall(v *Recall)[]byte{return append(EncodeRecallAt(v,0),"\n"...)}
+func DecodeRecall(in []byte)(*Recall,error){v,n,e:=DecodeRecallAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeLeaseAt(in []byte,depth,limit int)(*Lease,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeLease();return v,r.pos,e}
+func EncodeLeaseAt(v *Lease,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encLease(nil,v,depth);if _,_,e:=DecodeLeaseAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeLease(v *Lease)[]byte{return append(EncodeLeaseAt(v,0),"\n"...)}
+func DecodeLease(in []byte)(*Lease,error){v,n,e:=DecodeLeaseAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeDelegationAt(in []byte,depth,limit int)(*Delegation,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeDelegation();return v,r.pos,e}
+func EncodeDelegationAt(v *Delegation,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encDelegation(nil,v,depth);if _,_,e:=DecodeDelegationAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeDelegation(v *Delegation)[]byte{return append(EncodeDelegationAt(v,0),"\n"...)}
+func DecodeDelegation(in []byte)(*Delegation,error){v,n,e:=DecodeDelegationAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeIntentAt(in []byte,depth,limit int)(*Intent,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeIntent();return v,r.pos,e}
+func EncodeIntentAt(v *Intent,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encIntent(nil,v,depth);if _,_,e:=DecodeIntentAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeIntent(v *Intent)[]byte{return append(EncodeIntentAt(v,0),"\n"...)}
+func DecodeIntent(in []byte)(*Intent,error){v,n,e:=DecodeIntentAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeEnvelopeAt(in []byte,depth,limit int)(*Envelope,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeEnvelope();return v,r.pos,e}
+func EncodeEnvelopeAt(v *Envelope,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encEnvelope(nil,v,depth);if _,_,e:=DecodeEnvelopeAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeEnvelope(v *Envelope)[]byte{return append(EncodeEnvelopeAt(v,0),"\n"...)}
+func DecodeEnvelope(in []byte)(*Envelope,error){v,n,e:=DecodeEnvelopeAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}
+
+func DecodeRecordAt(in []byte,depth,limit int)(*Record,int,error){r:=&reader{buf:in,depth:depth,limit:limit};if depth<0||limit<1{return nil,0,r.refuse("depth_exceeded")};r.ws();v,e:=r.decodeRecord();if e==nil{e=r.derive(v)};return v,r.pos,e}
+func EncodeRecordAt(v *Record,depth int)[]byte{if depth<0||depth>=64{panic(&Refusal{Word:"depth_exceeded"})};out:=encRecord(nil,v,depth);if _,_,e:=DecodeRecordAt(out,depth,64);e!=nil{panic(e)};return out}
+func EncodeRecord(v *Record)[]byte{return append(EncodeRecordAt(v,0),"\n"...)}
+func DecodeRecord(in []byte)(*Record,error){v,n,e:=DecodeRecordAt(in,0,64);if e!=nil{return nil,e};r:=&reader{buf:in,pos:n};r.ws();if r.pos!=len(in){return nil,r.refuse("trailing_bytes")};return v,nil}

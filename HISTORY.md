@@ -2,6 +2,18 @@
 
 Linked from [CONTRACT.md](CONTRACT.md)'s "Reading this page."
 
+## 2026-10-23: canonical remote subjects
+
+The acceptance provider consumes identity's shared live-pin remote subject
+mapping. Trusted host configuration supplies the receiving local policy account;
+the leaf key supplies the canonical remote program. The existing job scope hash
+retains ownership by that pair. Remote key evidence, scope and program must agree,
+and remote bindings carry no executable or native peer. The arbitrary remote
+mapping callbacks are removed; their inventoried callers were tests and the
+remote-job fixture. Unsafe old remote journals remain retained and refuse to
+open. This records the C69/W1-24a repair, with no automatic migration or claim of
+a complete remote journey. The receiving method policy still denies when absent.
+
 ## Superseded ids
 
 `JOB-E1`..`JOB-E9`, the rules for how a record is written, are retired as ids
@@ -98,7 +110,7 @@ section; `JOB-J5` moved from "What is proven" to the encoding rules; and
    The test names `TestNoBindingLetsALeaseMoveWhatTheWorkIs` and
    `TestNoBindingHandsOutItsOwnState` keep theirs.
 10. **layer → module (D6).** Applied on all three pages.
-11. **Lease's job sense stated once with JOB-L1 (D89).** Applied in
+11. **[Lease](https://openabstractions.github.io/reference.html#concept-job.lease)'s job sense stated once with JOB-L1 (D89).** Applied in
     JOB-L1: a job lease is exclusive, carries an epoch, and ends by lapsing;
     a yield request moves the expiry earlier. The glossary's link to
     JOB-L1 is the site's (`ref`) and outside this change's writes.
@@ -531,3 +543,43 @@ These files cite a retired `JOB-E` id and are outside this change, and
 `monitor/work_page.go` (steps 2 and 7) belongs to the Panel step, and the
 site glossary's entries (steps 2 and 11) to the site; neither is changed
 here.
+
+## 2026-10-21: contract truth pass (0.8.0 W0-03)
+
+The pass checked `CONTRACT.md`, `SPEC.md` and the README against current
+source (`research/release-0.8.0/audit/job.md` §3.4, P0-1). Each change, with
+its class:
+
+- "Current managed setup offers no such conversion" and the "Not built"
+  entry for converting existing jobs. Outdated rule: `openabstractions jobs
+  migrate-legacy` converts terminal records (`acceptanceprovider/migration.go`,
+  README "Converting deprecated job store records"). "Not built" now names
+  only the conversion of active records.
+- The README told an operator to drain active deprecated records through
+  `jobd`. Outdated rule: `jobd` was removed in 0.1.8 (`docs/REMOVED.md`
+  entry 8), `migrate-legacy` refuses an active record, and no shipped
+  provider finishes it (`serve/jobs_migrate.go`'s help, entry 6).
+- JOB-W2 and JOB-N1 named Python `reserved`, C++ `abstraction::job::reserved`
+  and Python and C++ `watch`. Outdated rule: removed on 2026-09-17
+  (`docs/REMOVED.md` entry 10).
+- `SPEC.md` reasoned about three implementations. Outdated rule: Go is the
+  only one. Sections 2.8, 3.4, 5.1, 7.3 and 8.2 state Go's behaviour;
+  section 11 marks each item Go decides, moot or open, with stable numbers;
+  section 12 marks the language-only disagreements moot.
+- The README said Go is the only language with a tagged release. Outdated
+  rule: every package carries one version from 0.8.0
+  (`VISION.md:1230-1247`).
+- The `Store` was called deprecated with no name for its live role. Accepted
+  divergence: it stays deprecated for applications and is named the
+  **execution store** inside the runtime (`acceptanceprovider/provider.go`).
+- Authorized job discovery was listed as not built. Outdated rule:
+  `inventory@1` `ListWork` returns the caller subject's own snapshots with
+  their receipts (`acceptance.thrift`), which recovers a lost key once the
+  work was accepted. "Not built" keeps discovery beyond the caller's own
+  subject.
+- The remote form is stated as "Not built" with the receiver rule of
+  `research/release-0.8.0/critique/security.md` item 15.
+
+`docker-jobd/README.md` still describes the `dl` and `ABSTRACTION_NAS_STORE`
+flows from before 0.1.8 (audit item 7); that page is outside this pass's
+writes and is a TODO row.

@@ -1,5 +1,12 @@
 # abstraction.job contract
 
+Remote profile: the current service methods retain `local` (explicit or
+default); the general paired listener does not offer this capability. Retained
+capability-specific delegation keeps its existing contract and is separate
+from that listener. Held by: `idl/gen/service_test.go`
+(`TestDispatcherTableCarriesRemoteProfile`) and `serve/runtime_remote_test.go`
+(`TestRemoteRuntimeDescribeUsesLiveGrantAndExplicitServices`).
+
 Binds: `acceptance.thrift`
 
 `acceptance.thrift` defines `abstraction.job/acceptance@1`, which accepts a
@@ -14,6 +21,8 @@ one example that runs. [SPEC.md](SPEC.md) is the job store's behavioural
 specification, drawn from this page, the implementations and the scenarios.
 
 ## Reading this page
+
+The conventions every OA contract carries are stated once in [CONVENTIONS.md](https://github.com/openabstractions/abstractions/blob/main/idl/CONVENTIONS.md); a rule here that applies one cites its `CONV-` id.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
 "SHOULD NOT", "RECOMMENDED", "MAY" and "OPTIONAL" in this page are to be
@@ -70,7 +79,7 @@ different rule, and its two `X` ids, continue under `U`, `S`, `D`, `I` and
 | Cancel, Observe, List | `CancelWork`, `ObserveWork`, `ListWork` (`acceptance@2`, `research/vocabulary/RENAME-PLAN.md` §4 "first") |
 | idempotency key | `RequestIdentity`, its `key`, `history_epoch` and `attempt` fields together (`IdempotencyKey` at `acceptance@2`) |
 | subject | "caller scope" in `acceptance.thrift`'s doc strings and Go's `Bind(authenticatedCallerScope)` |
-| acquire, acquisition | `Claim` on the deprecated `Store` and the scenario operation `claim`, kept until the job store is removed (D24) |
+| acquire, acquisition | `Claim` on the deprecated [`Store`](https://openabstractions.github.io/reference.html#concept-job.store) and the scenario operation `claim`, kept until the job store is removed (D24) |
 | yield request | the record field `lease.recall`, `Store.Recall`, the content name `abstraction.job/recall@1`, the transcript field `recall` and the scenario operation `recall`, kept (D49) |
 
 The executable [acceptance corpus](testdata/acceptance.json) and Go
@@ -100,8 +109,34 @@ it changes when the executable is rebuilt or moved: receipts filed under the
 earlier path stay under it. Reconciliation and cancellation MUST require
 current authorization; possession of a key or receipt confers none. A caller
 that loses its key before receiving a receipt reports unknown: this version
-has no recovery by guessing a new key, and authorized job discovery is under
-"Not built".
+has no recovery by guessing a new key. `inventory@1` `ListWork` lists the
+caller subject's own accepted operations with their receipts, each carrying
+its idempotency key, and so recovers a lost key for that subject once the
+work was accepted; discovery beyond the caller's own subject is under "Not
+built".
+
+The private Go 0.8 native-host profile configures
+`Provider.EnableCanonicalSubjects()` before sharing the provider, while retaining
+the existing `AcquireHost` handle through admitted-call drain. It deduplicates
+native peers by the captured receiving account kind, account and canonical
+`Program`; the observed executable remains provenance. The public path-based
+`LocalSubjectScope` and facade `OwnerProgramScope` equations stay unchanged.
+Ordinary fresh direct consumers retain their existing profile. Activation marks
+the owner header before writing `owner-native-program@1` journals. Current
+unconfigured providers freshly refuse admission after that marker. Prior direct
+users that do not participate in this protocol MUST stop and drain before
+activation; the marker does not fence their cached code.
+
+Native admission checks canonical ownership and the exact current executable's
+path-scoped request atomically under the existing root CAS lock. Valid captured
+native provenance in pre-profile journals participates in canonical lookup. A matching
+retained occurrence keeps its original journal, scope, operation and receipt;
+distinct retained occurrences or changed arguments refuse rather than choose an
+outcome or reserve another effect. Unavailable evidence reports unknown. No
+package identity is inferred from an old path. Remote and subject-less bindings
+retain their existing profile. Preparation and executor work run outside the
+root reservation lock. Reconciliation, attempts, observation, cancellation,
+results and inventory follow the selected original journal through recovery.
 
 **[JOB-A2] Arguments and promises are immutable.** Submission equality MUST
 compare kind, exact opaque specification bytes and the set of required
@@ -192,9 +227,8 @@ itself, and cancellation, expiry and failure authorize no automatic retry.
 classified `permanent` MUST belong to a job in state `failed`, and the
 provider MUST NOT try that job again. A `retryable` failure accompanies a job
 the provider will try again. `WorkFailure.cause` names the provider's typed
-reason when known: `digest_mismatch`, `oversize`, `short_transfer`,
-`unauthorized`, `not_found`, `refused`, `server_error`, `transport`,
-`credential` or `other`. `credential` means a named credential could not be
+reason when known. The generated `FailureCause` enum is the one owner of
+these cause words. `credential` means a named credential could not be
 applied; the message carries the applier's outcome, and the class is
 `retryable` exactly when that outcome is `unavailable`. An absent cause is
 unreported. A reader MUST treat an unrecognized cause as `other`. Clients
@@ -218,6 +252,23 @@ or records a lost result. A ReadResult `unavailable` caused by an outage
 makes no claim about the result bytes; Observe reports a recorded loss
 (JOB-A10).
 
+A remote receiver MUST configure a receiving-side method policy in addition
+to its authenticated caller mapping. An absent remote method policy denies
+every job method as `forbidden`; it is not a configured decision outage and
+MUST NOT admit work, read job state or mutate it. This does not change the
+local connection policy default or generic endpoint contract metadata.
+
+The receiving host supplies its local policy account independently of remote
+certificate names, domains and origin claims. Identity's shared remote mapping
+MUST admit the current exact leaf-key pin on each call and supplies the canonical
+`remote:<64 lowercase SPKI-hash hex digits>` program. Job ownership uses that
+program and the receiving account through its existing subject-scope hash; that
+opaque scope is never a Rights or credential account. Retained remote binding
+evidence MUST match the canonical program's key exactly. Remote bindings carry
+no executable or native peer, and local bindings MUST refuse the remote program
+namespace. Unsafe older arbitrary remote mappings are refused with their
+journals preserved; this defines no automatic migration or native proof.
+
 **[JOB-A10] A lost result ends its job as a typed failure.** When a job is
 `complete` and the provider determines that its result bytes no longer
 exist, the provider MUST durably record the loss before replying. From then
@@ -239,7 +290,9 @@ put at the job's result document (the download kind's own rule is
 provider without result access MUST declare zero. Within a declared
 retention, `result_lost` reports storage damage outside the provider's own
 policy. After it, the provider MAY remove result bytes, and a read then
-reports `result_lost` under JOB-A10. The value is a minimum, and bytes MAY
+  reports `result_lost` under JOB-A10. The explicit service-owned temporary
+  collector adds the kind's retention to the configured temporary grace and
+  retains results with multiple or unobserved link counts. The value is a minimum, and bytes MAY
 stay readable longer. It applies per provider, and a caller restoring a
 binding reads it again from the history window. A negative value is invalid.
 
@@ -320,6 +373,35 @@ cancels it as any other live job. A provider relaying a remote job MUST
 report the remote word verbatim. A reader MUST treat an unrecognized word as
 an unnamed wait.
 
+Job owns the waiting-word catalogue. Each family has one registering owner,
+and a word reads `<family>:<word>`, optionally followed by `:<argument>`.
+`queued` predates that form and keeps it. The registered families, each
+reported today except `card`:
+
+| Family | Registered by | Words | Holds the job until |
+|---|---|---|---|
+| `network` | abstraction-download DL-N5, DL-N8 | `network:metered`; `network:unavailable` | an unmetered network answers; a network cost source answers |
+| `card` | abstraction-resource RES-L8 | `card:held_by:<program>` | the named program releases the card; registered, and relayed into `waiting` once abstraction-resource's Not built section decides its surface |
+| `queue`, `queued` | abstraction-inference INF-G6 | `queue:<n>`; `queued` | the engine starts the job |
+| `host` | abstraction-inference INF-G9, INF-G10 | `host:busy`, `host:unavailable`, `host:unbound`, `host:replaced:replanned`, `host:gone:replanned` | the job's server takes it |
+| `activating` | abstraction-inference INF-A5 | `activating:<name>` | the on-demand provider has started |
+| `upstream` | abstraction-inference INF-G7 | `upstream:uncertain`, `upstream:unavailable` | the provider answers |
+| `service` | abstraction-inference INF-G9 | `service:stopped` | a runtime claims the job again |
+| `admission`, `caller`, `cancel`, `ceiling`, `credential`, `output`, `provider`, `rights` | abstraction-inference | `<family>:unavailable` | what the family names answers at a later sweep |
+
+Planned families (TD80) are `awake` (abstraction-resource), `power` and
+`backoff` (abstraction-download), and `gated:awaiting_access`
+(abstraction-credentials); no provider reports them yet. A family joins the
+table in the change that first registers or reports it.
+
+A client that tells a person in a sentence why a job waits prints
+`card:held_by:<program>` as "Waiting for the graphics card: held by
+<program>.", every other word as "Waiting.", and asks nothing
+(`testdata/waiting-sentences.json`). The OpenCode adopter and ComfyUI's card
+helper are such clients. A tool that shows the word itself, such as the `oa`
+CLI's `jobs list` and download progress or the MCP gateway, shows it
+verbatim.
+
 A provider restarting with accepted jobs whose guarantee depends on
 something that cannot answer yet, such as a network cost source that has
 not started, MUST open its store and keep those jobs accepted. Each such job
@@ -330,7 +412,16 @@ once it does. Other jobs proceed meanwhile. A provider whose execution
 profile no longer knows a guarantee still refuses the store under the
 storage checks below.
 
-**[JOB-A16] An executor may refuse admission for the caller.** Before a
+**[JOB-A16] An executor may refuse admission for the caller.** When the
+caller's `acceptance.submit` decision for the kind reads `not_granted` and its
+first-use question is raised or joined, Submit MUST also run the executor's
+admission check in questions-only mode before returning: the `forbidden`
+refusal names the submit question and each first-use question admission
+raised or joined about the caller's own program, limited to the targets asks
+`permission@1` `Request` serves (ASK-A14). Questions-only mode returns no
+other admission outcome or reason. A `denied` or `unavailable` submit
+decision, or one whose question cannot be asked, runs no admission (backlog
+RIGHTS-FLOW, amendment "One wave of questions"). Before a
 provider journals, accepts or seals a new idempotency key, the executor of
 its kind MAY decide that it can never serve this submission for this caller
 as submitted, for example because the submission names a credential the
@@ -362,8 +453,9 @@ without receiver-verified local peer evidence, such as a remote runtime's
 mapping; that caller reads with `ReadResult`. `destination` MUST be an
 absolute clean path of 1 to 4096 bytes whose parent directory exists and
 whose parent's final path, with every junction and link resolved, lies
-outside the provider's own root, or the call is `invalid`; the link is made
-at that final path. A name
+outside the provider's own root, or the call is `invalid`. On Windows the
+provider retains that admitted parent and creates the leaf relative to its
+open directory handle. A name
 already present there is `exists` and stays as it was. The provider MUST
 create the name only under the caller's own authority to create that path,
 or answer `forbidden`: the default decision admits a caller of the
@@ -456,8 +548,12 @@ Deprecated job store records and calls keep their existing semantics.
 
 ## The deprecated job store and managed ownership
 
-The job store (`Store`, `NewFileStore`, `FileStore`) is deprecated and kept:
-no release removing it is named (D30, D33). Its existing records remain
+The job store (`Store`, `NewFileStore`, [`FileStore`](https://openabstractions.github.io/reference.html#concept-job.file-store)) is deprecated for
+applications and kept until its scheduled Train E (0.12.0) removal, after
+the consumer replacements listed under Not built (D30, D33). Inside
+the runtime it is the **execution store**: the acceptance provider runs
+every accepted job on it (`acceptanceprovider/provider.go`), and
+"deprecated" describes only its direct, application-facing use. Its existing records remain
 available through an explicitly selected deprecated provider. Managed
 service setup does not infer their submitting subject, idempotency key or
 epoch, acceptance receipt or execution profile from a job id, lease,
@@ -492,8 +588,14 @@ retry, recorded loss or stored label, and leaves the store unchanged.
 An installation may keep the explicitly selected deprecated provider
 available while new submissions use a separate managed service root.
 Converting existing jobs requires an authoritative subject mapping and a
-fenced transfer preserving immutable jobs and delegate ownership. Current
-managed setup offers no such conversion, including for terminal records.
+fenced transfer preserving immutable jobs and delegate ownership. Managed
+setup infers no conversion. `openabstractions jobs migrate-legacy` converts
+terminal records under an operator-supplied mapping of caller and idempotency
+key (`acceptanceprovider/migration.go`): every record must be terminal,
+mapped and unchanged since inspection, or nothing is written, and it refuses
+while a runtime job service runs on that root. An active record is refused,
+and no shipped provider finishes it: `jobd`, the provider that could, was
+removed in 0.1.8 (`docs/REMOVED.md` entries 6 and 8).
 Applications receive no private path from the service API. The focused Go
 `legacy_migration_test.go` covers valid records in every state, active
 lease and delegation retention, and nonmutating refusal.
@@ -550,7 +652,7 @@ pair.
 "checkpoint": { "verified_prefix": 400 }
 ```
 
-**[JOB-P1] Progress decides nothing.** `progress` is `BG_JOB_PROGRESS`'s
+**[JOB-P1] [Progress](https://openabstractions.github.io/reference.html#concept-job.progress) decides nothing.** `progress` is `BG_JOB_PROGRESS`'s
 `BytesTransferred`/`BytesTotal`: best-effort and explicitly non-monotonic.
 Nothing MAY decide anything on it: a job resuming after a crash can
 legitimately report a smaller number than before.
@@ -605,7 +707,7 @@ a writer predating ranges leaves behind.
 "lease": { "owner": "go-worker", "epoch": 2, "expires_at": "…" }
 ```
 
-**[JOB-L1] Every write presents the epoch it holds.** A job lease is
+**[JOB-L1] Every write presents the epoch it holds.** A [job lease](https://openabstractions.github.io/reference.html#concept-job.lease) is
 time-bounded, exclusive ownership of one record: the holder keeps it by
 renewing and loses it by lapsing. A yield request (JOB-R3) moves its expiry
 earlier, and the lapse is what ends it. This is the job sense of lease;
@@ -639,7 +741,7 @@ locks a different byte, a different file, or through a different API
 (`fcntl` against `flock` on Linux) passes every single-language test and
 loses updates against the others. `abstraction-cas/README.md` § *What a
 fourth implementation must do* is the contract;
-`abstraction-cas/mixed.py --job` is the instrument, and it fails a foreign
+`abstraction-cas/tests/mixed.py --job` is the instrument, and it fails a foreign
 lock on the first run.
 
 **[JOB-L4] Acquiring writes the record as found under the lock.** The store
@@ -676,7 +778,9 @@ Normative for anything sharing a directory with this store:
 one record lost 147–149 of 2150 updates in three runs of three
 (`abstraction-cas/README.md`). Several processes on one machine, in any
 language, lose nothing. A record written from two machines needs a protocol
-this store does not have.
+this store does not have. The Go file store refuses a root off this host's
+local volumes when it opens, with cas's reason (`abstraction-cas`
+`CONTRACT.md` CAS-L2), and creates nothing there.
 
 **[JOB-W1] `work/<id>` is a name the job shapes.** The store MUST derive the
 name from the id, so a successor finds what a predecessor left, and MUST
@@ -698,8 +802,7 @@ Modules above put files beside `jobs/` and `work/`: the download runner's
 `supervisor.json` and `supervisor.sock` are there today. Everything not
 listed above belongs to someone other than the store, and none of it is
 free. A module that lets a caller name a destination inside this directory
-MUST ask `job.Reserved(owner, path)` (`reserved` in Python,
-`abstraction::job::reserved` in C++) and refuse what it reserves. Without
+MUST ask `job.Reserved(owner, path)` and refuse what it reserves. Without
 it a destination of `jobs/<id>.json` overwrites a record and `work/<other>`
 overwrites another job's scratch; both are contained, and `Reserved`
 refuses both. See
@@ -713,8 +816,7 @@ containment alone is what did not stop it.
 
 ## Watching
 
-**[JOB-N1] A change is a visible one.** `Watch` (`watch` in Python and C++)
-is a live view of one kind's jobs, over the
+**[JOB-N1] A change is a visible one.** `Watch` is a live view of one kind's jobs, over the
 [watch](https://github.com/openabstractions/abstraction-watch) module: the
 present first, then every change, and quiet once nothing has changed within
 its deadline. A watch MUST report a change in identity, state, `progress.done`,
@@ -723,6 +825,32 @@ renewal, which moves `updated_at` and nothing a person can see. A view that
 redraws on every heartbeat flickers. Filtering on `kind` keeps the opaque
 spec opaque: the module selects on the field it owns and never reads the one
 it does not.
+
+**[JOB-N2] Bounded observation of accepted work.** `OperationControl.FollowWork`
+on `abstraction.job/operations@1` reads in the original authenticated acceptance
+scope. Empty `after` answers `changed` with the current `OperationSnapshot`.
+Its cursor binds the provider instance, scope, complete `RequestIdentity` and
+JOB-N1 visible state. A visible change answers `changed` with a snapshot and a
+new cursor. A lease renewal leaves the cursor unchanged. An expired wait answers
+`unchanged` with the supplied cursor and no snapshot. A provider restart answers
+`gap` with the supplied cursor and no snapshot; the client starts a fresh
+empty-cursor observation. A cursor from another scope or identity is `forbidden`.
+
+`wait_ms` MUST be in 0..30000 and `after` MUST contain at most 256 UTF-8 bytes
+with no control characters. Invalid bounds answer `invalid` before reading work.
+Absent or sealed identities answer `unknown`, without creating a seal.
+`forbidden`, `invalid`, `unknown`, `unavailable` and `unsupported` carry no cursor
+or snapshot. Exactly `changed` carries a snapshot. The closed outcome enum is
+`WorkObservationOutcome`; `WorkObservationMechanism` declares `native` or
+`polled`. The current FileStore provider uses the polled `job.Watch` source.
+
+Waiting uses `watch.Gate`, including its bounded waiter count and recheck after
+every read and wake. Authority loss answers `forbidden`; an unavailable policy
+check or exhausted waiter capacity answers `unavailable`. Cancellation ends
+and joins the read and its watcher, leaving accepted work and cancellation intent
+unchanged. Existing `ObserveWork` remains the one-shot read. A facade client
+maps `unknown_method` to `unsupported`, without a polling
+fallback. `watch.Follow` owns fresh-snapshot restart after gap and presenter close.
 
 ## Awake for exactly as long as a lease
 
@@ -874,6 +1002,27 @@ store.Recall(id, epoch, "doubled: lemonade holds it", by, grace)
 read to yield. The residency broker in
 [`model/`](https://github.com/openabstractions/abstraction-model) is the
 first issuer and the first holder.
+
+**[JOB-R9] A stopping service yields every lease it holds, and its
+successor acquires at the next epoch.** A service whose executor owns its
+store MUST, when it stops, send a yield request with the reason
+`service:stopped` and its drain bound as the deadline to every lease held on
+that store, and MUST lapse every lease still held when the bound passes.
+Its successor acquires each job at the epoch one higher and resumes from the
+checkpoint (JOB-C1), and the store refuses each record write the stopped
+service still makes at the old epoch (JOB-L1, JOB-L5, JOB-R3). A kind's own
+file effects stop when the kind honours the cancellation; a step that ignores
+it counts as output only what it publishes inside the fenced record write
+(serve CONTRACT.md RUN-U3). The bound applies to the executor's leases: the
+service keeps its store until every call it admitted has returned, since an
+admitted call holds no lease and no epoch fences it. A second yield request
+from the same stop MUST NOT move a deadline later. A renew stops at the
+`until` the latest request wrote (JOB-R4). Only an executing store yields: its
+records belong to its own executor, and an admission-only store may hold the
+leases of other processes. The runtime's bound is 3 seconds (serve
+CONTRACT.md RUN-U3). Go's `Provider.YieldHeld` is the mechanism;
+`TestAStoppingHostYieldsItsLeasesAndTheSuccessorTakesTheNextEpoch` in
+`go/acceptanceprovider` holds it.
 
 ## Adoption is the mechanism; handing off is an optimisation
 
@@ -1073,6 +1222,10 @@ past float64, members in an order nothing sorts them into) and fails if any
 of it comes back re-spelled. Go compacts an opaque payload's whitespace
 (`marshalCompact`), and the record encoder re-indents whatever it is handed.
 No implementation preserves a payload's whitespace, and JOB-J1 governs it.
+The generated encoders do the same because `job.thrift` declares
+`opaque = "reindent"` ([DEF-E6] in `idl/LANGUAGE.md`), and
+`TestJobRecordReferences` in `idl/gen` holds all five to
+`testdata/ranges-record.json` and `testdata/terminal-record.json`.
 
 ## Declarations: what a record carries and must be understood
 
@@ -1269,7 +1422,7 @@ JOB-V5 is the same argument from the other side. Adopting the envelope for a
 kind is a flag day for that kind's readers, paid per kind and never per
 store.
 
-## Intent: what somebody wants, written without a lease
+## [Intent](https://openabstractions.github.io/reference.html#concept-job.intent): what somebody wants, written without a lease
 
 ```json
 "intent": { "want": "pause", "by": "comfyui@desktop:9184", "at": "2026-09-05T09:12:44.180000Z" }
@@ -1290,7 +1443,7 @@ never treat it as `run`.
 `run` and MUST NOT distinguish "nobody asked" from "somebody asked for it to
 run"; that keeps version 3 records, which have no intent at all, readable.
 
-**[JOB-I3] Intent is the one write that presents no epoch.** The store MUST
+**[JOB-I3] [Intent](https://openabstractions.github.io/reference.html#concept-job.intent) is the one write that presents no epoch.** The store MUST
 accept an intent write without an epoch. The party who wants a job stopped
 is usually some process other than the one doing it, and requiring a lease
 would mean stealing the job in order to stop it, the one thing the lease
@@ -1546,6 +1699,11 @@ QUIC interop matrix.
 
 ## Divergences
 
+- **`OperationControl.LinkResult(identity, destination)`.** The destination
+  is an explicit local-binding extension (JOB-A17). It is a path on the
+  provider's machine under the receiver-verified local caller's existing
+  authority. A remote caller uses `ReadResult`; a destination string grants
+  no filesystem access and the operation never substitutes a copy.
 - **JOB-F1.** Refusing an unknown field is the unusual half. Nearly
   everything an adopter has used ignores what it does not know: protobuf
   keeps unknown fields and re-emits them, JSON Schema's
@@ -1607,15 +1765,27 @@ QUIC interop matrix.
 
 ## Not built
 
-- **Authorized job discovery** (JOB-A1). A caller that lost its key before a
-  receipt arrived reports unknown; a future version recovers it through an
-  authorized discovery call.
+- **Authorized job discovery beyond the caller's own subject** (JOB-A1).
+  `ListWork` covers the caller's own accepted work; a submission whose
+  acceptance never landed has no receipt to find.
+- **The remote form.** An application reaching this service on another
+  machine's runtime has no binding; remote job handoff between runtimes is
+  the delegate channel, and it is no application-facing service. When it is
+  built, a remote receiver MUST refuse every request that needs a person
+  with the outcome `forbidden` and the reason "no person reachable on this
+  runtime", until remote questions exist. A forwarded caller is the forwarding runtime's
+  certificate subject; the agent behind it is an unverified label.
 - **`abstraction.job/result.read`** (JOB-A14): reading another subject's
   result bytes. Version 1 refuses it, and this is the next name the contract
   would reserve.
-- **Converting existing jobs** from the deprecated store to managed service
-  ownership, including terminal records (The deprecated job store and
-  managed ownership).
+- **Converting active jobs** from the deprecated store to managed service
+  ownership; terminal records convert with `jobs migrate-legacy` (The
+  deprecated job store and managed ownership).
+- **Store removal in Train E (0.12.0).** `modelget` and serve's host-registration
+  and rollback consumers first move to `acceptance@2`/`operations@2` in Train D.
+  Download's runner and NAS consumers (`runner.go`, `delegator.go`, `nas/nas.go`
+  and `deploy/nas/mkimage`) first move to `runner@1` and the DL-K3 delegate in
+  Train E. Store remains available while those replacements are pending.
 - **An extension's own envelope** (JOB-V3): actions an extension defines for
   itself.
 - **A record written from two machines** (Where the files are): the lock is

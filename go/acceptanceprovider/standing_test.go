@@ -305,12 +305,44 @@ func TestRecheckSoonRunsOffTheEditPathAndCoalesces(t *testing.T) {
 	close(release)
 	waitFor(t, "the passes to finish", func() bool {
 		p.standing.mu.Lock()
-		defer p.standing.mu.Unlock()
-		return !p.standing.running
+		recheck := p.standing.recheck
+		p.standing.mu.Unlock()
+		return recheck.Idle()
 	})
 	passesMu.Lock()
 	defer passesMu.Unlock()
 	if passes != 2 {
 		t.Fatalf("five notices during one pass ran %d passes, want 2", passes)
+	}
+}
+
+// JOB-A18: a RecheckSoon whose context has ended never binds later calls; a
+// following RecheckSoon with a live context still runs a pass.
+func TestRecheckSoonAfterACancelledCallerStillRuns(t *testing.T) {
+	p, _, rules, binding := standingFixture(t)
+	accept(t, p.BindBinding(binding), submission(p, "later"))
+	entered := make(chan struct{}, 8)
+	p.SetStanding(func(ctx context.Context, subject AuthenticatedSubject, kind string) (string, error) {
+		entered <- struct{}{}
+		return rules.decide(ctx, subject, kind)
+	})
+	t.Cleanup(p.StopRechecks)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.RecheckSoon(gone)
+	waitFor(t, "the first request to settle", func() bool {
+		p.standing.mu.Lock()
+		recheck := p.standing.recheck
+		p.standing.mu.Unlock()
+		return recheck.Idle()
+	})
+	for len(entered) > 0 {
+		<-entered
+	}
+	p.RecheckSoon(context.Background())
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a RecheckSoon after a cancelled caller ran no pass")
 	}
 }

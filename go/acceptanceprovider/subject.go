@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 
 	identity "github.com/openabstractions/abstraction-identity"
+	"github.com/openabstractions/abstraction-identity/remote"
 )
 
 // AuthenticatedSubject is receiver-bound identity retained for an accepted job.
@@ -52,6 +54,9 @@ func (b Binding) valid() error {
 		return errors.New("acceptance: invalid binding subject")
 	}
 	if b.Origin == "local" {
+		if strings.HasPrefix(s.Program, remote.SubjectPrefix) {
+			return errors.New("acceptance: remote subject is not a local program")
+		}
 		if b.Evidence != "" {
 			return errors.New("acceptance: local binding has remote evidence")
 		}
@@ -66,8 +71,8 @@ func (b Binding) valid() error {
 		if s.Executable != "" {
 			return errors.New("acceptance: remote executable is not receiver proof")
 		}
-		key, err := hex.DecodeString(b.Evidence)
-		if err != nil || len(key) != 32 {
+		key, err := remote.ParseSubjectProgram(s.Program)
+		if err != nil || b.Evidence != hex.EncodeToString(key[:]) {
 			return errors.New("acceptance: remote certificate key evidence required")
 		}
 		var nonzero bool
@@ -76,6 +81,10 @@ func (b Binding) valid() error {
 		}
 		if !nonzero {
 			return errors.New("acceptance: remote certificate key evidence required")
+		}
+		scope, err := RemoteSubjectScope(s.AccountKind, s.Account, s.Program)
+		if err != nil || scope != b.Scope {
+			return errors.New("acceptance: remote subject scope mismatch")
 		}
 	}
 	return nil
@@ -86,7 +95,20 @@ func LocalSubjectScope(kind, account, executable string) (string, error) {
 	if (kind != "windows" && kind != "posix") || account == "" || executable == "" || !filepath.IsAbs(executable) {
 		return "", errors.New("acceptance: proven account and absolute executable required")
 	}
-	data, err := json.Marshal([]string{"owner-program@1", kind, account, filepath.Clean(executable)})
+	return subjectScope(kind, account, filepath.Clean(executable))
+}
+
+// RemoteSubjectScope names the receiving account and canonical remote program.
+// It is job ownership, not a substitute for the account/program Rights subject.
+func RemoteSubjectScope(kind, account, program string) (string, error) {
+	if (kind != "windows" && kind != "posix") || account == "" || !utf8.ValidString(account) || len(account) > 1024 || !remote.ValidSubjectProgram(program) {
+		return "", errors.New("acceptance: receiving account and canonical remote program required")
+	}
+	return subjectScope(kind, account, program)
+}
+
+func subjectScope(kind, account, program string) (string, error) {
+	data, err := json.Marshal([]string{"owner-program@1", kind, account, program})
 	if err != nil {
 		return "", err
 	}

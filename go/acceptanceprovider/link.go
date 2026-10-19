@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"unicode/utf8"
 
 	identity "github.com/openabstractions/abstraction-identity"
@@ -20,6 +19,12 @@ const MaxLinkDestinationBytes = 4096
 // An executor without it cannot link a result [JOB-A17].
 type ResultNamer interface {
 	OperationResultName(record *job.Record) (string, error)
+}
+
+// TmpNamer names only a kind's service-allocated temporary files. A caller's
+// destination is never a temporary name. ErrResultNotNamed declines collection.
+type TmpNamer interface {
+	OperationTmpNames(*job.Record) (result, partial string, err error)
 }
 
 // ErrResultNotNamed is a ResultNamer's answer for a kind whose result is no
@@ -38,14 +43,32 @@ func (p *Provider) SetLinkAuthority(authority LinkAuthority) {
 	p.linkAuthority = authority
 }
 
-// linkFile makes the hard link, statPath, lstatPath and holdFinal read the
-// destination; tests replace them to see which run.
+// heldLinkParent retains the admitted directory through the link effect.
+// path is display only; link creates a single leaf through the hold.
+type heldLinkParent struct {
+	path        string
+	key         string
+	link        func(source, leaf string) error
+	outsideRoot func(root string) (bool, error)
+	release     func()
+}
+
+type linkLeaf struct{ name, folderKey string }
+
+// These private seams let tests observe authority ordering and stale locators.
 var (
-	linkFile  = os.Link
+	linkFile  = func(source string, parent *heldLinkParent, leaf string) error { return parent.link(source, leaf) }
 	statPath  = os.Stat
-	lstatPath = os.Lstat
 	holdFinal = holdFinalPath
 )
+
+func pathOutsideLinkRoot(path, realRoot string) bool {
+	if same, err := identity.SameFile(path, realRoot); err != nil || same {
+		return false
+	}
+	inside, err := identity.Within(path, realRoot)
+	return err == nil && !inside
+}
 
 // principal is an account and, on Windows, its mandatory integrity RID and
 // whether its token is restricted.
@@ -99,16 +122,17 @@ func sameAuthorityAs(user identity.User) error {
 // restricted flag. A Windows User whose integrity level was not read has no
 // principal: RID 0 there would read as the lowest level.
 func userPrincipal(user identity.User) (principal, error) {
-	if user.Kind == "windows" {
-		if user.SID == "" || user.Integrity == "" || user.Integrity == "unknown" {
-			return principal{}, errNotCallerAuthority
-		}
-		return principal{account: user.SID, integrity: user.IntegrityRID, restricted: user.Restricted}, nil
-	}
-	if user.UID < 0 {
+	account, err := user.Account()
+	if err != nil {
 		return principal{}, errNotCallerAuthority
 	}
-	return principal{account: strconv.Itoa(user.UID)}, nil
+	if user.Kind != "windows" {
+		return principal{account: account}, nil
+	}
+	if user.Integrity == "" || user.Integrity == "unknown" {
+		return principal{}, errNotCallerAuthority
+	}
+	return principal{account: account, integrity: user.IntegrityRID, restricted: user.Restricted}, nil
 }
 
 // sameOrLowerAuthority refuses a caller of another account, of a lower
@@ -147,6 +171,8 @@ func linkOutcome(outcome api.ObservationOutcome) api.LinkOutcome {
 // link [JOB-A17]. It never copies, never seals an absent identity, and
 // leaves the provider's own name and retention as they were.
 func (b *bound) LinkResult(id api.RequestIdentity, destination string) (api.ResultLink, error) {
+	b.provider.resultMu.RLock()
+	defer b.provider.resultMu.RUnlock()
 	refuse := func(outcome api.LinkOutcome) (api.ResultLink, error) {
 		return api.ResultLink{Outcome: outcome}, nil
 	}
@@ -178,7 +204,7 @@ func (b *bound) LinkResult(id api.RequestIdentity, destination string) (api.Resu
 	default:
 		return refuse(api.LinkOutcomeNotReady)
 	}
-	if p.resultLost(b.scope, id) {
+	if p.resultLost(accepted.Scope, id) {
 		return refuse(api.LinkOutcomeUnavailable)
 	}
 	name, err := namer.OperationResultName(record)
@@ -197,7 +223,7 @@ func (b *bound) LinkResult(id api.RequestIdentity, destination string) (api.Resu
 	_ = area.Close()
 	if errors.Is(err, os.ErrNotExist) {
 		// Absence of a complete operation's bytes is definitive [JOB-A10].
-		if err := p.recordResultLost(b.scope, id); err != nil {
+		if err := p.recordResultLost(accepted.Scope, id); err != nil {
 			p.reportError(errors.Join(errResultLostNotRecorded, err))
 		}
 		return refuse(api.LinkOutcomeUnavailable)
@@ -220,6 +246,10 @@ func (b *bound) LinkResult(id api.RequestIdentity, destination string) (api.Resu
 	if identity.LocalPath(destination) != nil {
 		return refuse(api.LinkOutcomeOtherVolume)
 	}
+	leaf, err := linkDestinationLeaf(destination)
+	if err != nil {
+		return refuse(api.LinkOutcomeInvalid)
+	}
 	parent, err := statPath(filepath.Dir(destination))
 	if err != nil || !parent.IsDir() {
 		return refuse(api.LinkOutcomeInvalid)
@@ -227,28 +257,24 @@ func (b *bound) LinkResult(id api.RequestIdentity, destination string) (api.Resu
 	// The parent's final path, through every junction and link, decides by
 	// file identity: a parent that is the provider root or lies inside it,
 	// also through a junction, names the provider's own layout.
-	realParent, release, err := holdFinal(filepath.Dir(destination))
+	heldParent, err := holdFinal(filepath.Dir(destination))
 	if err != nil {
 		return refuse(api.LinkOutcomeInvalid)
 	}
-	defer release()
-	realRoot, err := finalPath(p.root)
+	defer heldParent.release()
+	if leaf.folderKey != "" && leaf.folderKey != heldParent.key {
+		return refuse(api.LinkOutcomeInvalid)
+	}
+	outside, err := heldParent.outsideRoot(p.root)
 	if err != nil {
 		return refuse(api.LinkOutcomeUnavailable)
 	}
-	if same, err := identity.SameFile(realParent, realRoot); err != nil || same {
+	if !outside {
 		return refuse(api.LinkOutcomeInvalid)
 	}
-	if inside, err := identity.Within(realParent, realRoot); err != nil || inside {
-		return refuse(api.LinkOutcomeInvalid)
-	}
-	destination = filepath.Join(realParent, filepath.Base(destination))
-	if _, err := lstatPath(destination); err == nil {
-		return refuse(api.LinkOutcomeExists)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return refuse(api.LinkOutcomeUnavailable)
-	}
-	if err := linkFile(filepath.Join(p.root, name), destination); err != nil {
+	// The native effect decides existence atomically beneath this hold.
+	// No destination pathname is reopened after its parent was admitted.
+	if err := linkFile(filepath.Join(p.root, name), heldParent, leaf.name); err != nil {
 		return refuse(linkErrorOutcome(err))
 	}
 	return api.ResultLink{Outcome: api.LinkOutcomeLinked, Receipt: accepted.Receipt, Size: info.Size()}, nil

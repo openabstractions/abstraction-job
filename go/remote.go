@@ -84,7 +84,7 @@ func (r *RemoteStore) Submit(rec Record) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := r.do(wire.Request{Op: "submit", Record: wire.Raw(b)})
+	resp, err := r.do(wire.Request{Op: wire.OpSubmit, Record: wire.Raw(b)})
 	if err != nil {
 		return "", err
 	}
@@ -92,12 +92,14 @@ func (r *RemoteStore) Submit(rec Record) (string, error) {
 }
 
 func (r *RemoteStore) Load(id string) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "load", ID: id}))
+	return r.record(r.do(wire.Request{Op: wire.OpLoad, ID: id}))
 }
 
-func (r *RemoteStore) List() ([]*Record, error) { return r.records(wire.Request{Op: "list"}) }
+func (r *RemoteStore) List() ([]*Record, error) { return r.records(wire.Request{Op: wire.OpList}) }
 
-func (r *RemoteStore) Orphans() ([]*Record, error) { return r.records(wire.Request{Op: "orphans"}) }
+func (r *RemoteStore) Orphans() ([]*Record, error) {
+	return r.records(wire.Request{Op: wire.OpOrphans})
+}
 
 func (r *RemoteStore) records(req wire.Request) ([]*Record, error) {
 	resp, err := r.do(req)
@@ -145,24 +147,24 @@ func (r *RemoteStore) Claimable(rec *Record) bool {
 }
 
 func (r *RemoteStore) Claim(id, owner string, ttl time.Duration) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "claim", ID: id, Owner: owner, TTLMs: ttl.Milliseconds()}))
+	return r.record(r.do(wire.Request{Op: wire.OpClaim, ID: id, Owner: owner, TTLMs: ttl.Milliseconds()}))
 }
 
 func (r *RemoteStore) Renew(id string, epoch int64, ttl time.Duration) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "renew", ID: id, Epoch: epoch, TTLMs: ttl.Milliseconds()}))
+	return r.record(r.do(wire.Request{Op: wire.OpRenew, ID: id, Epoch: epoch, TTLMs: ttl.Milliseconds()}))
 }
 
 func (r *RemoteStore) Release(id string, epoch int64) error {
-	_, err := r.do(wire.Request{Op: "release", ID: id, Epoch: epoch})
+	_, err := r.do(wire.Request{Op: wire.OpRelease, ID: id, Epoch: epoch})
 	return err
 }
 
 func (r *RemoteStore) SetIntent(id string, want Want, by string) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "set_intent", ID: id, Want: string(want), By: by}))
+	return r.record(r.do(wire.Request{Op: wire.OpSetIntent, ID: id, Want: string(want), By: by}))
 }
 
 func (r *RemoteStore) Recall(id string, epoch int64, reason, by string, grace time.Duration) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "recall", ID: id, Epoch: epoch, Reason: reason, By: by, TTLMs: grace.Milliseconds()}))
+	return r.record(r.do(wire.Request{Op: wire.OpRecall, ID: id, Epoch: epoch, Reason: reason, By: by, TTLMs: grace.Milliseconds()}))
 }
 
 // Update reads, applies the caller's mutation to what it read, and sends the
@@ -198,7 +200,7 @@ func (r *RemoteStore) Update(id string, epoch int64, mutate func(*Record) error)
 const updateAttempts = 4
 
 func (r *RemoteStore) reconcile(id string, epoch int64, mutate func(*Record) error) (*Record, error) {
-	base, err := r.do(wire.Request{Op: "load", ID: id})
+	base, err := r.do(wire.Request{Op: wire.OpLoad, ID: id})
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +223,7 @@ func (r *RemoteStore) reconcile(id string, epoch int64, mutate func(*Record) err
 }
 
 func (r *RemoteStore) write(id string, epoch int64, base, next []byte) (*Record, error) {
-	return r.record(r.do(wire.Request{Op: "write", ID: id, Epoch: epoch, Base: wire.Raw(base), Record: wire.Raw(next)}))
+	return r.record(r.do(wire.Request{Op: wire.OpWrite, ID: id, Epoch: epoch, Base: wire.Raw(base), Record: wire.Raw(next)}))
 }
 
 // RemoteStore is a Store and, pointedly, not a Scratch.

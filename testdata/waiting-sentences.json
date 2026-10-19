@@ -1,0 +1,13 @@
+{
+  "about": "The sentence a client prints when it tells a person why a job waits (abstraction-job JOB-A15, abstraction-resource RES-L8). It binds those clients: the Go job package's WaitingSentence, the OpenCode adopter and the ComfyUI card helper each test their sentence against every row. A tool that shows the word itself, such as the oa CLI or the MCP gateway, shows it verbatim and reads no row here.",
+  "sentences": [
+    {"word": "", "sentence": ""},
+    {"word": "card:held_by:slow_render", "sentence": "Waiting for the graphics card: held by slow_render."},
+    {"word": "card:held_by:microsoft.windowsterminal", "sentence": "Waiting for the graphics card: held by microsoft.windowsterminal."},
+    {"word": "card:held_by:", "sentence": "Waiting."},
+    {"word": "network:metered", "sentence": "Waiting."},
+    {"word": "queue:2", "sentence": "Waiting."},
+    {"word": "queued", "sentence": "Waiting."},
+    {"word": "something:new_from_a_relay", "sentence": "Waiting."}
+  ]
+}

@@ -4,9 +4,14 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-var hostLockFileEx = syscall.NewLazyDLL("kernel32.dll").NewProc("LockFileEx")
+var (
+	kernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	hostLockFileEx = kernel32.NewProc("LockFileEx")
+)
 
 func lockHost(f *os.File) error {
 	var ov syscall.Overlapped

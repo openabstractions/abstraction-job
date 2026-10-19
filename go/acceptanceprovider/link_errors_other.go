@@ -4,6 +4,7 @@ package acceptanceprovider
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"syscall"
 )
@@ -15,9 +16,24 @@ func finalPath(dir string) (string, error) {
 
 // holdFinalPath is finalPath of dir; POSIX has no open-without-delete
 // sharing, and release does nothing.
-func holdFinalPath(dir string) (string, func(), error) {
+func holdFinalPath(dir string) (*heldLinkParent, error) {
 	path, err := finalPath(dir)
-	return path, func() {}, err
+	if err != nil {
+		return nil, err
+	}
+	return &heldLinkParent{path: path, release: func() {}, link: func(source, leaf string) error {
+		return os.Link(source, filepath.Join(path, leaf))
+	}, outsideRoot: func(root string) (bool, error) {
+		realRoot, err := finalPath(root)
+		if err != nil {
+			return false, err
+		}
+		return pathOutsideLinkRoot(path, realRoot), nil
+	}}, nil
+}
+
+func linkDestinationLeaf(destination string) (linkLeaf, error) {
+	return linkLeaf{name: filepath.Base(destination)}, nil
 }
 
 // otherVolume reports a hard link refused because the two names are on

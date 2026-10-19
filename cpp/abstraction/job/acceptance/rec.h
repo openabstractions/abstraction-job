@@ -337,6 +337,82 @@ inline constexpr bool operator!=(std::string_view name, LinkOutcome value) { ret
 
 inline const std::vector<std::string> kLinkOutcomeNames = {"linked", "not_ready", "unavailable", "unsupported", "unknown", "forbidden", "invalid", "exists", "other_volume", "no_hard_links", "remote"};
 
+enum class WorkObservationOutcome : std::int32_t {
+    Changed = 1,
+    Unchanged = 2,
+    Gap = 3,
+    Unknown = 4,
+    Forbidden = 5,
+    Invalid = 6,
+    Unavailable = 7,
+    Unsupported = 8,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(WorkObservationOutcome value) {
+    switch (value) {
+        case WorkObservationOutcome::Changed: return "changed";
+        case WorkObservationOutcome::Unchanged: return "unchanged";
+        case WorkObservationOutcome::Gap: return "gap";
+        case WorkObservationOutcome::Unknown: return "unknown";
+        case WorkObservationOutcome::Forbidden: return "forbidden";
+        case WorkObservationOutcome::Invalid: return "invalid";
+        case WorkObservationOutcome::Unavailable: return "unavailable";
+        case WorkObservationOutcome::Unsupported: return "unsupported";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<WorkObservationOutcome> parse_work_observation_outcome(std::string_view name) {
+    if (name == "changed") return WorkObservationOutcome::Changed;
+    if (name == "unchanged") return WorkObservationOutcome::Unchanged;
+    if (name == "gap") return WorkObservationOutcome::Gap;
+    if (name == "unknown") return WorkObservationOutcome::Unknown;
+    if (name == "forbidden") return WorkObservationOutcome::Forbidden;
+    if (name == "invalid") return WorkObservationOutcome::Invalid;
+    if (name == "unavailable") return WorkObservationOutcome::Unavailable;
+    if (name == "unsupported") return WorkObservationOutcome::Unsupported;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(WorkObservationOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(WorkObservationOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, WorkObservationOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, WorkObservationOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kWorkObservationOutcomeNames = {"changed", "unchanged", "gap", "unknown", "forbidden", "invalid", "unavailable", "unsupported"};
+
+enum class WorkObservationMechanism : std::int32_t {
+    Native = 1,
+    Polled = 2,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(WorkObservationMechanism value) {
+    switch (value) {
+        case WorkObservationMechanism::Native: return "native";
+        case WorkObservationMechanism::Polled: return "polled";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<WorkObservationMechanism> parse_work_observation_mechanism(std::string_view name) {
+    if (name == "native") return WorkObservationMechanism::Native;
+    if (name == "polled") return WorkObservationMechanism::Polled;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(WorkObservationMechanism value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(WorkObservationMechanism value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, WorkObservationMechanism value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, WorkObservationMechanism value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kWorkObservationMechanismNames = {"native", "polled"};
+
 enum class InventoryOutcome : std::int32_t {
     Page = 1,
     Gap = 2,
@@ -425,6 +501,183 @@ inline constexpr std::string_view kServiceErrorCodeUnknownMethod = "unknown_meth
 inline constexpr std::string_view kServiceErrorCodeWrongMode = "wrong_mode";
 inline constexpr std::string_view kServiceErrorCodeForbidden = "forbidden";
 
+enum class EndpointServiceReadiness : std::int32_t {
+    Ready = 1,
+    NotReady = 2,
+    Unknown = 3,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(EndpointServiceReadiness value) {
+    switch (value) {
+        case EndpointServiceReadiness::Ready: return "ready";
+        case EndpointServiceReadiness::NotReady: return "not_ready";
+        case EndpointServiceReadiness::Unknown: return "unknown";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<EndpointServiceReadiness> parse_endpoint_service_readiness(std::string_view name) {
+    if (name == "ready") return EndpointServiceReadiness::Ready;
+    if (name == "not_ready") return EndpointServiceReadiness::NotReady;
+    if (name == "unknown") return EndpointServiceReadiness::Unknown;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(EndpointServiceReadiness value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(EndpointServiceReadiness value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, EndpointServiceReadiness value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, EndpointServiceReadiness value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kEndpointServiceReadinessNames = {"ready", "not_ready", "unknown"};
+
+inline const std::vector<std::string> kEndpointRefusalSourceNames = {"rights", "credentials", "license", "terms", "identity", "os"};
+inline constexpr std::string_view kEndpointRefusalSourceRights = "rights";
+inline constexpr std::string_view kEndpointRefusalSourceCredentials = "credentials";
+inline constexpr std::string_view kEndpointRefusalSourceLicense = "license";
+inline constexpr std::string_view kEndpointRefusalSourceTerms = "terms";
+inline constexpr std::string_view kEndpointRefusalSourceIdentity = "identity";
+inline constexpr std::string_view kEndpointRefusalSourceOs = "os";
+
+enum class EndpointRefusalDecision : std::int32_t {
+    Denied = 1,
+    NotGranted = 2,
+    PersonOnly = 3,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(EndpointRefusalDecision value) {
+    switch (value) {
+        case EndpointRefusalDecision::Denied: return "denied";
+        case EndpointRefusalDecision::NotGranted: return "not_granted";
+        case EndpointRefusalDecision::PersonOnly: return "person_only";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<EndpointRefusalDecision> parse_endpoint_refusal_decision(std::string_view name) {
+    if (name == "denied") return EndpointRefusalDecision::Denied;
+    if (name == "not_granted") return EndpointRefusalDecision::NotGranted;
+    if (name == "person_only") return EndpointRefusalDecision::PersonOnly;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(EndpointRefusalDecision value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(EndpointRefusalDecision value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, EndpointRefusalDecision value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, EndpointRefusalDecision value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kEndpointRefusalDecisionNames = {"denied", "not_granted", "person_only"};
+
+enum class EndpointRefusalAsk : std::int32_t {
+    Available = 1,
+    None = 2,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(EndpointRefusalAsk value) {
+    switch (value) {
+        case EndpointRefusalAsk::Available: return "available";
+        case EndpointRefusalAsk::None: return "none";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<EndpointRefusalAsk> parse_endpoint_refusal_ask(std::string_view name) {
+    if (name == "available") return EndpointRefusalAsk::Available;
+    if (name == "none") return EndpointRefusalAsk::None;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(EndpointRefusalAsk value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(EndpointRefusalAsk value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, EndpointRefusalAsk value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, EndpointRefusalAsk value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kEndpointRefusalAskNames = {"available", "none"};
+
+enum class EndpointProducerCheckState : std::int32_t {
+    Current = 1,
+    Repaired = 2,
+    Stale = 3,
+    Refused = 4,
+    Unverified = 5,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(EndpointProducerCheckState value) {
+    switch (value) {
+        case EndpointProducerCheckState::Current: return "current";
+        case EndpointProducerCheckState::Repaired: return "repaired";
+        case EndpointProducerCheckState::Stale: return "stale";
+        case EndpointProducerCheckState::Refused: return "refused";
+        case EndpointProducerCheckState::Unverified: return "unverified";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<EndpointProducerCheckState> parse_endpoint_producer_check_state(std::string_view name) {
+    if (name == "current") return EndpointProducerCheckState::Current;
+    if (name == "repaired") return EndpointProducerCheckState::Repaired;
+    if (name == "stale") return EndpointProducerCheckState::Stale;
+    if (name == "refused") return EndpointProducerCheckState::Refused;
+    if (name == "unverified") return EndpointProducerCheckState::Unverified;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(EndpointProducerCheckState value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(EndpointProducerCheckState value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, EndpointProducerCheckState value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, EndpointProducerCheckState value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kEndpointProducerCheckStateNames = {"current", "repaired", "stale", "refused", "unverified"};
+
+enum class EndpointDescriptionOutcome : std::int32_t {
+    Described = 1,
+    Forbidden = 2,
+    Unavailable = 3,
+    Invalid = 4,
+    Unsupported = 5,
+};
+
+// The member's name on the wire; empty for a value that names no member.
+inline constexpr std::string_view wire_name(EndpointDescriptionOutcome value) {
+    switch (value) {
+        case EndpointDescriptionOutcome::Described: return "described";
+        case EndpointDescriptionOutcome::Forbidden: return "forbidden";
+        case EndpointDescriptionOutcome::Unavailable: return "unavailable";
+        case EndpointDescriptionOutcome::Invalid: return "invalid";
+        case EndpointDescriptionOutcome::Unsupported: return "unsupported";
+    }
+    return {};
+}
+
+// The member a wire name spells; empty for a name this vocabulary refuses.
+inline std::optional<EndpointDescriptionOutcome> parse_endpoint_description_outcome(std::string_view name) {
+    if (name == "described") return EndpointDescriptionOutcome::Described;
+    if (name == "forbidden") return EndpointDescriptionOutcome::Forbidden;
+    if (name == "unavailable") return EndpointDescriptionOutcome::Unavailable;
+    if (name == "invalid") return EndpointDescriptionOutcome::Invalid;
+    if (name == "unsupported") return EndpointDescriptionOutcome::Unsupported;
+    return std::nullopt;
+}
+
+// A member equals its wire name, so code holding the contract's word compares directly.
+inline constexpr bool operator==(EndpointDescriptionOutcome value, std::string_view name) { return wire_name(value) == name; }
+inline constexpr bool operator!=(EndpointDescriptionOutcome value, std::string_view name) { return wire_name(value) != name; }
+inline constexpr bool operator==(std::string_view name, EndpointDescriptionOutcome value) { return wire_name(value) == name; }
+inline constexpr bool operator!=(std::string_view name, EndpointDescriptionOutcome value) { return wire_name(value) != name; }
+
+inline const std::vector<std::string> kEndpointDescriptionOutcomeNames = {"described", "forbidden", "unavailable", "invalid", "unsupported"};
+
 inline const std::vector<std::string> kAdmissionGuarantees = {"abstraction.job/caller-exit@1", "abstraction.job/service-restart@1", "abstraction.job/reconciliation@1"};
 
 inline const std::vector<std::string> kAcceptanceErrorCodes = {"forbidden"};
@@ -456,7 +709,8 @@ struct Submission {
     std::string label;
 };
 
-// Recoverable acceptance evidence. Retention is a minimum duration from
+// [Receipt](https://openabstractions.github.io/reference.html#concept-job.acceptance-receipt):
+// recoverable acceptance evidence. Retention is a minimum duration from
 // original acceptance, never renewed by replay. Expiry does not end work,
 // transfer ownership or authorize duplicate execution. IDs confer no authority.
 struct Receipt {
@@ -500,8 +754,9 @@ struct CancellationResult {
     CancellationOutcome outcome{};
 };
 
-// Advisory nonnegative progress. Zero total means unknown. Progress does not
-// authorize delivery or imply completion.
+// Advisory nonnegative progress. Zero total means unknown.
+// [WorkProgress](https://openabstractions.github.io/reference.html#concept-job.progress)
+// does not authorize delivery or imply completion.
 struct WorkProgress {
     std::int64_t done = 0;
     std::int64_t total = 0;
@@ -584,6 +839,19 @@ struct ResultLink {
     std::int64_t size = 0;
 };
 
+// Exactly changed carries the current snapshot. Changed and unchanged carry the
+// next cursor; gap retains the supplied cursor and requires a fresh
+// empty-cursor snapshot. Other outcomes carry neither snapshot nor cursor. The
+// cursor binds provider instance, authenticated acceptance scope, request
+// identity and JOB-N1 visible state. Observation never seals absence or cancels
+// work.
+struct WorkObservation {
+    WorkObservationOutcome outcome{};
+    std::string next;
+    std::optional<OperationSnapshot> snapshot;
+    WorkObservationMechanism mechanism{};
+};
+
 // Caller-scoped accepted-operation observations without paths. Only page
 // carries snapshots. A noncomplete page always has a next cursor, even when no
 // own operations were scanned. Complete pages have empty next. Refusals carry
@@ -606,6 +874,81 @@ struct InventoryPage {
 // store could not be reached (JOB-A13).
 struct OperatorCancellation {
     OperatorCancellationOutcome outcome{};
+};
+
+// The one refusal record every OA service carries beside a refusing outcome
+// (RIGHTS-E3; conventions CONV-E4). source names the authority that refused:
+// rights, credentials, license, terms, identity or os. decision is denied for
+// an explicit refusal, not_granted where no rule permits, and person_only where
+// only the person may answer the question. ask says whether asking can change
+// the answer: available, or none. action is the exact registered
+// <owner>/<name>; question the pending question's id; credential the
+// credential's name; retry_after_ms the earliest useful retry in milliseconds,
+// omitted when zero. Stop asking is denied with ask none. Current carriers
+// include config@2, messages@1, registry@3, endpoint@2 and chat@3, declared in
+// config.thrift, messages.thrift, registration.thrift and inference.thrift.
+// Other services adopt it in their scheduled versions.
+struct EndpointRefusalDetail {
+    std::string source;
+    EndpointRefusalDecision decision{};
+    EndpointRefusalAsk ask{};
+    std::string action;
+    std::string question;
+    std::string credential;
+    std::int64_t retry_after_ms = 0;
+};
+
+// Producer assertion validated by the runtime. Kind is the governed open
+// build-time vocabulary <owner>/<name>, not a display string or an authority
+// claim. copy identifies one copy within the kind. reason follows D87
+// domain:word:detail as open display text. checked is the producer's claimed
+// check time. Custom/unknown copies are unverified; readiness remains
+// independent. No runtime kind-registration method is introduced.
+struct EndpointProducerCheck {
+    std::string kind;
+    std::string copy;
+    EndpointProducerCheckState state{};
+    std::string reason;
+    std::string checked;
+};
+
+// endpoint@2 service observation. definition_hash is sha256: plus64 lowercase
+// hex over this service version's canonical wire form (CONV-V2), verified by
+// the definition-hash owner. reason retains readiness errors and is empty when
+// ready. capabilities remain display-only. Program-level producer checks belong
+// to EndpointDescription and are independent of service readiness.
+struct EndpointServiceState {
+    std::string service;
+    EndpointServiceReadiness readiness{};
+    std::string reason;
+    std::vector<std::string> guarantees;
+    std::map<std::string, std::string> capabilities;
+    std::string definition_hash;
+};
+
+// Complete endpoint@2 description with each advertised service's definition
+// hash and one program-level producer-check list. Checks are independent of
+// service readiness; absence means unobserved, never verified.
+// Forbidden/unavailable authority refusals carry the single Rights-owned
+// EndpointRefusalDetail; other outcomes omit it. Unsupported carries the
+// existing bounded reason with D87 unsupported:not_implemented words; no closed
+// staged-reason vocabulary is frozen. Non-described replies disclose no
+// program/version/services/checks. Endpoint@1 and its closed
+// EndpointDescription/EndpointServiceState remain unchanged. The compact value
+// ceiling excluding insignificant JSON whitespace is IPC-F1; an oversized whole
+// reply is unavailable/bound:reply_bytes without truncation.
+struct EndpointDescription {
+    EndpointDescriptionOutcome outcome{};
+    std::string program;
+    std::string version;
+    std::vector<EndpointServiceState> services;
+    std::optional<EndpointRefusalDetail> refusal;
+    std::string reason;
+    std::vector<EndpointProducerCheck> checks;
+};
+
+struct EndpointDescriptionResult {
+    EndpointDescription value;
 };
 
 // Codec machinery. Nothing here is API; it may change in any release.
@@ -657,52 +1000,13 @@ inline void strs(std::string& out, const std::vector<std::string>& v, int depth)
 
 inline bool ws(unsigned char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-inline void raw(std::string& out, const std::string& s, int depth) {
-    const std::size_t n = s.size();
-    for (std::size_t i = 0; i < n;) {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
-        if (ws(c)) {
-            ++i;
-        } else if (c == '"') {
-            std::size_t j = i + 1;
-            while (j < n) {
-                if (s[j] == '\\') { j += 2; continue; }
-                if (s[j] == '"') { ++j; break; }
-                ++j;
-            }
-            out.append(s, i, j - i);
-            i = j;
-        } else if (c == '{' || c == '[') {
-            out += static_cast<char>(c);
-            ++i;
-            std::size_t j = i;
-            while (j < n && ws(static_cast<unsigned char>(s[j]))) ++j;
-            if (j < n && (s[j] == '}' || s[j] == ']')) {
-                out += s[j];
-                i = j + 1;
-            } else {
-                ++depth;
-                out += '\n';
-                pad(out, depth);
-            }
-        } else if (c == '}' || c == ']') {
-            --depth;
-            out += '\n';
-            pad(out, depth);
-            out += static_cast<char>(c);
-            ++i;
-        } else if (c == ',') {
-            out += ",\n";
-            pad(out, depth);
-            ++i;
-        } else if (c == ':') {
-            out += ": ";
-            ++i;
-        } else {
-            out += static_cast<char>(c);
-            ++i;
-        }
-    }
+// raw writes an opaque value's bytes as they are ([DEF-A3]).
+inline void raw(std::string& out, const std::string& s, int /*depth*/) {
+    // Whitespace around the value is not part of it.
+    std::size_t i = 0, j = s.size();
+    while (i < j && ws(static_cast<unsigned char>(s[i]))) ++i;
+    while (j > i && ws(static_cast<unsigned char>(s[j - 1]))) --j;
+    out.append(s, i, j - i);
 }
 
 // std::char_traits<char>::compare is specified to order by unsigned char, so a
@@ -730,6 +1034,26 @@ inline void esc(std::string& out, const std::string& s) {
     out += '"';
 }
 
+inline bool wide_timestamp(std::string_view);
+inline std::string normalized_timestamp(std::string_view);
+inline std::string write_timestamp(std::string_view);
+
+inline void strmap(std::string& out, const std::map<std::string, std::string>& m, int depth) {
+    if (m.empty()) { out += "{}"; return; }
+    out += "{\n";
+    std::size_t i = 0;
+    for (const auto& kv : m) {
+        pad(out, depth + 1);
+        esc(out, kv.first);
+        out += ": ";
+        esc(out, kv.second);
+        if (++i < m.size()) out += ',';
+        out += '\n';
+    }
+    pad(out, depth);
+    out += '}';
+}
+
 template <typename T>
 inline void enc_list(std::string& out, const std::vector<T>& v, int depth,
                      void (*enc)(std::string&, const T&, int)) {
@@ -748,6 +1072,25 @@ inline void enc_list(std::string& out, const std::vector<T>& v, int depth,
 inline std::string encode_binary(const std::vector<std::uint8_t>&);
 inline std::vector<std::uint8_t> decode_binary(const std::string&);
 
+struct CompactEncodedCounter {
+    std::size_t start, pos, count = 0;
+    bool quoted = false, escaped = false;
+    explicit CompactEncodedCounter(std::size_t at): start(at), pos(at) {}
+    void check(std::string_view out, std::size_t limit) {
+        if (out.size()-start > 1048576) throw Refusal("encoded_size", 0);
+        for (; pos < out.size(); ++pos) {
+            const auto b = out[pos];
+            if (!quoted && (b == ' ' || b == '\t' || b == '\r' || b == '\n')) continue;
+            if (++count > limit) throw Refusal("encoded_size", 0);
+            if (quoted) {
+                if (escaped) escaped = false;
+                else if (b == '\\') escaped = true;
+                else if (b == '"') quoted = false;
+            } else if (b == '"') quoted = true;
+        }
+    }
+};
+
 struct OARecoverableAcceptanceGetHistoryWindowArguments {
 };
 
@@ -765,6 +1108,12 @@ struct OARecoverableAcceptanceCancelWorkArguments {
 
 struct OAOperationControlObserveWorkArguments {
     RequestIdentity identity;
+};
+
+struct OAOperationControlFollowWorkArguments {
+    RequestIdentity identity;
+    std::string after;
+    std::int64_t wait_ms = 0;
 };
 
 struct OAOperationControlReadResultArguments {
@@ -832,6 +1181,10 @@ struct OAOperationControlObserveWorkResult {
     ObservationResult value;
 };
 
+struct OAOperationControlFollowWorkResult {
+    WorkObservation value;
+};
+
 struct OAOperationControlReadResultResult {
     ResultRead value;
 };
@@ -864,13 +1217,20 @@ inline void enc_observation_result(std::string&, const ObservationResult&, int);
 inline void enc_result_chunk(std::string&, const ResultChunk&, int);
 inline void enc_result_read(std::string&, const ResultRead&, int);
 inline void enc_result_link(std::string&, const ResultLink&, int);
+inline void enc_work_observation(std::string&, const WorkObservation&, int);
 inline void enc_inventory_page(std::string&, const InventoryPage&, int);
 inline void enc_operator_cancellation(std::string&, const OperatorCancellation&, int);
+inline void enc_endpoint_refusal_detail(std::string&, const EndpointRefusalDetail&, int);
+inline void enc_endpoint_producer_check(std::string&, const EndpointProducerCheck&, int);
+inline void enc_endpoint_service_state(std::string&, const EndpointServiceState&, int);
+inline void enc_endpoint_description(std::string&, const EndpointDescription&, int);
+inline void enc_endpoint_description_result(std::string&, const EndpointDescriptionResult&, int);
 inline void enc_oa_recoverable_acceptance_get_history_window_arguments(std::string&, const OARecoverableAcceptanceGetHistoryWindowArguments&, int);
 inline void enc_oa_recoverable_acceptance_submit_arguments(std::string&, const OARecoverableAcceptanceSubmitArguments&, int);
 inline void enc_oa_recoverable_acceptance_reconcile_arguments(std::string&, const OARecoverableAcceptanceReconcileArguments&, int);
 inline void enc_oa_recoverable_acceptance_cancel_work_arguments(std::string&, const OARecoverableAcceptanceCancelWorkArguments&, int);
 inline void enc_oa_operation_control_observe_work_arguments(std::string&, const OAOperationControlObserveWorkArguments&, int);
+inline void enc_oa_operation_control_follow_work_arguments(std::string&, const OAOperationControlFollowWorkArguments&, int);
 inline void enc_oa_operation_control_read_result_arguments(std::string&, const OAOperationControlReadResultArguments&, int);
 inline void enc_oa_operation_control_link_result_arguments(std::string&, const OAOperationControlLinkResultArguments&, int);
 inline void enc_oa_job_inventory_list_work_arguments(std::string&, const OAJobInventoryListWorkArguments&, int);
@@ -884,6 +1244,7 @@ inline void enc_oa_recoverable_acceptance_submit_result(std::string&, const OARe
 inline void enc_oa_recoverable_acceptance_reconcile_result(std::string&, const OARecoverableAcceptanceReconcileResult&, int);
 inline void enc_oa_recoverable_acceptance_cancel_work_result(std::string&, const OARecoverableAcceptanceCancelWorkResult&, int);
 inline void enc_oa_operation_control_observe_work_result(std::string&, const OAOperationControlObserveWorkResult&, int);
+inline void enc_oa_operation_control_follow_work_result(std::string&, const OAOperationControlFollowWorkResult&, int);
 inline void enc_oa_operation_control_read_result_result(std::string&, const OAOperationControlReadResultResult&, int);
 inline void enc_oa_operation_control_link_result_result(std::string&, const OAOperationControlLinkResultResult&, int);
 inline void enc_oa_job_inventory_list_work_result(std::string&, const OAJobInventoryListWorkResult&, int);
@@ -1275,6 +1636,42 @@ inline void enc_result_link(std::string& out, const ResultLink& v, int depth) {
     out += '}';
 }
 
+inline void enc_work_observation(std::string& out, const WorkObservation& v, int depth) {
+    if (const auto n = static_cast<std::uint64_t>(v.next.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.next.size(); ++i) { const auto c = static_cast<unsigned char>(v.next[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.next.size() && static_cast<unsigned char>(v.next[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
+    if (wire_name(v.mechanism).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "outcome");
+    out += ": ";
+    esc(out, std::string(wire_name(v.outcome)));
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "next");
+    out += ": ";
+    esc(out, v.next);
+    if (v.snapshot.has_value()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "snapshot");
+        out += ": ";
+        enc_operation_snapshot(out, *v.snapshot, depth + 1);
+    }
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "mechanism");
+    out += ": ";
+    esc(out, std::string(wire_name(v.mechanism)));
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
 inline void enc_inventory_page(std::string& out, const InventoryPage& v, int depth) {
     if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
     out += '{';
@@ -1314,6 +1711,261 @@ inline void enc_operator_cancellation(std::string& out, const OperatorCancellati
     esc(out, "outcome");
     out += ": ";
     esc(out, std::string(wire_name(v.outcome)));
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_endpoint_refusal_detail(std::string& out, const EndpointRefusalDetail& v, int depth) {
+if(depth<0||depth>=64)throw Refusal("depth_exceeded",0);
+    if (const auto n = static_cast<std::uint64_t>(v.action.size()); n != 0 && (n < 1ULL || n > 128ULL)) throw Refusal("bad_value",0);
+    if (const auto n = static_cast<std::uint64_t>(v.question.size()); n != 0 && (n < 1ULL || n > 128ULL)) throw Refusal("bad_value",0);
+    if (const auto n = static_cast<std::uint64_t>(v.credential.size()); n != 0 && (n < 1ULL || n > 64ULL)) throw Refusal("bad_value",0);
+    if (v.retry_after_ms < 0LL || v.retry_after_ms > 86400000LL) throw Refusal("bad_value",0);
+    if (wire_name(v.decision).empty()) throw Refusal("bad_enum", 0);
+    if (wire_name(v.ask).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "source");
+    out += ": ";
+    esc(out, v.source);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "decision");
+    out += ": ";
+    esc(out, std::string(wire_name(v.decision)));
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "ask");
+    out += ": ";
+    esc(out, std::string(wire_name(v.ask)));
+    if (!v.action.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "action");
+        out += ": ";
+        esc(out, v.action);
+    }
+    if (!v.question.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "question");
+        out += ": ";
+        esc(out, v.question);
+    }
+    if (!v.credential.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "credential");
+        out += ": ";
+        esc(out, v.credential);
+    }
+    if (v.retry_after_ms != 0) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "retry_after_ms");
+        out += ": ";
+        num(out, v.retry_after_ms);
+    }
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_endpoint_producer_check(std::string& out, const EndpointProducerCheck& v, int depth) {
+if(depth<0||depth>=1000)throw Refusal("depth_exceeded",0);
+    if (const auto n = static_cast<std::uint64_t>(v.kind.size()); n < 1ULL || n > 128ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.kind.size(); ++i) { const auto c = static_cast<unsigned char>(v.kind[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.kind.size() && static_cast<unsigned char>(v.kind[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (const auto n = static_cast<std::uint64_t>(v.copy.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.copy.size(); ++i) { const auto c = static_cast<unsigned char>(v.copy[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.copy.size() && static_cast<unsigned char>(v.copy[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (wire_name(v.state).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "kind");
+    out += ": ";
+    esc(out, v.kind);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "copy");
+    out += ": ";
+    esc(out, v.copy);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "state");
+    out += ": ";
+    esc(out, std::string(wire_name(v.state)));
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "reason");
+    out += ": ";
+    esc(out, v.reason);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "checked");
+    out += ": ";
+    esc(out, write_timestamp(v.checked));
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_endpoint_service_state(std::string& out, const EndpointServiceState& v, int depth) {
+if(depth<0||depth>=1000)throw Refusal("depth_exceeded",0);
+    if (const auto n = static_cast<std::uint64_t>(v.service.size()); n < 1ULL || n > 128ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.service.size(); ++i) { const auto c = static_cast<unsigned char>(v.service[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.service.size() && static_cast<unsigned char>(v.service[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (const auto n = static_cast<std::uint64_t>(v.guarantees.size()); n > 64ULL) throw Refusal("bad_value",0);
+    for (const auto& oaElement : v.guarantees) {
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n < 1ULL || n > 128ULL) throw Refusal("bad_value",0);
+    }
+    for (const auto& oaElement : v.guarantees) {
+    for (std::size_t i = 0; i < oaElement.size(); ++i) { const auto c = static_cast<unsigned char>(oaElement[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < oaElement.size() && static_cast<unsigned char>(oaElement[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    }
+    if (const auto n = static_cast<std::uint64_t>(v.capabilities.size()); n > 32ULL) throw Refusal("bad_value",0);
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.first;
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n < 1ULL || n > 64ULL) throw Refusal("bad_value",0);
+    }
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.first;
+    for (std::size_t i = 0; i < oaElement.size(); ++i) { const auto c = static_cast<unsigned char>(oaElement[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < oaElement.size() && static_cast<unsigned char>(oaElement[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    }
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.second;
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n > 256ULL) throw Refusal("bad_value",0);
+    }
+    if (const auto n = static_cast<std::uint64_t>(v.definition_hash.size()); n < 71ULL || n > 71ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.definition_hash.size(); ++i) { const auto c = static_cast<unsigned char>(v.definition_hash[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.definition_hash.size() && static_cast<unsigned char>(v.definition_hash[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (wire_name(v.readiness).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "service");
+    out += ": ";
+    esc(out, v.service);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "readiness");
+    out += ": ";
+    esc(out, std::string(wire_name(v.readiness)));
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "reason");
+    out += ": ";
+    esc(out, v.reason);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "guarantees");
+    out += ": ";
+    strs(out, v.guarantees, depth + 1);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "capabilities");
+    out += ": ";
+    strmap(out, v.capabilities, depth + 1);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "definition_hash");
+    out += ": ";
+    esc(out, v.definition_hash);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_endpoint_description(std::string& out, const EndpointDescription& v, int depth) {
+if(depth<0||depth>=1000)throw Refusal("depth_exceeded",0);
+    CompactEncodedCounter encoded_counter(out.size());
+    if (const auto n = static_cast<std::uint64_t>(v.program.size()); n > 256ULL) throw Refusal("bad_value",0);
+    if (const auto n = static_cast<std::uint64_t>(v.version.size()); n > 256ULL) throw Refusal("bad_value",0);
+    if (const auto n = static_cast<std::uint64_t>(v.services.size()); n > 64ULL) throw Refusal("bad_value",0);
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (const auto n = static_cast<std::uint64_t>(v.checks.size()); n > 64ULL) throw Refusal("bad_value",0);
+    if (wire_name(v.outcome).empty()) throw Refusal("bad_enum", 0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "outcome");
+    out += ": ";
+    esc(out, std::string(wire_name(v.outcome)));
+    encoded_counter.check(out, 1048576);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "program");
+    out += ": ";
+    esc(out, v.program);
+    encoded_counter.check(out, 1048576);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "version");
+    out += ": ";
+    esc(out, v.version);
+    encoded_counter.check(out, 1048576);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "services");
+    out += ": ";
+    enc_list<EndpointServiceState>(out, v.services, depth + 1, enc_endpoint_service_state);
+    encoded_counter.check(out, 1048576);
+    if (v.refusal.has_value()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "refusal");
+        out += ": ";
+        enc_endpoint_refusal_detail(out, *v.refusal, depth + 1);
+    }
+    encoded_counter.check(out, 1048576);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "reason");
+    out += ": ";
+    esc(out, v.reason);
+    encoded_counter.check(out, 1048576);
+    if (!v.checks.empty()) {
+        out += ',';
+        out += '\n';
+        pad(out, depth + 1);
+        esc(out, "checks");
+        out += ": ";
+        enc_list<EndpointProducerCheck>(out, v.checks, depth + 1, enc_endpoint_producer_check);
+    }
+    encoded_counter.check(out, 1048576);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+    encoded_counter.check(out, 1048576);
+}
+
+inline void enc_endpoint_description_result(std::string& out, const EndpointDescriptionResult& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "value");
+    out += ": ";
+    enc_endpoint_description(out, v.value, depth + 1);
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -1369,6 +2021,33 @@ inline void enc_oa_operation_control_observe_work_arguments(std::string& out, co
     esc(out, "identity");
     out += ": ";
     enc_request_identity(out, v.identity, depth + 1);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
+inline void enc_oa_operation_control_follow_work_arguments(std::string& out, const OAOperationControlFollowWorkArguments& v, int depth) {
+    if (const auto n = static_cast<std::uint64_t>(v.after.size()); n > 256ULL) throw Refusal("bad_value",0);
+    for (std::size_t i = 0; i < v.after.size(); ++i) { const auto c = static_cast<unsigned char>(v.after[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.after.size() && static_cast<unsigned char>(v.after[i + 1]) <= 0x9f)) throw Refusal("bad_value",0); }
+    if (v.wait_ms < 0LL || v.wait_ms > 30000LL) throw Refusal("bad_value",0);
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "identity");
+    out += ": ";
+    enc_request_identity(out, v.identity, depth + 1);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "after");
+    out += ": ";
+    esc(out, v.after);
+    out += ',';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "wait_ms");
+    out += ": ";
+    num(out, v.wait_ms);
     out += '\n';
     pad(out, depth);
     out += '}';
@@ -1608,6 +2287,18 @@ inline void enc_oa_operation_control_observe_work_result(std::string& out, const
     out += '}';
 }
 
+inline void enc_oa_operation_control_follow_work_result(std::string& out, const OAOperationControlFollowWorkResult& v, int depth) {
+    out += '{';
+    out += '\n';
+    pad(out, depth + 1);
+    esc(out, "value");
+    out += ": ";
+    enc_work_observation(out, v.value, depth + 1);
+    out += '\n';
+    pad(out, depth);
+    out += '}';
+}
+
 inline void enc_oa_operation_control_read_result_result(std::string& out, const OAOperationControlReadResultResult& v, int depth) {
     out += '{';
     out += '\n';
@@ -1716,6 +2407,9 @@ struct Reader {
     std::string_view buf;
     std::size_t pos = 0;
     int depth = 0;
+    int limit = 0;
+    int ceiling = 0;
+    int depth_limit() const {int own=ceiling>0?ceiling:kDepthLimit;return limit>0&&limit<own?limit:own;}
 
     [[noreturn]] void refuse(const char* word) const { throw Refusal(word, pos); }
 
@@ -1730,7 +2424,7 @@ struct Reader {
     }
 
     void enter() {
-        if (++depth > kDepthLimit) refuse("depth_exceeded");
+        if (++depth > depth_limit()) refuse("depth_exceeded");
     }
 
     std::string str() {
@@ -1963,6 +2657,34 @@ struct Reader {
     }
 };
 
+inline std::map<std::string, std::string> str_map(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    std::map<std::string, std::string> out;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string k = r.str();
+            if (out.count(k) != 0) r.refuse("duplicate_key");
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            out[k] = r.str();
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    return out;
+}
+
 template <typename T>
 inline std::vector<T> decode_list(Reader& r, T (*elem)(Reader&)) {
     if (r.at() != '[') r.refuse("wrong_type");
@@ -1985,6 +2707,107 @@ inline std::vector<T> decode_list(Reader& r, T (*elem)(Reader&)) {
     return out;
 }
 
+inline bool digits(std::string_view s, std::size_t i, std::size_t n) {
+    if (s.size() < i + n) return false;
+    for (std::size_t k = 0; k < n; ++k) {
+        if (s[i + k] < '0' || s[i + k] > '9') return false;
+    }
+    return true;
+}
+
+inline bool date_part(std::string_view s) {
+    return s.size() >= 19 && digits(s, 0, 4) && s[4] == '-' && digits(s, 5, 2) && s[7] == '-' &&
+           digits(s, 8, 2) && digits(s, 11, 2) && s[13] == ':' && digits(s, 14, 2) && s[16] == ':' &&
+           digits(s, 17, 2);
+}
+
+// [DEF-G1] rfc3339-wide: what a reader accepts. Any fraction of one to nine
+// digits or none, either case of the separators, and a numeric offset.
+inline bool lexical_timestamp(std::string_view s) {
+    if (!date_part(s) || (s[10] != 'T' && s[10] != 't')) return false;
+    std::size_t i = 19;
+    if (i < s.size() && s[i] == '.') {
+        ++i;
+        const std::size_t start = i;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+        if (i - start < 1 || i - start > 9) return false;
+    }
+    if (i >= s.size()) return false;
+    if (s[i] == 'Z' || s[i] == 'z') return i + 1 == s.size();
+    if (s[i] != '+' && s[i] != '-') return false;
+    return s.size() == i + 6 && digits(s, i + 1, 2) && s[i + 3] == ':' && digits(s, i + 4, 2);
+}
+
+// [DEF-G2] rfc3339-micros: what a writer emits. Exactly six fractional digits,
+// upper-case separators, UTC.
+inline bool micros_timestamp(std::string_view s) {
+    return s.size() == 27 && normalized_timestamp(s) == s;
+}
+
+inline std::string read_timestamp(Reader& r) {
+    const std::size_t at = r.pos;
+    const std::string s = r.str();
+    if (!wide_timestamp(s)) {
+        r.pos = at;
+        r.refuse("bad_timestamp");
+    }
+    return s;
+}
+
+inline int timestamp_number(std::string_view s, std::size_t at, std::size_t n) {
+    int v=0; for(std::size_t k=0;k<n;++k) v=v*10+(s[at+k]-'0'); return v;
+}
+inline int timestamp_days(int y, int m) {
+    if(m==2) return y%4==0 && (y%100!=0 || y%400==0) ? 29 : 28;
+    return m==4 || m==6 || m==9 || m==11 ? 30 : 31;
+}
+inline std::string normalized_timestamp(std::string_view s) {
+    if(!lexical_timestamp(s)) return {};
+    int y=timestamp_number(s,0,4), m=timestamp_number(s,5,2), d=timestamp_number(s,8,2);
+    int h=timestamp_number(s,11,2), minute=timestamp_number(s,14,2), sec=timestamp_number(s,17,2);
+    if(m<1 || m>12 || d<1 || d>timestamp_days(y,m) || h>23 || minute>59 || sec>59) return {};
+    std::size_t i=19; std::string_view fraction;
+    if(s[i]=='.') {const auto start=++i; while(s[i]>='0' && s[i]<='9') ++i; fraction=s.substr(start,i-start);}
+    int total=h*60+minute;
+    if(s[i]=='+' || s[i]=='-') {
+        int oh=timestamp_number(s,i+1,2), om=timestamp_number(s,i+4,2);
+        if(oh>23 || om>59) return {};
+        total += (s[i]=='+' ? -1 : 1)*(oh*60+om);
+    }
+    if(total<0) {total+=1440; --d;} else if(total>=1440) {total-=1440; ++d;}
+    if(d==0) {--m; if(m==0) {--y; m=12;} d=timestamp_days(y,m);}
+    if(d>timestamp_days(y,m)) {d=1; ++m; if(m==13) {++y; m=1;}}
+    if(y<0 || y>9999) return {};
+    std::string out="0000-00-00T00:00:00.000000Z";
+    auto put=[&](int at,int width,int value) {for(int k=width-1;k>=0;--k) {out[at+k]=char('0'+value%10); value/=10;}};
+    put(0,4,y); put(5,2,m); put(8,2,d); put(11,2,total/60); put(14,2,total%60); put(17,2,sec);
+    for(std::size_t k=0;k<6 && k<fraction.size();++k) out[20+k]=fraction[k];
+    return out;
+}
+inline bool wide_timestamp(std::string_view s) {return !normalized_timestamp(s).empty();}
+inline std::string write_timestamp(std::string_view s) {
+    auto result=normalized_timestamp(s);
+    if(result.empty()) throw Refusal("bad_timestamp",0);
+    return result;
+}
+
+inline void check_encoded_size(const Reader& r, std::size_t limit) {
+    auto depth = r.depth; bool quoted = false, escaped = false; std::size_t count = 0;
+    for (auto i = r.pos; i < r.buf.size(); ++i) {
+        if (i-r.pos >= 1048576) r.refuse("encoded_size");
+        const auto c = r.buf[i];
+        if (!quoted && (c == ' ' || c == '\t' || c == '\r' || c == '\n')) continue;
+        if (++count > limit) r.refuse("encoded_size");
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+        } else if (c == '"') quoted = true;
+        else if (c == '{' || c == '[') { if (++depth > r.depth_limit()) r.refuse("depth_exceeded"); }
+        else if (c == '}' || c == ']') { if (--depth <= r.depth) return; }
+    }
+}
+
 inline RequestIdentity decode_request_identity(Reader& r);
 inline Submission decode_submission(Reader& r);
 inline Receipt decode_receipt(Reader& r);
@@ -1998,13 +2821,20 @@ inline ObservationResult decode_observation_result(Reader& r);
 inline ResultChunk decode_result_chunk(Reader& r);
 inline ResultRead decode_result_read(Reader& r);
 inline ResultLink decode_result_link(Reader& r);
+inline WorkObservation decode_work_observation(Reader& r);
 inline InventoryPage decode_inventory_page(Reader& r);
 inline OperatorCancellation decode_operator_cancellation(Reader& r);
+inline EndpointRefusalDetail decode_endpoint_refusal_detail(Reader& r);
+inline EndpointProducerCheck decode_endpoint_producer_check(Reader& r);
+inline EndpointServiceState decode_endpoint_service_state(Reader& r);
+inline EndpointDescription decode_endpoint_description(Reader& r);
+inline EndpointDescriptionResult decode_endpoint_description_result(Reader& r);
 inline OARecoverableAcceptanceGetHistoryWindowArguments decode_oa_recoverable_acceptance_get_history_window_arguments(Reader& r);
 inline OARecoverableAcceptanceSubmitArguments decode_oa_recoverable_acceptance_submit_arguments(Reader& r);
 inline OARecoverableAcceptanceReconcileArguments decode_oa_recoverable_acceptance_reconcile_arguments(Reader& r);
 inline OARecoverableAcceptanceCancelWorkArguments decode_oa_recoverable_acceptance_cancel_work_arguments(Reader& r);
 inline OAOperationControlObserveWorkArguments decode_oa_operation_control_observe_work_arguments(Reader& r);
+inline OAOperationControlFollowWorkArguments decode_oa_operation_control_follow_work_arguments(Reader& r);
 inline OAOperationControlReadResultArguments decode_oa_operation_control_read_result_arguments(Reader& r);
 inline OAOperationControlLinkResultArguments decode_oa_operation_control_link_result_arguments(Reader& r);
 inline OAJobInventoryListWorkArguments decode_oa_job_inventory_list_work_arguments(Reader& r);
@@ -2018,6 +2848,7 @@ inline OARecoverableAcceptanceSubmitResult decode_oa_recoverable_acceptance_subm
 inline OARecoverableAcceptanceReconcileResult decode_oa_recoverable_acceptance_reconcile_result(Reader& r);
 inline OARecoverableAcceptanceCancelWorkResult decode_oa_recoverable_acceptance_cancel_work_result(Reader& r);
 inline OAOperationControlObserveWorkResult decode_oa_operation_control_observe_work_result(Reader& r);
+inline OAOperationControlFollowWorkResult decode_oa_operation_control_follow_work_result(Reader& r);
 inline OAOperationControlReadResultResult decode_oa_operation_control_read_result_result(Reader& r);
 inline OAOperationControlLinkResultResult decode_oa_operation_control_link_result_result(Reader& r);
 inline OAJobInventoryListWorkResult decode_oa_job_inventory_list_work_result(Reader& r);
@@ -2653,6 +3484,67 @@ inline ResultLink decode_result_link(Reader& r) {
     return v;
 }
 
+inline WorkObservation decode_work_observation(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    WorkObservation v;
+    std::optional<std::string> wire_outcome;
+    std::optional<std::string> wire_mechanism;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "outcome") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                wire_outcome = r.str();
+            } else if (key == "next") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.next = r.str();
+            } else if (key == "snapshot") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.snapshot = decode_operation_snapshot(r);
+            } else if (key == "mechanism") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                wire_mechanism = r.str();
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 11u) != 11u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.next.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.next.size(); ++i) { const auto c = static_cast<unsigned char>(v.next[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.next.size() && static_cast<unsigned char>(v.next[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (wire_outcome) {
+        const auto parsed = parse_work_observation_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
+    if (wire_mechanism) {
+        const auto parsed = parse_work_observation_mechanism(*wire_mechanism);
+        if (!parsed) r.refuse("bad_enum");
+        v.mechanism = *parsed;
+    }
+    return v;
+}
+
 inline InventoryPage decode_inventory_page(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
@@ -2744,6 +3636,345 @@ inline OperatorCancellation decode_operator_cancellation(Reader& r) {
         if (!parsed) r.refuse("bad_enum");
         v.outcome = *parsed;
     }
+    return v;
+}
+
+inline EndpointRefusalDetail decode_endpoint_refusal_detail(Reader& r) {
+const int previous_ceiling=r.ceiling;struct LimitRestore{Reader&r;int previous;~LimitRestore(){r.ceiling=previous;}} restore{r,previous_ceiling};r.ceiling=64;
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    EndpointRefusalDetail v;
+    std::map<std::string, bool> unknown_keys;
+    std::optional<std::string> wire_decision;
+    std::optional<std::string> wire_ask;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "source") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.source = r.str();
+            } else if (key == "decision") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                wire_decision = r.str();
+            } else if (key == "ask") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                wire_ask = r.str();
+            } else if (key == "action") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                v.action = r.str();
+            } else if (key == "question") {
+                if (seen & 16u) r.refuse("duplicate_field");
+                seen |= 16u;
+                v.question = r.str();
+            } else if (key == "credential") {
+                if (seen & 32u) r.refuse("duplicate_field");
+                seen |= 32u;
+                v.credential = r.str();
+            } else if (key == "retry_after_ms") {
+                if (seen & 64u) r.refuse("duplicate_field");
+                seen |= 64u;
+                v.retry_after_ms = r.integer(INT64_MIN, INT64_MAX);
+            } else {
+                if (!unknown_keys.emplace(key, true).second) r.refuse("duplicate_key");
+                r.skip_value();
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 7u) != 7u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.action.size()); n != 0 && (n < 1ULL || n > 128ULL)) r.refuse("bad_value");
+    if (const auto n = static_cast<std::uint64_t>(v.question.size()); n != 0 && (n < 1ULL || n > 128ULL)) r.refuse("bad_value");
+    if (const auto n = static_cast<std::uint64_t>(v.credential.size()); n != 0 && (n < 1ULL || n > 64ULL)) r.refuse("bad_value");
+    if (v.retry_after_ms < 0LL || v.retry_after_ms > 86400000LL) r.refuse("bad_value");
+    if (wire_decision) {
+        const auto parsed = parse_endpoint_refusal_decision(*wire_decision);
+        if (!parsed) r.refuse("bad_enum");
+        v.decision = *parsed;
+    }
+    if (wire_ask) {
+        const auto parsed = parse_endpoint_refusal_ask(*wire_ask);
+        if (!parsed) r.refuse("bad_enum");
+        v.ask = *parsed;
+    }
+    return v;
+}
+
+inline EndpointProducerCheck decode_endpoint_producer_check(Reader& r) {
+const int previous_ceiling=r.ceiling;struct LimitRestore{Reader&r;int previous;~LimitRestore(){r.ceiling=previous;}} restore{r,previous_ceiling};r.ceiling=1000;
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    EndpointProducerCheck v;
+    std::optional<std::string> wire_state;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "kind") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.kind = r.str();
+            } else if (key == "copy") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.copy = r.str();
+            } else if (key == "state") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                wire_state = r.str();
+            } else if (key == "reason") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                v.reason = r.str();
+            } else if (key == "checked") {
+                if (seen & 16u) r.refuse("duplicate_field");
+                seen |= 16u;
+                v.checked = read_timestamp(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 31u) != 31u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.kind.size()); n < 1ULL || n > 128ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.kind.size(); ++i) { const auto c = static_cast<unsigned char>(v.kind[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.kind.size() && static_cast<unsigned char>(v.kind[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (const auto n = static_cast<std::uint64_t>(v.copy.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.copy.size(); ++i) { const auto c = static_cast<unsigned char>(v.copy[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.copy.size() && static_cast<unsigned char>(v.copy[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (wire_state) {
+        const auto parsed = parse_endpoint_producer_check_state(*wire_state);
+        if (!parsed) r.refuse("bad_enum");
+        v.state = *parsed;
+    }
+    return v;
+}
+
+inline EndpointServiceState decode_endpoint_service_state(Reader& r) {
+const int previous_ceiling=r.ceiling;struct LimitRestore{Reader&r;int previous;~LimitRestore(){r.ceiling=previous;}} restore{r,previous_ceiling};r.ceiling=1000;
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    EndpointServiceState v;
+    std::map<std::string, bool> unknown_keys;
+    std::optional<std::string> wire_readiness;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "service") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.service = r.str();
+            } else if (key == "readiness") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                wire_readiness = r.str();
+            } else if (key == "reason") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.reason = r.str();
+            } else if (key == "guarantees") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                v.guarantees = r.str_list();
+            } else if (key == "capabilities") {
+                if (seen & 16u) r.refuse("duplicate_field");
+                seen |= 16u;
+                v.capabilities = str_map(r);
+            } else if (key == "definition_hash") {
+                if (seen & 32u) r.refuse("duplicate_field");
+                seen |= 32u;
+                v.definition_hash = r.str();
+            } else {
+                if (!unknown_keys.emplace(key, true).second) r.refuse("duplicate_key");
+                r.skip_value();
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 63u) != 63u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.service.size()); n < 1ULL || n > 128ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.service.size(); ++i) { const auto c = static_cast<unsigned char>(v.service[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.service.size() && static_cast<unsigned char>(v.service[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (const auto n = static_cast<std::uint64_t>(v.guarantees.size()); n > 64ULL) r.refuse("bad_value");
+    for (const auto& oaElement : v.guarantees) {
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n < 1ULL || n > 128ULL) r.refuse("bad_value");
+    }
+    for (const auto& oaElement : v.guarantees) {
+    for (std::size_t i = 0; i < oaElement.size(); ++i) { const auto c = static_cast<unsigned char>(oaElement[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < oaElement.size() && static_cast<unsigned char>(oaElement[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    }
+    if (const auto n = static_cast<std::uint64_t>(v.capabilities.size()); n > 32ULL) r.refuse("bad_value");
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.first;
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n < 1ULL || n > 64ULL) r.refuse("bad_value");
+    }
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.first;
+    for (std::size_t i = 0; i < oaElement.size(); ++i) { const auto c = static_cast<unsigned char>(oaElement[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < oaElement.size() && static_cast<unsigned char>(oaElement[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    }
+    for (const auto& oaEntry : v.capabilities) { const auto& oaElement = oaEntry.second;
+    if (const auto n = static_cast<std::uint64_t>(oaElement.size()); n > 256ULL) r.refuse("bad_value");
+    }
+    if (const auto n = static_cast<std::uint64_t>(v.definition_hash.size()); n < 71ULL || n > 71ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.definition_hash.size(); ++i) { const auto c = static_cast<unsigned char>(v.definition_hash[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.definition_hash.size() && static_cast<unsigned char>(v.definition_hash[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (wire_readiness) {
+        const auto parsed = parse_endpoint_service_readiness(*wire_readiness);
+        if (!parsed) r.refuse("bad_enum");
+        v.readiness = *parsed;
+    }
+    return v;
+}
+
+inline EndpointDescription decode_endpoint_description(Reader& r) {
+const int previous_ceiling=r.ceiling;struct LimitRestore{Reader&r;int previous;~LimitRestore(){r.ceiling=previous;}} restore{r,previous_ceiling};r.ceiling=1000;
+    if (r.at() != '{') r.refuse("wrong_type");
+    check_encoded_size(r, 1048576);
+    r.enter();
+    ++r.pos;
+    EndpointDescription v;
+    std::map<std::string, bool> unknown_keys;
+    std::optional<std::string> wire_outcome;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "outcome") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                wire_outcome = r.str();
+            } else if (key == "program") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.program = r.str();
+            } else if (key == "version") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.version = r.str();
+            } else if (key == "services") {
+                if (seen & 8u) r.refuse("duplicate_field");
+                seen |= 8u;
+                v.services = decode_list<EndpointServiceState>(r, decode_endpoint_service_state);
+            } else if (key == "refusal") {
+                if (seen & 16u) r.refuse("duplicate_field");
+                seen |= 16u;
+                v.refusal = decode_endpoint_refusal_detail(r);
+            } else if (key == "reason") {
+                if (seen & 32u) r.refuse("duplicate_field");
+                seen |= 32u;
+                v.reason = r.str();
+            } else if (key == "checks") {
+                if (seen & 64u) r.refuse("duplicate_field");
+                seen |= 64u;
+                v.checks = decode_list<EndpointProducerCheck>(r, decode_endpoint_producer_check);
+            } else {
+                if (!unknown_keys.emplace(key, true).second) r.refuse("duplicate_key");
+                r.skip_value();
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 47u) != 47u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.program.size()); n > 256ULL) r.refuse("bad_value");
+    if (const auto n = static_cast<std::uint64_t>(v.version.size()); n > 256ULL) r.refuse("bad_value");
+    if (const auto n = static_cast<std::uint64_t>(v.services.size()); n > 64ULL) r.refuse("bad_value");
+    if (const auto n = static_cast<std::uint64_t>(v.reason.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.reason.size(); ++i) { const auto c = static_cast<unsigned char>(v.reason[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.reason.size() && static_cast<unsigned char>(v.reason[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (const auto n = static_cast<std::uint64_t>(v.checks.size()); n > 64ULL) r.refuse("bad_value");
+    if (wire_outcome) {
+        const auto parsed = parse_endpoint_description_outcome(*wire_outcome);
+        if (!parsed) r.refuse("bad_enum");
+        v.outcome = *parsed;
+    }
+    return v;
+}
+
+inline EndpointDescriptionResult decode_endpoint_description_result(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    EndpointDescriptionResult v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "value") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.value = decode_endpoint_description(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
     return v;
 }
 
@@ -2914,6 +4145,52 @@ inline OAOperationControlObserveWorkArguments decode_oa_operation_control_observ
     ++r.pos;
     --r.depth;
     if ((seen & 1u) != 1u) r.refuse("missing_field");
+    return v;
+}
+
+inline OAOperationControlFollowWorkArguments decode_oa_operation_control_follow_work_arguments(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAOperationControlFollowWorkArguments v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "identity") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.identity = decode_request_identity(r);
+            } else if (key == "after") {
+                if (seen & 2u) r.refuse("duplicate_field");
+                seen |= 2u;
+                v.after = r.str();
+            } else if (key == "wait_ms") {
+                if (seen & 4u) r.refuse("duplicate_field");
+                seen |= 4u;
+                v.wait_ms = r.integer(INT64_MIN, INT64_MAX);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 7u) != 7u) r.refuse("missing_field");
+    if (const auto n = static_cast<std::uint64_t>(v.after.size()); n > 256ULL) r.refuse("bad_value");
+    for (std::size_t i = 0; i < v.after.size(); ++i) { const auto c = static_cast<unsigned char>(v.after[i]); if (c < 0x20 || c == 0x7f || (c == 0xc2 && i + 1 < v.after.size() && static_cast<unsigned char>(v.after[i + 1]) <= 0x9f)) r.refuse("bad_value"); }
+    if (v.wait_ms < 0LL || v.wait_ms > 30000LL) r.refuse("bad_value");
     return v;
 }
 
@@ -3424,6 +4701,41 @@ inline OAOperationControlObserveWorkResult decode_oa_operation_control_observe_w
     return v;
 }
 
+inline OAOperationControlFollowWorkResult decode_oa_operation_control_follow_work_result(Reader& r) {
+    if (r.at() != '{') r.refuse("wrong_type");
+    r.enter();
+    ++r.pos;
+    OAOperationControlFollowWorkResult v;
+    std::uint32_t seen = 0;
+    r.skip_ws();
+    if (r.at() != '}') {
+        for (;;) {
+            r.skip_ws();
+            if (r.at() != '"') r.refuse("malformed");
+            const std::string key = r.str();
+            r.skip_ws();
+            if (r.at() != ':') r.refuse("malformed");
+            ++r.pos;
+            r.skip_ws();
+            if (key == "value") {
+                if (seen & 1u) r.refuse("duplicate_field");
+                seen |= 1u;
+                v.value = decode_work_observation(r);
+            } else {
+                r.refuse("unknown_field");
+            }
+            r.skip_ws();
+            if (r.at() != ',') break;
+            ++r.pos;
+        }
+    }
+    if (r.at() != '}') r.refuse("malformed");
+    ++r.pos;
+    --r.depth;
+    if ((seen & 1u) != 1u) r.refuse("missing_field");
+    return v;
+}
+
 inline OAOperationControlReadResultResult decode_oa_operation_control_read_result_result(Reader& r) {
     if (r.at() != '{') r.refuse("wrong_type");
     r.enter();
@@ -3639,9 +4951,329 @@ inline AcceptanceResult decode(std::string_view data) {
     return v;
 }
 
+// to_json writes one record as JSON, laid out as this definition's documents
+// are and without the document terminator; from_json<T> reads one and throws
+// Refusal for what the record's reader refuses.
+template <class T> T from_json(std::string_view data);
+
+inline std::string to_json(const RequestIdentity& v) {
+    std::string out;
+    detail::enc_request_identity(out, v, 0);
+    return out;
+}
+
+template <> inline RequestIdentity from_json<RequestIdentity>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    RequestIdentity v = detail::decode_request_identity(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const Submission& v) {
+    std::string out;
+    detail::enc_submission(out, v, 0);
+    return out;
+}
+
+template <> inline Submission from_json<Submission>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    Submission v = detail::decode_submission(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const Receipt& v) {
+    std::string out;
+    detail::enc_receipt(out, v, 0);
+    return out;
+}
+
+template <> inline Receipt from_json<Receipt>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    Receipt v = detail::decode_receipt(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const AcceptanceResult& v) {
+    std::string out;
+    detail::enc_acceptance_result(out, v, 0);
+    return out;
+}
+
+template <> inline AcceptanceResult from_json<AcceptanceResult>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    AcceptanceResult v = detail::decode_acceptance_result(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const HistoryWindow& v) {
+    std::string out;
+    detail::enc_history_window(out, v, 0);
+    return out;
+}
+
+template <> inline HistoryWindow from_json<HistoryWindow>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    HistoryWindow v = detail::decode_history_window(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const CancellationResult& v) {
+    std::string out;
+    detail::enc_cancellation_result(out, v, 0);
+    return out;
+}
+
+template <> inline CancellationResult from_json<CancellationResult>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    CancellationResult v = detail::decode_cancellation_result(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const WorkProgress& v) {
+    std::string out;
+    detail::enc_work_progress(out, v, 0);
+    return out;
+}
+
+template <> inline WorkProgress from_json<WorkProgress>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    WorkProgress v = detail::decode_work_progress(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const WorkFailure& v) {
+    std::string out;
+    detail::enc_work_failure(out, v, 0);
+    return out;
+}
+
+template <> inline WorkFailure from_json<WorkFailure>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    WorkFailure v = detail::decode_work_failure(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const OperationSnapshot& v) {
+    std::string out;
+    detail::enc_operation_snapshot(out, v, 0);
+    return out;
+}
+
+template <> inline OperationSnapshot from_json<OperationSnapshot>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    OperationSnapshot v = detail::decode_operation_snapshot(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const ObservationResult& v) {
+    std::string out;
+    detail::enc_observation_result(out, v, 0);
+    return out;
+}
+
+template <> inline ObservationResult from_json<ObservationResult>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    ObservationResult v = detail::decode_observation_result(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const ResultChunk& v) {
+    std::string out;
+    detail::enc_result_chunk(out, v, 0);
+    return out;
+}
+
+template <> inline ResultChunk from_json<ResultChunk>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    ResultChunk v = detail::decode_result_chunk(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const ResultRead& v) {
+    std::string out;
+    detail::enc_result_read(out, v, 0);
+    return out;
+}
+
+template <> inline ResultRead from_json<ResultRead>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    ResultRead v = detail::decode_result_read(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const ResultLink& v) {
+    std::string out;
+    detail::enc_result_link(out, v, 0);
+    return out;
+}
+
+template <> inline ResultLink from_json<ResultLink>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    ResultLink v = detail::decode_result_link(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const WorkObservation& v) {
+    std::string out;
+    detail::enc_work_observation(out, v, 0);
+    return out;
+}
+
+template <> inline WorkObservation from_json<WorkObservation>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    WorkObservation v = detail::decode_work_observation(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const InventoryPage& v) {
+    std::string out;
+    detail::enc_inventory_page(out, v, 0);
+    return out;
+}
+
+template <> inline InventoryPage from_json<InventoryPage>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    InventoryPage v = detail::decode_inventory_page(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const OperatorCancellation& v) {
+    std::string out;
+    detail::enc_operator_cancellation(out, v, 0);
+    return out;
+}
+
+template <> inline OperatorCancellation from_json<OperatorCancellation>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    OperatorCancellation v = detail::decode_operator_cancellation(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const EndpointRefusalDetail& v) {
+    std::string out;
+    detail::enc_endpoint_refusal_detail(out, v, 0);
+    return out;
+}
+
+template <> inline EndpointRefusalDetail from_json<EndpointRefusalDetail>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    EndpointRefusalDetail v = detail::decode_endpoint_refusal_detail(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const EndpointProducerCheck& v) {
+    std::string out;
+    detail::enc_endpoint_producer_check(out, v, 0);
+    return out;
+}
+
+template <> inline EndpointProducerCheck from_json<EndpointProducerCheck>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    EndpointProducerCheck v = detail::decode_endpoint_producer_check(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const EndpointServiceState& v) {
+    std::string out;
+    detail::enc_endpoint_service_state(out, v, 0);
+    return out;
+}
+
+template <> inline EndpointServiceState from_json<EndpointServiceState>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    EndpointServiceState v = detail::decode_endpoint_service_state(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const EndpointDescription& v) {
+    std::string out;
+    detail::enc_endpoint_description(out, v, 0);
+    return out;
+}
+
+template <> inline EndpointDescription from_json<EndpointDescription>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    EndpointDescription v = detail::decode_endpoint_description(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
+inline std::string to_json(const EndpointDescriptionResult& v) {
+    std::string out;
+    detail::enc_endpoint_description_result(out, v, 0);
+    return out;
+}
+
+template <> inline EndpointDescriptionResult from_json<EndpointDescriptionResult>(std::string_view data) {
+    detail::Reader r{data};
+    r.skip_ws();
+    EndpointDescriptionResult v = detail::decode_endpoint_description_result(r);
+    r.skip_ws();
+    if (r.pos < r.buf.size()) r.refuse("trailing_bytes");
+    return v;
+}
+
 namespace detail {
 // kRefusals is in the order two of them are chosen between.
-inline const std::vector<std::string> kRefusals = {"malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "trailing_bytes"};
+inline const std::vector<std::string> kRefusals = {"malformed", "bad_string", "number_spelling", "wrong_type", "depth_exceeded", "duplicate_key", "duplicate_field", "unknown_field", "missing_field", "bad_binary", "bad_enum", "bad_value", "trailing_bytes"};
 
 inline int refusal_rank(std::string_view word) {
     for (std::size_t i = 0; i < kRefusals.size(); ++i)
@@ -3674,24 +5306,43 @@ inline std::string service_reply(const OAServiceFrame& request,const Raw& payloa
 
 // The base-protocol service every dispatcher answers beside its own.
 inline constexpr std::string_view kEndpointContract="abstraction.facade/endpoint@1";
+inline constexpr std::string_view kEndpointV2Contract="abstraction.facade/endpoint@2";
 // One service an endpoint hosts, as a dispatcher of any generated namespace
 // reports it to describe_endpoint.
 struct DescribedService{std::string contract;bool ready;std::string why;};
 namespace detail {
 template<class H>auto ready_hook(int)->decltype((void)static_cast<H*>(nullptr)->ready(),static_cast<bool(*)(void*,std::string&)>(nullptr)){return [](void* h,std::string& why)->bool{auto r=static_cast<H*>(h)->ready();why=r.second;return r.first;};}
 template<class H>bool(*ready_hook(long))(void*,std::string&){return nullptr;}
+using EndpointMetadata=std::pair<std::vector<std::string>,std::map<std::string,std::string>>;
+template<class H>auto metadata_hook(int)->decltype((void)static_cast<H*>(nullptr)->describe_metadata(),static_cast<EndpointMetadata(*)(void*)>(nullptr)){return [](void*h)->EndpointMetadata{return static_cast<H*>(h)->describe_metadata();};}
+template<class H>EndpointMetadata(*metadata_hook(long))(void*){return nullptr;}
+template<class S>auto described_hash(const S&s,int)->decltype(s.describe_service_definition_hash()){return s.describe_service_definition_hash();}
+template<class S>std::string described_hash(const S&,long){return std::string();}
+template<class S>auto described_metadata(const S&s,int)->decltype(s.describe_service_metadata()){return s.describe_service_metadata();}
+template<class S>std::pair<std::vector<std::string>,std::map<std::string,std::string>> described_metadata(const S&,long){return {};}
 }  // namespace detail
 // Answers an abstraction.facade/endpoint@1 Describe frame for an endpoint
 // hosting services, in that order: each is a dispatcher of any generated
 // namespace. program and version are the provider's own display name and
 // version, never authority. A frame for another service reads unknown_service.
-template<class... Services>std::string describe_endpoint(std::string_view frame,const std::string& program,const std::string& version,const Services&... services){
+template<class... Services>std::string describe_endpoint_with_checks(std::string_view frame,const std::string& program,const std::string& version,const std::vector<EndpointProducerCheck>& checks,const Services&... services){
  auto v=detail::service_payload(frame);
- if(v.service!=kEndpointContract){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+ if(v.service!=kEndpointContract&&v.service!=kEndpointV2Contract){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
  if(v.method!="Describe"){ServiceError e("unknown_method","");return detail::service_reply(v,"",&e);}
  detail::Reader r{v.arguments};r.skip_ws();bool empty=false;
  if(r.pos<r.buf.size()&&r.buf[r.pos]=='{'){r.pos++;r.skip_ws();if(r.pos<r.buf.size()&&r.buf[r.pos]=='}'){r.pos++;r.skip_ws();empty=r.pos==r.buf.size();}}
  if(!empty){ServiceError e("unknown_field","");return detail::service_reply(v,"",&e);}
+ if(v.service==kEndpointV2Contract){
+  auto bounded=[&](){EndpointDescriptionResult result;result.value.outcome=EndpointDescriptionOutcome::Unavailable;result.value.reason="bound:reply_bytes";Raw payload;detail::enc_endpoint_description_result(payload,result,1);return detail::service_reply(v,payload);};
+  try{
+   EndpointDescriptionResult result;auto& description=result.value;description.outcome=EndpointDescriptionOutcome::Described;description.program=program;description.version=version;description.checks=checks;
+   bool supported=true;auto add=[&](const auto& service){auto s=service.describe_service();EndpointServiceState state;state.service=s.contract;state.readiness=s.ready?EndpointServiceReadiness::Ready:EndpointServiceReadiness::NotReady;state.reason=s.ready?std::string():s.why;state.definition_hash=detail::described_hash(service,0);if(state.definition_hash.empty())supported=false;auto metadata=detail::described_metadata(service,0);state.guarantees=metadata.first;state.capabilities=metadata.second;description.services.push_back(state);};
+   (void)add;(add(services),...);
+   if(!supported){description={};description.outcome=EndpointDescriptionOutcome::Unsupported;description.reason="unsupported:not_implemented";}
+   Raw payload;detail::enc_endpoint_description_result(payload,result,1);detail::Reader reader{payload};reader.depth=1;detail::decode_endpoint_description_result(reader);
+   auto reply=detail::service_reply(v,payload);if(reply.size()>1048576)return bounded();return reply;
+  }catch(const Refusal&){return bounded();}
+ }
  try{
   Raw out="{\"value\":{\"outcome\":\"described\",\"program\":";detail::esc(out,program);out+=",\"version\":";detail::esc(out,version);out+=",\"services\":[";
   bool first=true;
@@ -3702,6 +5353,7 @@ template<class... Services>std::string describe_endpoint(std::string_view frame,
   return detail::service_reply(v,out);
  }catch(const Refusal&e){ServiceError error(e.word,"");return detail::service_reply(v,"",&error);}
 }
+template<class... Services>std::string describe_endpoint(std::string_view frame,const std::string& program,const std::string& version,const Services&... services){return describe_endpoint_with_checks(frame,program,version,std::vector<EndpointProducerCheck>{},services...);}
 struct RecoverableAcceptance{virtual ~RecoverableAcceptance()=default;
 virtual HistoryWindow get_history_window()=0;
 virtual AcceptanceResult submit(const Submission& submission)=0;
@@ -3736,9 +5388,11 @@ return result.value;
 struct RecoverableAcceptanceService{inline static constexpr std::string_view kWireName="abstraction.job/acceptance@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=RecoverableAcceptanceClient<Transport>;};
 struct RecoverableAcceptanceDispatcher:FrameWriter,FrameExchanger{RecoverableAcceptance&handler;explicit RecoverableAcceptanceDispatcher(RecoverableAcceptance&h):handler(h){}
 // A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
-template<class H,class=decltype(static_cast<RecoverableAcceptance&>(*static_cast<H*>(nullptr)))>explicit RecoverableAcceptanceDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+template<class H,class=decltype(static_cast<RecoverableAcceptance&>(*static_cast<H*>(nullptr)))>explicit RecoverableAcceptanceDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)),metadata_hook_(detail::metadata_hook<H>(0)){}
 // This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
 DescribedService describe_service()const{DescribedService s{"abstraction.job/acceptance@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+std::string describe_service_definition_hash()const{return "sha256:f196a1acc81c8a98874656274611f6bfe5cc8a1e59a8a9e300c7185624fd7834";}
+std::pair<std::vector<std::string>,std::map<std::string,std::string>> describe_service_metadata()const{if(metadata_hook_)return metadata_hook_(ready_self_);return {};}
 void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/acceptance@1")throw DispatchError("unknown_service");
 if(v.method=="GetHistoryWindow"){
 throw DispatchError("wrong_mode");}
@@ -3749,7 +5403,7 @@ throw DispatchError("wrong_mode");}
 if(v.method=="CancelWork"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/acceptance@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service==kEndpointV2Contract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/acceptance@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="GetHistoryWindow"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_recoverable_acceptance_get_history_window_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_get_history_window(args);return detail::service_reply(v,payload);}
@@ -3810,9 +5464,11 @@ Raw payload;detail::enc_oa_recoverable_acceptance_cancel_work_result(payload,val
 private:
 void* ready_self_=nullptr;
 bool(*ready_hook_)(void*,std::string&)=nullptr;
+std::pair<std::vector<std::string>,std::map<std::string,std::string>>(*metadata_hook_)(void*)=nullptr;
 };
 struct OperationControl{virtual ~OperationControl()=default;
 virtual ObservationResult observe_work(const RequestIdentity& identity)=0;
+virtual WorkObservation follow_work(const RequestIdentity& identity,const std::string& after,const std::int64_t& wait_ms)=0;
 virtual ResultRead read_result(const RequestIdentity& identity,const std::int64_t& offset,const std::int64_t& max_bytes)=0;
 virtual ResultLink link_result(const RequestIdentity& identity,const std::string& destination)=0;
 };
@@ -3821,6 +5477,14 @@ ObservationResult observe_work(const RequestIdentity& identity)override{detail::
 args.identity=identity;
 detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="ObserveWork";detail::enc_oa_operation_control_observe_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
 auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_observe_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
+return result.value;
+}
+WorkObservation follow_work(const RequestIdentity& identity,const std::string& after,const std::int64_t& wait_ms)override{detail::OAOperationControlFollowWorkArguments args;
+args.identity=identity;
+args.after=after;
+args.wait_ms=wait_ms;
+detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.method="FollowWork";detail::enc_oa_operation_control_follow_work_arguments(v.arguments,args,1);std::string frame;detail::enc_oa_service_frame(frame,v,0);detail::service_payload(frame);
+auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_follow_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
 ResultRead read_result(const RequestIdentity& identity,const std::int64_t& offset,const std::int64_t& max_bytes)override{detail::OAOperationControlReadResultArguments args;
@@ -3838,25 +5502,39 @@ detail::OAServiceFrame v;v.version=1;v.service="abstraction.job/operations@1";v.
 auto response=transport_.exchange_frame(frame);auto payload=detail::service_response(response,v.service,v.method);detail::Reader r{payload};r.depth=1;r.skip_ws();auto result=detail::decode_oa_operation_control_link_result_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");
 return result.value;
 }
+auto follow_work_pages(const RequestIdentity& identity,const std::string& after,const std::int64_t& wait_ms){if(wait_ms<0||wait_ms>30000)throw std::invalid_argument("observe wait_ms is 0..30000");detail::OAOperationControlFollowWorkArguments _observe_args;
+_observe_args.identity=identity;
+_observe_args.after=after;
+_observe_args.wait_ms=wait_ms;
+using PageType=WorkObservation;struct Range {struct End{};struct Iterator {OperationControlClient* client;detail::OAOperationControlFollowWorkArguments* args;PageType* value;bool* closed;
+Iterator& operator++(){if(!*closed){auto page=client->follow_work(args->identity,args->after,args->wait_ms);args->after=page.next;*value=page;}return *this;}
+const PageType& operator*()const{return *value;}bool operator!=(End)const{return !*closed;}void close(){*closed=true;}
+};OperationControlClient* client;detail::OAOperationControlFollowWorkArguments args;PageType value{};bool closed=false;Iterator begin(){Iterator it{client,&args,&value,&closed};++it;return it;}End end(){return {};}};return Range{this,_observe_args};}
 };
 struct OperationControlService{inline static constexpr std::string_view kWireName="abstraction.job/operations@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=OperationControlClient<Transport>;};
 struct OperationControlDispatcher:FrameWriter,FrameExchanger{OperationControl&handler;explicit OperationControlDispatcher(OperationControl&h):handler(h){}
 // A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
-template<class H,class=decltype(static_cast<OperationControl&>(*static_cast<H*>(nullptr)))>explicit OperationControlDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+template<class H,class=decltype(static_cast<OperationControl&>(*static_cast<H*>(nullptr)))>explicit OperationControlDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)),metadata_hook_(detail::metadata_hook<H>(0)){}
 // This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
 DescribedService describe_service()const{DescribedService s{"abstraction.job/operations@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+std::string describe_service_definition_hash()const{return "sha256:6af0b75fd6a83f8d3bc1122613d031426ef55811615771a35371a01b63dbff17";}
+std::pair<std::vector<std::string>,std::map<std::string,std::string>> describe_service_metadata()const{if(metadata_hook_)return metadata_hook_(ready_self_);return {};}
 void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/operations@1")throw DispatchError("unknown_service");
 if(v.method=="ObserveWork"){
+throw DispatchError("wrong_mode");}
+if(v.method=="FollowWork"){
 throw DispatchError("wrong_mode");}
 if(v.method=="ReadResult"){
 throw DispatchError("wrong_mode");}
 if(v.method=="LinkResult"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operations@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service==kEndpointV2Contract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operations@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="ObserveWork"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_observe_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_observe_work(args);return detail::service_reply(v,payload);}
+if(v.method=="FollowWork"){
+detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_follow_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_follow_work(args);return detail::service_reply(v,payload);}
 if(v.method=="ReadResult"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_operation_control_read_result_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_read_result(args);return detail::service_reply(v,payload);}
 if(v.method=="LinkResult"){
@@ -3873,6 +5551,17 @@ try{
 detail::OAOperationControlObserveWorkResult value;
 value.value=result;
 Raw payload;detail::enc_oa_operation_control_observe_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_observe_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
+}catch(...){throw ServiceError("invalid_result","");}
+}
+Raw invoke_follow_work(const detail::OAOperationControlFollowWorkArguments&args){
+WorkObservation result{};
+try{
+result=handler.follow_work(args.identity,args.after,args.wait_ms);
+}catch(const ServiceError&){throw;}catch(...){throw ServiceError("handler_error","handler failed");}
+try{
+detail::OAOperationControlFollowWorkResult value;
+value.value=result;
+Raw payload;detail::enc_oa_operation_control_follow_work_result(payload,value,1);detail::Reader r{payload};r.depth=1;r.skip_ws();detail::decode_oa_operation_control_follow_work_result(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");return payload;
 }catch(...){throw ServiceError("invalid_result","");}
 }
 Raw invoke_read_result(const detail::OAOperationControlReadResultArguments&args){
@@ -3900,6 +5589,7 @@ Raw payload;detail::enc_oa_operation_control_link_result_result(payload,value,1)
 private:
 void* ready_self_=nullptr;
 bool(*ready_hook_)(void*,std::string&)=nullptr;
+std::pair<std::vector<std::string>,std::map<std::string,std::string>>(*metadata_hook_)(void*)=nullptr;
 };
 struct JobInventory{virtual ~JobInventory()=default;
 virtual InventoryPage list_work(const std::string& cursor,const std::int64_t& limit)=0;
@@ -3916,14 +5606,16 @@ return result.value;
 struct JobInventoryService{inline static constexpr std::string_view kWireName="abstraction.job/inventory@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=JobInventoryClient<Transport>;};
 struct JobInventoryDispatcher:FrameWriter,FrameExchanger{JobInventory&handler;explicit JobInventoryDispatcher(JobInventory&h):handler(h){}
 // A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
-template<class H,class=decltype(static_cast<JobInventory&>(*static_cast<H*>(nullptr)))>explicit JobInventoryDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+template<class H,class=decltype(static_cast<JobInventory&>(*static_cast<H*>(nullptr)))>explicit JobInventoryDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)),metadata_hook_(detail::metadata_hook<H>(0)){}
 // This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
 DescribedService describe_service()const{DescribedService s{"abstraction.job/inventory@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+std::string describe_service_definition_hash()const{return "sha256:07cb9fe71e772df6307637a1b8ac3fa0a2b02dd7971f67a85e637965de0993f2";}
+std::pair<std::vector<std::string>,std::map<std::string,std::string>> describe_service_metadata()const{if(metadata_hook_)return metadata_hook_(ready_self_);return {};}
 void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/inventory@1")throw DispatchError("unknown_service");
 if(v.method=="ListWork"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/inventory@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service==kEndpointV2Contract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/inventory@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="ListWork"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_job_inventory_list_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_list_work(args);return detail::service_reply(v,payload);}
@@ -3944,6 +5636,7 @@ Raw payload;detail::enc_oa_job_inventory_list_work_result(payload,value,1);detai
 private:
 void* ready_self_=nullptr;
 bool(*ready_hook_)(void*,std::string&)=nullptr;
+std::pair<std::vector<std::string>,std::map<std::string,std::string>>(*metadata_hook_)(void*)=nullptr;
 };
 struct JobOperator{virtual ~JobOperator()=default;
 virtual InventoryPage list_account_work(const std::string& cursor,const std::int64_t& limit)=0;
@@ -3967,16 +5660,18 @@ return result.value;
 struct JobOperatorService{inline static constexpr std::string_view kWireName="abstraction.job/operator@1";inline static constexpr std::string_view kCapability="abstraction.job";template<class Transport>using Client=JobOperatorClient<Transport>;};
 struct JobOperatorDispatcher:FrameWriter,FrameExchanger{JobOperator&handler;explicit JobOperatorDispatcher(JobOperator&h):handler(h){}
 // A handler whose own type has ready(), returning a pair of bool and std::string, reports its readiness through describe_service.
-template<class H,class=decltype(static_cast<JobOperator&>(*static_cast<H*>(nullptr)))>explicit JobOperatorDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)){}
+template<class H,class=decltype(static_cast<JobOperator&>(*static_cast<H*>(nullptr)))>explicit JobOperatorDispatcher(H&h):handler(h),ready_self_(&h),ready_hook_(detail::ready_hook<H>(0)),metadata_hook_(detail::metadata_hook<H>(0)){}
 // This dispatcher's service as abstraction.facade/endpoint@1 Describe lists it.
 DescribedService describe_service()const{DescribedService s{"abstraction.job/operator@1",true,std::string()};if(ready_hook_){s.ready=ready_hook_(ready_self_,s.why);if(s.ready)s.why.clear();}return s;}
+std::string describe_service_definition_hash()const{return "sha256:7814475130eec25de9881cfef5bdf0139e5818bba5bd8e3f1d2dfd7982a9d187";}
+std::pair<std::vector<std::string>,std::map<std::string,std::string>> describe_service_metadata()const{if(metadata_hook_)return metadata_hook_(ready_self_);return {};}
 void write_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service!="abstraction.job/operator@1")throw DispatchError("unknown_service");
 if(v.method=="ListAccountWork"){
 throw DispatchError("wrong_mode");}
 if(v.method=="CancelOperation"){
 throw DispatchError("wrong_mode");}
 throw DispatchError("unknown_method");}
-std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operator@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
+std::string exchange_frame(std::string_view frame)override{auto v=detail::service_payload(frame);if(v.service==kEndpointContract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service==kEndpointV2Contract)return describe_endpoint(frame,std::string(),std::string(),*this);if(v.service!="abstraction.job/operator@1"){ServiceError e("unknown_service","");return detail::service_reply(v,"",&e);}
 try{
 if(v.method=="ListAccountWork"){
 detail::Reader r{v.arguments};r.depth=1;r.skip_ws();auto args=detail::decode_oa_job_operator_list_account_work_arguments(r);r.skip_ws();if(r.pos!=r.buf.size())r.refuse("trailing_bytes");auto payload=invoke_list_account_work(args);return detail::service_reply(v,payload);}
@@ -4010,6 +5705,119 @@ Raw payload;detail::enc_oa_job_operator_cancel_operation_result(payload,value,1)
 private:
 void* ready_self_=nullptr;
 bool(*ready_hook_)(void*,std::string&)=nullptr;
+std::pair<std::vector<std::string>,std::map<std::string,std::string>>(*metadata_hook_)(void*)=nullptr;
 };
+
+namespace detail {
+inline RequestIdentity decode_request_identity_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_request_identity(r);consumed=r.pos;return v;}
+inline std::string encode_request_identity_at(const RequestIdentity& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_request_identity(out,v,depth);std::size_t n=0;decode_request_identity_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_request_identity(const RequestIdentity& v){return detail::encode_request_identity_at(v,0)+"\n";}
+inline RequestIdentity decode_request_identity(std::string_view in){std::size_t n=0;auto v=detail::decode_request_identity_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline Submission decode_submission_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_submission(r);consumed=r.pos;return v;}
+inline std::string encode_submission_at(const Submission& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_submission(out,v,depth);std::size_t n=0;decode_submission_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_submission(const Submission& v){return detail::encode_submission_at(v,0)+"\n";}
+inline Submission decode_submission(std::string_view in){std::size_t n=0;auto v=detail::decode_submission_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline Receipt decode_receipt_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_receipt(r);consumed=r.pos;return v;}
+inline std::string encode_receipt_at(const Receipt& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_receipt(out,v,depth);std::size_t n=0;decode_receipt_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_receipt(const Receipt& v){return detail::encode_receipt_at(v,0)+"\n";}
+inline Receipt decode_receipt(std::string_view in){std::size_t n=0;auto v=detail::decode_receipt_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline AcceptanceResult decode_acceptance_result_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_acceptance_result(r);consumed=r.pos;return v;}
+inline std::string encode_acceptance_result_at(const AcceptanceResult& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_acceptance_result(out,v,depth);std::size_t n=0;decode_acceptance_result_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_acceptance_result(const AcceptanceResult& v){return detail::encode_acceptance_result_at(v,0)+"\n";}
+inline AcceptanceResult decode_acceptance_result(std::string_view in){std::size_t n=0;auto v=detail::decode_acceptance_result_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline HistoryWindow decode_history_window_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_history_window(r);consumed=r.pos;return v;}
+inline std::string encode_history_window_at(const HistoryWindow& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_history_window(out,v,depth);std::size_t n=0;decode_history_window_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_history_window(const HistoryWindow& v){return detail::encode_history_window_at(v,0)+"\n";}
+inline HistoryWindow decode_history_window(std::string_view in){std::size_t n=0;auto v=detail::decode_history_window_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline CancellationResult decode_cancellation_result_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_cancellation_result(r);consumed=r.pos;return v;}
+inline std::string encode_cancellation_result_at(const CancellationResult& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_cancellation_result(out,v,depth);std::size_t n=0;decode_cancellation_result_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_cancellation_result(const CancellationResult& v){return detail::encode_cancellation_result_at(v,0)+"\n";}
+inline CancellationResult decode_cancellation_result(std::string_view in){std::size_t n=0;auto v=detail::decode_cancellation_result_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline WorkProgress decode_work_progress_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_work_progress(r);consumed=r.pos;return v;}
+inline std::string encode_work_progress_at(const WorkProgress& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_work_progress(out,v,depth);std::size_t n=0;decode_work_progress_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_work_progress(const WorkProgress& v){return detail::encode_work_progress_at(v,0)+"\n";}
+inline WorkProgress decode_work_progress(std::string_view in){std::size_t n=0;auto v=detail::decode_work_progress_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline WorkFailure decode_work_failure_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_work_failure(r);consumed=r.pos;return v;}
+inline std::string encode_work_failure_at(const WorkFailure& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_work_failure(out,v,depth);std::size_t n=0;decode_work_failure_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_work_failure(const WorkFailure& v){return detail::encode_work_failure_at(v,0)+"\n";}
+inline WorkFailure decode_work_failure(std::string_view in){std::size_t n=0;auto v=detail::decode_work_failure_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline OperationSnapshot decode_operation_snapshot_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_operation_snapshot(r);consumed=r.pos;return v;}
+inline std::string encode_operation_snapshot_at(const OperationSnapshot& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_operation_snapshot(out,v,depth);std::size_t n=0;decode_operation_snapshot_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_operation_snapshot(const OperationSnapshot& v){return detail::encode_operation_snapshot_at(v,0)+"\n";}
+inline OperationSnapshot decode_operation_snapshot(std::string_view in){std::size_t n=0;auto v=detail::decode_operation_snapshot_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline ObservationResult decode_observation_result_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_observation_result(r);consumed=r.pos;return v;}
+inline std::string encode_observation_result_at(const ObservationResult& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_observation_result(out,v,depth);std::size_t n=0;decode_observation_result_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_observation_result(const ObservationResult& v){return detail::encode_observation_result_at(v,0)+"\n";}
+inline ObservationResult decode_observation_result(std::string_view in){std::size_t n=0;auto v=detail::decode_observation_result_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline ResultChunk decode_result_chunk_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_result_chunk(r);consumed=r.pos;return v;}
+inline std::string encode_result_chunk_at(const ResultChunk& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_result_chunk(out,v,depth);std::size_t n=0;decode_result_chunk_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_result_chunk(const ResultChunk& v){return detail::encode_result_chunk_at(v,0)+"\n";}
+inline ResultChunk decode_result_chunk(std::string_view in){std::size_t n=0;auto v=detail::decode_result_chunk_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline ResultRead decode_result_read_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_result_read(r);consumed=r.pos;return v;}
+inline std::string encode_result_read_at(const ResultRead& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_result_read(out,v,depth);std::size_t n=0;decode_result_read_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_result_read(const ResultRead& v){return detail::encode_result_read_at(v,0)+"\n";}
+inline ResultRead decode_result_read(std::string_view in){std::size_t n=0;auto v=detail::decode_result_read_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline ResultLink decode_result_link_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_result_link(r);consumed=r.pos;return v;}
+inline std::string encode_result_link_at(const ResultLink& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_result_link(out,v,depth);std::size_t n=0;decode_result_link_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_result_link(const ResultLink& v){return detail::encode_result_link_at(v,0)+"\n";}
+inline ResultLink decode_result_link(std::string_view in){std::size_t n=0;auto v=detail::decode_result_link_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline WorkObservation decode_work_observation_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_work_observation(r);consumed=r.pos;return v;}
+inline std::string encode_work_observation_at(const WorkObservation& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_work_observation(out,v,depth);std::size_t n=0;decode_work_observation_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_work_observation(const WorkObservation& v){return detail::encode_work_observation_at(v,0)+"\n";}
+inline WorkObservation decode_work_observation(std::string_view in){std::size_t n=0;auto v=detail::decode_work_observation_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline InventoryPage decode_inventory_page_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_inventory_page(r);consumed=r.pos;return v;}
+inline std::string encode_inventory_page_at(const InventoryPage& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_inventory_page(out,v,depth);std::size_t n=0;decode_inventory_page_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_inventory_page(const InventoryPage& v){return detail::encode_inventory_page_at(v,0)+"\n";}
+inline InventoryPage decode_inventory_page(std::string_view in){std::size_t n=0;auto v=detail::decode_inventory_page_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
+
+namespace detail {
+inline OperatorCancellation decode_operator_cancellation_at(std::string_view in,int depth,int limit,std::size_t& consumed){detail::Reader r{in};if(depth<0||limit<1)r.refuse("depth_exceeded");r.depth=depth;r.limit=limit<64?limit:64;r.skip_ws();auto v=detail::decode_operator_cancellation(r);consumed=r.pos;return v;}
+inline std::string encode_operator_cancellation_at(const OperatorCancellation& v,int depth){detail::Reader r{""};if(depth<0||depth>=64)r.refuse("depth_exceeded");std::string out;detail::enc_operator_cancellation(out,v,depth);std::size_t n=0;decode_operator_cancellation_at(out,depth,64,n);return out;}
+}  // namespace detail
+inline std::string encode_operator_cancellation(const OperatorCancellation& v){return detail::encode_operator_cancellation_at(v,0)+"\n";}
+inline OperatorCancellation decode_operator_cancellation(std::string_view in){std::size_t n=0;auto v=detail::decode_operator_cancellation_at(in,0,64,n);detail::Reader r{in};r.pos=n;r.skip_ws();if(r.pos!=in.size())r.refuse("trailing_bytes");return v;}
 
 }  // namespace abstraction::job::acceptance

@@ -38,8 +38,8 @@ work". A new kind needs a provider that executes it.
 ## See progress
 
 Poll `ObserveWork` with the job's idempotency key. Each answer carries a
-snapshot whose `State` is `pending`, `running`, `transferred`, `complete`,
-`failed` or `cancelled`, and whose `Progress` is `Done` of `Total`, with
+snapshot whose [`State`](https://openabstractions.github.io/reference.html#concept-job.work-state) is `pending`, `running`, `transferred`, `complete`,
+`failed` or `cancelled`, and whose [`Progress`](https://openabstractions.github.io/reference.html#concept-job.progress) is `Done` of `Total`, with
 `Total` 0 while unknown. For a download both count bytes. Stop polling at
 `complete`, `failed` or `cancelled`. Ending the poll ends only the
 application's wait; the job keeps running, and `CancelWork` is the separate
@@ -229,14 +229,14 @@ Whether to adopt this at all, what it costs and what is not proven:
 
 ## For provider implementers
 
-The deprecated `Store` interface below (`Claim`, which acquires a lease,
+The deprecated [`Store`](https://openabstractions.github.io/reference.html#concept-job.store) interface below (`Claim`, which acquires a lease,
 `Update`, `Release` and the lease each of those holds) is what a provider
 implementer writes against; an application calls the service above. These
 are explicitly selected native provider APIs with separate lifecycle
 guarantees. Their historical conformance describes that provider, and it
 qualifies neither current service packages nor every platform.
 
-`NewFileStore` is the shipped implementation of the deprecated `Store`. One
+[`NewFileStore`](https://openabstractions.github.io/reference.html#concept-job.file-store) is the shipped implementation of the deprecated `Store`. One
 worker acquires a job, records how far it got, and goes away; a second worker
 acquires it and reads what the first one proved:
 
@@ -322,8 +322,8 @@ One module of [Open Abstractions](https://github.com/openabstractions/abstractio
 the parent project, which holds the scope rules, the method, the measured results
 and the conformance suite that judges implementations of this contract.
 
-Experimental. Go is the only language with a tagged release, and no release
-carries an API stability promise.
+Experimental. Every OA package carries the release's one version from
+0.8.0, and no release carries an API stability promise.
 
 - **Deprecated job store.** The job store is deprecated and kept: no release
   removing it is named. The Go file store is the runtime job provider's
@@ -358,7 +358,7 @@ standard library only. `cpp/CMakeLists.txt` installs the header-only
 
 and then, in yours:
 
-    find_package(abstraction_job_acceptance 0.1 CONFIG REQUIRED)
+    find_package(abstraction_job_acceptance 0.8 CONFIG REQUIRED)
     target_link_libraries(your_target PRIVATE abstraction::job_acceptance)
 
 ## Licence
@@ -429,8 +429,8 @@ help, the mapping file format and exit codes.
 
 Every record must be terminal, mapped and unchanged since inspection, or nothing
 is written. The command refuses while a runtime job service runs on that root.
-Drain active deprecated jobs through jobd first. `inspect` also reports jobd's
-separate store; those records stay with jobd and are finished through it.
+An active deprecated record is refused, and no shipped provider finishes it:
+`jobd` was removed in 0.1.8 (`docs/REMOVED.md` entries 6 and 8).
 `abandon` withdraws an interrupted apply.
 
 <!-- BEGIN GENERATED PERMISSION DEFINITIONS -->

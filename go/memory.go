@@ -114,6 +114,9 @@ func (m *MemoryStore) Submit(r Record) (string, error) {
 	if r.ID == "" {
 		r.ID = NewID()
 	}
+	if err := checkID(r.ID); err != nil {
+		return "", err
+	}
 	if _, taken := m.records[r.ID]; taken {
 		return "", fmt.Errorf("%w: %s already exists", ErrInvalid, r.ID)
 	}

@@ -184,7 +184,7 @@ func TestTheSocketRefusesAFieldItDoesNotKnow(t *testing.T) {
 	if _, err := DecodeProposal(newer); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("DecodeProposal accepted an unknown field: %v", err)
 	}
-	if _, err := remote.do(wire.Request{Op: "submit", Record: wire.Raw(newer)}); !errors.Is(err, ErrInvalid) {
+	if _, err := remote.do(wire.Request{Op: wire.OpSubmit, Record: wire.Raw(newer)}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("the socket accepted an unknown field: %v", err)
 	}
 }

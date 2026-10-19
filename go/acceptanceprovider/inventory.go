@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	cursorcodec "github.com/openabstractions/abstraction-watch/go/cursor"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,6 +87,13 @@ func (p *Provider) BindInventory(scope string) api.JobInventory {
 	}
 	return &bound{provider: p, scope: scope}
 }
+
+func (p *Provider) bindInventoryBinding(binding Binding) api.JobInventory {
+	if binding.valid() != nil {
+		binding = Binding{}
+	}
+	return &bound{provider: p, scope: binding.Scope, binding: binding}
+}
 func inventoryRefusal(outcome api.InventoryOutcome) api.InventoryPage {
 	return api.InventoryPage{Outcome: outcome, Snapshots: []api.OperationSnapshot{}}
 }
@@ -104,6 +112,16 @@ func (b *bound) listWork(cursor string, limit int64, account bool) (api.Inventor
 		return inventoryRefusal(api.InventoryOutcomeInvalid), nil
 	}
 	p := b.provider
+	sessionScope := b.scope
+	if p.canonicalSubjects && b.binding.Subject != nil && b.binding.Origin == "local" {
+		canonical, err := canonicalSubjectScope(b.binding)
+		if err != nil {
+			return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
+		}
+		// Include the exact path fallback: a cached page may contain an old
+		// subject-less occurrence only this executable can still establish.
+		sessionScope = "native-inventory@1:" + canonical + ":" + b.binding.Scope
+	}
 	p.inventory.mu.Lock()
 	defer p.inventory.mu.Unlock()
 	if p.inventory.closed {
@@ -122,17 +140,18 @@ func (b *bound) listWork(cursor string, limit int64, account bool) (api.Inventor
 		if err != nil {
 			return inventoryRefusal(api.InventoryOutcomeUnavailable), nil
 		}
-		s = &inventorySession{scope: b.scope, account: account, token: hex.EncodeToString(key[:]), dir: dir, expires: time.Now().Add(inventoryIdle)}
+		s = &inventorySession{scope: sessionScope, account: account, token: hex.EncodeToString(key[:]), dir: dir, expires: time.Now().Add(inventoryIdle)}
 		if p.inventory.sessions == nil {
 			p.inventory.sessions = map[string]*inventorySession{}
 		}
 		p.inventory.sessions[s.token] = s
 		s.timer = time.AfterFunc(inventoryIdle, func() { p.expireInventory(s.token, s) })
 	} else {
-		token, word, ok := strings.Cut(cursor, ":")
+		envelope, ok := (cursorcodec.Codec{Separator: ":"}).Parse(cursor)
+		token, word := envelope.Epoch, envelope.Payload
 		n, err := strconv.ParseUint(word, 10, 64)
 		s = p.inventory.sessions[token]
-		if !ok || err != nil || strconv.FormatUint(n, 10) != word || s == nil || s.scope != b.scope || s.account != account {
+		if !ok || err != nil || strconv.FormatUint(n, 10) != word || s == nil || s.scope != sessionScope || s.account != account {
 			return inventoryRefusal(api.InventoryOutcomeGap), nil
 		}
 		if time.Now().After(s.expires) {
@@ -200,7 +219,7 @@ func (b *bound) listWork(cursor string, limit int64, account bool) (api.Inventor
 			if filepath.Base(p.requestPath(j.Scope, j.Identity)) != entry.Name() {
 				return fail()
 			}
-			if (!s.account && j.Scope != b.scope) || j.Phase == "sealed" {
+			if (!s.account && !b.ownsJournal(j)) || j.Phase == "sealed" {
 				continue
 			}
 			// Inventory observes published records only; incomplete recovery is explicit.
@@ -238,7 +257,7 @@ func (b *bound) listWork(cursor string, limit int64, account bool) (api.Inventor
 		_ = s.dir.Close()
 		s.dir = nil
 	} else {
-		page.Next = s.token + ":" + strconv.FormatUint(s.sequence, 10)
+		page.Next = (cursorcodec.Codec{Separator: ":"}).Encode(cursorcodec.Envelope{Epoch: s.token, Payload: strconv.FormatUint(s.sequence, 10)})
 	}
 	// An initial page has no replayable input token: retrying the empty cursor
 	// starts a new enumeration. Release its completed session immediately.

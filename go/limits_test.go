@@ -7,7 +7,10 @@ import (
 
 func recordWith(content, critical, spec string) []byte {
 	return []byte(`{"content":[` + content + `],"critical":[` + critical +
-		`],"id":"j1","kind":"download","state":"running","spec":` + spec + `}`)
+		`],"id":"j1","kind":"download","state":"running","spec":` + spec +
+		`,"progress":{"done":0,"updated_at":"2026-01-01T00:00:00.000000Z"},` +
+		`"lease":{"owner":"","epoch":0,"expires_at":"2026-01-01T00:00:00.000000Z"},` +
+		`"created_at":"2026-01-01T00:00:00.000000Z","updated_at":"2026-01-01T00:00:00.000000Z"}`)
 }
 
 // [JOB-D8], and RFC 9052 §3.1 behind it: a name marked critical that `content`

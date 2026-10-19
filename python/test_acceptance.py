@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from personfolders import setUpModule, tearDownModule  # noqa: E402,F401 (per-user folders in a stand-in)
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(

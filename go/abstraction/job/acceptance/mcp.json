@@ -1,0 +1,81 @@
+{
+  "methods": [
+    {
+      "class": "read",
+      "contract": "abstraction.job/acceptance@1",
+      "idempotency_key": "",
+      "method": "GetHistoryWindow",
+      "trait": "readonly"
+    },
+    {
+      "class": "submit",
+      "contract": "abstraction.job/acceptance@1",
+      "idempotency_key": "submission.identity.key",
+      "method": "Submit",
+      "trait": "keyed"
+    },
+    {
+      "class": "effect",
+      "contract": "abstraction.job/acceptance@1",
+      "idempotency_key": "",
+      "method": "Reconcile",
+      "trait": ""
+    },
+    {
+      "class": "effect",
+      "contract": "abstraction.job/acceptance@1",
+      "idempotency_key": "",
+      "method": "CancelWork",
+      "trait": "idempotent"
+    },
+    {
+      "class": "effect",
+      "contract": "abstraction.job/operations@1",
+      "idempotency_key": "",
+      "method": "ObserveWork",
+      "trait": ""
+    },
+    {
+      "class": "read",
+      "contract": "abstraction.job/operations@1",
+      "idempotency_key": "",
+      "method": "FollowWork",
+      "trait": "readonly"
+    },
+    {
+      "class": "read",
+      "contract": "abstraction.job/operations@1",
+      "idempotency_key": "",
+      "method": "ReadResult",
+      "trait": "readonly"
+    },
+    {
+      "class": "effect",
+      "contract": "abstraction.job/operations@1",
+      "idempotency_key": "",
+      "method": "LinkResult",
+      "trait": ""
+    },
+    {
+      "class": "read",
+      "contract": "abstraction.job/inventory@1",
+      "idempotency_key": "",
+      "method": "ListWork",
+      "trait": "readonly"
+    },
+    {
+      "class": "read",
+      "contract": "abstraction.job/operator@1",
+      "idempotency_key": "",
+      "method": "ListAccountWork",
+      "trait": "readonly"
+    },
+    {
+      "class": "effect",
+      "contract": "abstraction.job/operator@1",
+      "idempotency_key": "",
+      "method": "CancelOperation",
+      "trait": "idempotent"
+    }
+  ]
+}

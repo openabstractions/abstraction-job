@@ -1,15 +1,22 @@
 package acceptanceprovider
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	cas "github.com/openabstractions/abstraction-cas/go"
+	cursorcodec "github.com/openabstractions/abstraction-watch/go/cursor"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	job "github.com/openabstractions/abstraction-job/go"
 	api "github.com/openabstractions/abstraction-job/go/abstraction/job/acceptance"
+	watch "github.com/openabstractions/abstraction-watch/go"
 )
 
 const MaxResultBytes int64 = 65536
@@ -84,7 +91,12 @@ func (b *bound) operation(id api.RequestIdentity) (*journal, *job.Record, api.Ob
 	if id.HistoryEpoch != p.config.Epoch {
 		return nil, nil, api.ObservationOutcomeUnknown
 	}
-	path := p.requestPath(b.scope, id)
+	selected, err := b.ownershipSnapshot(id)
+	if err != nil {
+		return nil, nil, api.ObservationOutcomeUnknown
+	}
+	scope := selected.scope
+	path := p.requestPath(scope, id)
 	if regularFile(path) != nil {
 		return nil, nil, api.ObservationOutcomeUnknown
 	}
@@ -93,7 +105,7 @@ func (b *bound) operation(id api.RequestIdentity) (*journal, *job.Record, api.Ob
 		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	j, err := p.decodeJournal(data)
-	if err != nil || j.Scope != b.scope || j.Identity != id {
+	if err != nil || j.Scope != scope || j.Identity != id {
 		return nil, nil, api.ObservationOutcomeUnknown
 	}
 	if j.Phase == "sealed" {
@@ -118,7 +130,158 @@ func (b *bound) ObserveWork(id api.RequestIdentity) (api.ObservationResult, erro
 	if outcome != api.ObservationOutcomeObserved {
 		return api.ObservationResult{Outcome: outcome}, nil
 	}
-	return api.ObservationResult{Outcome: api.ObservationOutcomeObserved, Snapshot: operationSnapshot(accepted, record, b.provider.executor, b.provider.resultLost(b.scope, id))}, nil
+	return api.ObservationResult{Outcome: api.ObservationOutcomeObserved, Snapshot: operationSnapshot(accepted, record, b.provider.executor, b.provider.resultLost(accepted.Scope, id))}, nil
+}
+
+type workObservationState struct {
+	once  sync.Once
+	epoch string
+	gate  *watch.Gate
+}
+
+func (p *Provider) workObservationSource() (string, *watch.Gate) {
+	p.observation.once.Do(func() {
+		instance := sha256.Sum256([]byte(job.NewID()))
+		p.observation.epoch = hex.EncodeToString(instance[:16])
+		p.observation.gate = watch.NewGate(watch.DefaultWaiters)
+	})
+	return p.observation.epoch, p.observation.gate
+}
+
+// workStamp selects exactly JOB-N1's visible record fields, excluding renewals.
+func workStamp(record *job.Record) string {
+	data, _ := json.Marshal([]any{record.ID, record.State, record.Progress.Done, record.Progress.Total, record.Lease.Owner, record.Error})
+	stamp := sha256.Sum256(data)
+	return hex.EncodeToString(stamp[:])
+}
+
+func (b *bound) FollowWork(id api.RequestIdentity, after string, waitMS int64) (api.WorkObservation, error) {
+	return b.followWork(context.Background(), id, after, waitMS, func() access { return accessAllowed })
+}
+
+// followWork binds transport cancellation and its receiving authority recheck.
+func (b *bound) followWork(ctx context.Context, id api.RequestIdentity, after string, waitMS int64, permit func() access) (api.WorkObservation, error) {
+	refusal := func(outcome api.WorkObservationOutcome) (api.WorkObservation, error) {
+		next := ""
+		if outcome == api.WorkObservationOutcomeGap {
+			next = after
+		}
+		return api.WorkObservation{Outcome: outcome, Next: next, Mechanism: api.WorkObservationMechanismPolled}, nil
+	}
+	if waitMS < 0 || waitMS > 30000 || len(after) > 256 || !utf8.ValidString(after) {
+		return refusal(api.WorkObservationOutcomeInvalid)
+	}
+	if b.scope == "" {
+		return refusal(api.WorkObservationOutcomeForbidden)
+	}
+	if id.Key == "" || id.HistoryEpoch == "" || id.Attempt < 0 || len(id.Key) > 1024 || len(id.HistoryEpoch) > 1024 || !utf8.ValidString(id.Key) || !utf8.ValidString(id.HistoryEpoch) {
+		return refusal(api.WorkObservationOutcomeInvalid)
+	}
+	epoch, gate := b.provider.workObservationSource()
+	scope := b.scope
+	if b.provider.canonicalSubjects && b.binding.Subject != nil && b.binding.Origin == "local" {
+		var err error
+		scope, err = canonicalSubjectScope(b.binding)
+		if err != nil {
+			return refusal(api.WorkObservationOutcomeForbidden)
+		}
+	}
+	boundData, _ := json.Marshal([]any{scope, id})
+	boundStamp := sha256.Sum256(boundData)
+	boundWord := hex.EncodeToString(boundStamp[:])
+	codec := cursorcodec.Codec{Separator: ":", Scoped: true}
+	if after != "" {
+		envelope, ok := codec.Parse(after)
+		if !ok || !envelope.Hex(16, 32, 32) {
+			return refusal(api.WorkObservationOutcomeInvalid)
+		}
+		if envelope.Epoch != epoch {
+			return refusal(api.WorkObservationOutcomeGap)
+		}
+		if !envelope.Bound(epoch, boundWord) {
+			return refusal(api.WorkObservationOutcomeForbidden)
+		}
+	}
+	var answer api.WorkObservation
+	var subscription job.Subscription
+	var cancel context.CancelFunc
+	var joined chan struct{}
+	defer func() {
+		if subscription != nil {
+			cancel()
+			//unchecked: Close on the job watcher is idempotent and returns nil.
+			_ = subscription.Close()
+			<-joined
+		}
+	}()
+	denied := api.WorkObservationOutcomeForbidden
+	outcome, err := gate.Wait(ctx, time.Duration(waitMS)*time.Millisecond, watch.Probe{
+		Read: func() (bool, error) {
+			accepted, record, status := b.operation(id)
+			if status != api.ObservationOutcomeObserved {
+				switch status {
+				case api.ObservationOutcomeForbidden:
+					answer, _ = refusal(api.WorkObservationOutcomeForbidden)
+				case api.ObservationOutcomeInvalid:
+					answer, _ = refusal(api.WorkObservationOutcomeInvalid)
+				case api.ObservationOutcomeUnavailable:
+					answer, _ = refusal(api.WorkObservationOutcomeUnavailable)
+				default:
+					answer, _ = refusal(api.WorkObservationOutcomeUnknown)
+				}
+				return true, nil
+			}
+			next := codec.Encode(cursorcodec.Envelope{Epoch: epoch, Scope: boundWord, Payload: workStamp(record)})
+			answer = api.WorkObservation{Outcome: api.WorkObservationOutcomeChanged, Next: next, Mechanism: api.WorkObservationMechanismPolled}
+			if next != after {
+				answer.Snapshot = operationSnapshot(accepted, record, b.provider.executor, b.provider.resultLost(accepted.Scope, id))
+				return true, nil
+			}
+			if waitMS > 0 && subscription == nil {
+				// Watch is armed inside the gate's armed read. Its first notice
+				// forces another read, covering a change during attachment.
+				subscription = job.Watch(b.provider.store, record.Kind)
+				var watchCtx context.Context
+				watchCtx, cancel = context.WithCancel(ctx)
+				joined = make(chan struct{})
+				go func() {
+					defer close(joined)
+					for {
+						if _, err := subscription.Next(watchCtx); err != nil {
+							return
+						}
+						gate.Advance()
+					}
+				}()
+			}
+			return false, nil
+		},
+		Recheck: func() error {
+			switch permit() {
+			case accessAllowed:
+				return nil
+			case accessUnavailable:
+				denied = api.WorkObservationOutcomeUnavailable
+			}
+			return errors.New("acceptance: work observation authority refused")
+		},
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return api.WorkObservation{}, ctx.Err()
+		}
+		return refusal(denied)
+	}
+	switch outcome {
+	case watch.Answered:
+		return answer, nil
+	case watch.Unchanged:
+		answer.Outcome = api.WorkObservationOutcomeUnchanged
+		answer.Snapshot = nil
+		return answer, nil
+	default:
+		return refusal(api.WorkObservationOutcomeUnavailable)
+	}
 }
 
 // ErrResultLost is returned by a ResultReader when a complete operation's
@@ -181,6 +344,8 @@ func operationSnapshot(accepted *journal, record *job.Record, executor Executor,
 }
 
 func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.ResultRead, error) {
+	b.provider.resultMu.RLock()
+	defer b.provider.resultMu.RUnlock()
 	if b.scope == "" {
 		return api.ResultRead{Outcome: api.ResultOutcomeForbidden}, nil
 	}
@@ -202,7 +367,7 @@ func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.
 	default:
 		return api.ResultRead{Outcome: api.ResultOutcomeNotReady}, nil
 	}
-	if b.provider.resultLost(b.scope, id) {
+	if b.provider.resultLost(accepted.Scope, id) {
 		// Reappearing bytes are never served under a lost identity [JOB-A10].
 		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil
 	}
@@ -213,7 +378,7 @@ func (b *bound) ReadResult(id api.RequestIdentity, offset, maxBytes int64) (api.
 	if errors.Is(err, ErrResultLost) {
 		// A failed record write leaves the operation complete and the reply the
 		// same; the failure goes to the provider's error reporter.
-		if err := b.provider.recordResultLost(b.scope, id); err != nil {
+		if err := b.provider.recordResultLost(accepted.Scope, id); err != nil {
 			b.provider.reportError(errors.Join(errResultLostNotRecorded, err))
 		}
 		return api.ResultRead{Outcome: api.ResultOutcomeUnavailable}, nil

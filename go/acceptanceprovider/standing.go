@@ -3,6 +3,7 @@ package acceptanceprovider
 import (
 	"context"
 	"errors"
+	watch "github.com/openabstractions/abstraction-watch/go"
 	"strings"
 	"sync"
 	"time"
@@ -86,12 +87,13 @@ type standingState struct {
 	decide StandingDecider
 	mu     sync.Mutex
 	ended  map[string]bool
-	// running is a RecheckSoon pass in flight; again asks it for one more.
-	// stopped refuses new passes once StopRechecks began, and passes counts
-	// the goroutine StopRechecks waits for. Add happens under mu while not
-	// stopped, so no Add follows the Wait.
-	running, again, stopped bool
-	passes                  sync.WaitGroup
+	// recheck is the one asynchronous recheck pass (watch.Recheck), made by
+	// the first RecheckSoon; stopped refuses it once StopRechecks began.
+	recheck *watch.Recheck
+	// cancel ends the provider-owned context the passes run under;
+	// StopRechecks calls it.
+	cancel  context.CancelFunc
+	stopped bool
 	// interval replaces standingInterval when positive; tests shorten it.
 	interval time.Duration
 }
@@ -196,6 +198,9 @@ func (p *Provider) Recheck(ctx context.Context) {
 // rights edit never waits on a slow store. Calls while one runs coalesce into
 // one more pass after it; the clock in Execute is the backstop. A
 // composition calls it on each committed rights change (RIGHTS-R23).
+// Passes run under a provider-owned context carrying the first caller's
+// values; a caller's cancellation never drops a later RecheckSoon, and only
+// StopRechecks ends the passes.
 func (p *Provider) RecheckSoon(ctx context.Context) {
 	if p.standing.decide == nil {
 		return
@@ -205,39 +210,30 @@ func (p *Provider) RecheckSoon(ctx context.Context) {
 		p.standing.mu.Unlock()
 		return
 	}
-	if p.standing.running {
-		p.standing.again = true
-		p.standing.mu.Unlock()
-		return
+	if p.standing.recheck == nil {
+		owned, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		p.standing.recheck, p.standing.cancel = watch.NewRecheck(owned, 0, p.Recheck), cancel
 	}
-	p.standing.running = true
-	p.standing.passes.Add(1)
+	recheck := p.standing.recheck
 	p.standing.mu.Unlock()
-	go func() {
-		defer p.standing.passes.Done()
-		for {
-			p.Recheck(ctx)
-			p.standing.mu.Lock()
-			if !p.standing.again || ctx.Err() != nil {
-				p.standing.running, p.standing.again = false, false
-				p.standing.mu.Unlock()
-				return
-			}
-			p.standing.again = false
-			p.standing.mu.Unlock()
-		}
-	}()
+	recheck.Request()
 }
 
 // StopRechecks refuses every later RecheckSoon and waits for the pass in
-// flight to return, so nothing it started writes to the store afterwards. A
-// host calls it on close, after cancelling the pass's context, and before it
-// releases the store's root.
+// flight to return, so nothing it started writes to the store afterwards. It
+// cancels the pass in flight. A host calls it on close, before it releases
+// the store's root.
 func (p *Provider) StopRechecks() {
 	p.standing.mu.Lock()
 	p.standing.stopped = true
+	recheck, cancel := p.standing.recheck, p.standing.cancel
 	p.standing.mu.Unlock()
-	p.standing.passes.Wait()
+	if cancel != nil {
+		cancel()
+	}
+	if recheck != nil {
+		recheck.Drain()
+	}
 }
 
 // endRefused ends one unfinished operation its submitter's rule refuses.

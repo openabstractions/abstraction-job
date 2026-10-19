@@ -1,11 +1,12 @@
 package job
 
 import (
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-var callNtPowerInformation = syscall.NewLazyDLL("powrprof.dll").NewProc("CallNtPowerInformation")
+var callNtPowerInformation = windows.NewLazySystemDLL("powrprof.dll").NewProc("CallNtPowerInformation")
 
 // inhibited reads the system-wide execution state without elevation, which
 // powercfg /requests needs. Anything holding SYSTEM shows here.

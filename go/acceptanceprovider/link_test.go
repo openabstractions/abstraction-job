@@ -106,6 +106,18 @@ func (f *linkFixture) link(t *testing.T, b Binding, destination string) api.Resu
 	return r
 }
 
+func requireSameLinkedFile(t *testing.T, source, destination string) {
+	t.Helper()
+	stored, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := os.Stat(destination)
+	if err != nil || !os.SameFile(stored, linked) {
+		t.Fatalf("the destination is not the stored result: %v", err)
+	}
+}
+
 // JOB-A17: a complete result gets a second name at the destination; it is
 // the same file, the receipt and size come back, and the result stays
 // readable by its own name.
@@ -116,14 +128,7 @@ func TestLinkResultMakesASecondNameForTheSameFile(t *testing.T) {
 	if r.Outcome != api.LinkOutcomeLinked || r.Receipt == nil || r.Receipt.OperationID != f.receipt.OperationID || r.Size != int64(len(f.body)) {
 		t.Fatalf("link %+v", r)
 	}
-	stored, err := os.Stat(f.result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	linked, err := os.Stat(destination)
-	if err != nil || !os.SameFile(stored, linked) {
-		t.Fatalf("the destination is not the stored result: %v", err)
-	}
+	requireSameLinkedFile(t, f.result, destination)
 	read, err := f.p.BindOperations(f.local.Scope).ReadResult(f.id, 0, MaxResultBytes)
 	if err != nil || read.Chunk == nil || !bytes.Equal(read.Chunk.Data, f.body) {
 		t.Fatalf("the result is not readable by its own name after linking: %+v %v", read, err)
@@ -131,6 +136,31 @@ func TestLinkResultMakesASecondNameForTheSameFile(t *testing.T) {
 	// A second link to the same name finds it present and changes nothing.
 	if again := f.link(t, f.local, destination); again.Outcome != api.LinkOutcomeExists || again.Receipt != nil || again.Size != 0 {
 		t.Fatalf("relink %+v", again)
+	}
+}
+
+// The held-parent effect keeps canonical ownership and the original receipt
+// when a native application's executable changes between versions.
+func TestLinkResultCanonicalNativeVersionKeepsOriginalReceipt(t *testing.T) {
+	f := newLinkFixture(t, true)
+	enableCanonical(t, f.p)
+	b := f.local
+	subject := *b.Subject
+	subject.Executable = filepath.Join(filepath.Dir(subject.Executable), "version2", "setup.exe")
+	b.Subject = &subject
+	var err error
+	b.Scope, err = LocalSubjectScope(subject.AccountKind, subject.Account, subject.Executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "model")
+	r := f.link(t, b, destination)
+	if r.Outcome != api.LinkOutcomeLinked || r.Receipt == nil || r.Receipt.OperationID != f.receipt.OperationID {
+		t.Fatalf("canonical version link: %+v", r)
+	}
+	subject.Program += "-another"
+	if r := f.link(t, b, filepath.Join(t.TempDir(), "foreign")); r.Outcome != api.LinkOutcomeUnknown {
+		t.Fatalf("foreign Program link: %+v", r)
 	}
 }
 
@@ -143,7 +173,7 @@ func TestLinkResultRefusesWhatAHardLinkCannotReach(t *testing.T) {
 	}{{otherVolumeError(), api.LinkOutcomeOtherVolume}, {noHardLinksError(), api.LinkOutcomeNoHardLinks}} {
 		f := newLinkFixture(t, true)
 		saved := linkFile
-		linkFile = func(string, string) error { return &os.LinkError{Op: "link", Err: tc.err} }
+		linkFile = func(string, *heldLinkParent, string) error { return &os.LinkError{Op: "link", Err: tc.err} }
 		destination := filepath.Join(t.TempDir(), "model.safetensors")
 		r := f.link(t, f.local, destination)
 		linkFile = saved
@@ -250,12 +280,11 @@ func TestLinkResultIsLocalAndUnderTheCallersAuthority(t *testing.T) {
 func TestLinkResultChecksTheCallerBeforeTouchingItsDestination(t *testing.T) {
 	f := newLinkFixture(t, true)
 	touched := 0
-	savedStat, savedLstat, savedHold, savedLink := statPath, lstatPath, holdFinal, linkFile
-	t.Cleanup(func() { statPath, lstatPath, holdFinal, linkFile = savedStat, savedLstat, savedHold, savedLink })
+	savedStat, savedHold, savedLink := statPath, holdFinal, linkFile
+	t.Cleanup(func() { statPath, holdFinal, linkFile = savedStat, savedHold, savedLink })
 	statPath = func(p string) (os.FileInfo, error) { touched++; return savedStat(p) }
-	lstatPath = func(p string) (os.FileInfo, error) { touched++; return savedLstat(p) }
-	holdFinal = func(p string) (string, func(), error) { touched++; return savedHold(p) }
-	linkFile = func(a, b string) error { touched++; return savedLink(a, b) }
+	holdFinal = func(p string) (*heldLinkParent, error) { touched++; return savedHold(p) }
+	linkFile = func(a string, b *heldLinkParent, leaf string) error { touched++; return savedLink(a, b, leaf) }
 	refused := []string{filepath.Join(f.p.root, "results", "copy"), filepath.Join(t.TempDir(), "model")}
 	if runtime.GOOS == "windows" {
 		refused = append(refused, `\\192.0.2.1\share\model`)
