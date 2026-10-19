@@ -23,6 +23,7 @@ import (
 type FileStore struct {
 	root string
 	now  func() time.Time
+	list listCache
 }
 
 var (
@@ -163,6 +164,9 @@ func (s *FileStore) Submit(r Record) (string, error) {
 	return r.ID, nil
 }
 
+// readRecord reads one record file for Load; tests count reads through it.
+var readRecord = readFile
+
 // Load never takes the lock: any process may read at any time, which is what
 // makes work observable from outside.
 func (s *FileStore) Load(id string) (*Record, error) {
@@ -170,7 +174,7 @@ func (s *FileStore) Load(id string) (*Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := readFile(path)
+	b, err := readRecord(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
@@ -207,30 +211,47 @@ func (s *FileStore) change(id string, edit func(*Record) error) (*Record, error)
 }
 
 // List returns every job, oldest first, and *ErrUnreadable naming the ones it
-// could not decode.
+// could not decode. A record whose directory entry shows the size and settled
+// write time of the copy List last read is answered from that copy.
 func (s *FileStore) List() ([]*Record, error) {
+	// Taken before the listing: every write after it carries a later write time.
+	now := listNow()
 	entries, err := os.ReadDir(filepath.Join(s.root, "jobs"))
 	if err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(entries))
+	infos := make(map[string]os.FileInfo, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+		id := strings.TrimSuffix(e.Name(), ".json")
+		names = append(names, id)
+		// A stat that fails leaves this record read from its file.
+		if info, err := e.Info(); err == nil {
+			infos[id] = info
+		}
 	}
 	sort.Strings(names)
 	out := make([]*Record, 0, len(names))
 	var unread ErrUnreadable
+	listed := make(map[string]bool, len(names))
 	for _, id := range names {
+		listed[id] = true
+		if r := s.list.cached(id, infos[id], now); r != nil {
+			out = append(out, r)
+			continue
+		}
 		r, err := s.Load(id)
 		if err != nil {
 			unread.note(id, err)
 			continue
 		}
+		s.list.remember(id, infos[id], r, now)
 		out = append(out, r)
 	}
+	s.list.keep(listed)
 	return out, unread.orNil()
 }
 
