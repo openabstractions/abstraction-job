@@ -354,11 +354,29 @@ func TestCorruptEvidenceAndMissingPublishedJobNeverCreateReplacement(t *testing.
 			if v.Outcome.String() != "unknown" {
 				t.Fatal(v)
 			}
-			if _, err := Open(root, "logical-owner"); err == nil {
-				t.Fatal("corrupt recovery opened")
+			reopened, err := Open(root, "logical-owner")
+			if which == "job" {
+				if err == nil {
+					t.Fatal("corrupt recovery opened")
+				}
+				if jobs(t, root) != 0 {
+					t.Fatal("missing published job recreated")
+				}
+				return
 			}
-			if which == "job" && jobs(t, root) != 0 {
-				t.Fatal("missing published job recreated")
+			// An undecodable journal moves aside and the provider starts
+			// without honouring it or creating a replacement job.
+			if err != nil {
+				t.Fatalf("one undecodable journal stopped the start: %v", err)
+			}
+			if _, statErr := os.Lstat(p.requestPath("alice", s.Identity)); !os.IsNotExist(statErr) {
+				t.Fatalf("undecodable journal stayed in place: %v", statErr)
+			}
+			if v, _ := reopened.Bind("alice").Reconcile(s.Identity); v.Receipt != nil {
+				t.Fatalf("quarantined journal honoured: %+v", v)
+			}
+			if jobs(t, root) != 1 {
+				t.Fatal("replacement job created")
 			}
 		})
 	}

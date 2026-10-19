@@ -33,7 +33,8 @@ type tmpCollectionCandidate struct {
 
 // tmpCandidate reads retained admission and terminal state, never directory
 // entries or lease age. Each call revalidates both owners under the removal lock.
-func (p *Provider) tmpCandidate(id string, now time.Time, maxRetention time.Duration) (tmpCollectionCandidate, error) {
+// With partialsOnly, a completed operation's result is never a candidate.
+func (p *Provider) tmpCandidate(id string, now time.Time, maxRetention time.Duration, partialsOnly bool) (tmpCollectionCandidate, error) {
 	var candidate tmpCollectionCandidate
 	p.subjectsMu.RLock()
 	association, found := p.subjects[id]
@@ -73,7 +74,7 @@ func (p *Provider) tmpCandidate(id string, now time.Time, maxRetention time.Dura
 		return candidate, err
 	}
 	candidate.journal = j
-	if record.State == job.StateComplete && !j.ResultLost {
+	if record.State == job.StateComplete && !j.ResultLost && !partialsOnly {
 		retention := p.resultRetention()
 		if retention <= 0 || retention > int64((1<<63-1)/time.Millisecond) {
 			return candidate, errors.New("acceptance: result retention unavailable")
@@ -92,6 +93,20 @@ func (p *Provider) tmpCandidate(id string, now time.Time, maxRetention time.Dura
 // The host supplies a freshly resolved positive temporary grace on every call.
 // Terminal journals stay retained, so interrupted unlink/loss recording repeats.
 func (p *Provider) CollectTmp(ctx context.Context, now time.Time, maxRetention time.Duration) ([]TmpRemoval, error) {
+	return p.collectTmp(ctx, now, maxRetention, false)
+}
+
+// CollectEndedPartials performs one explicitly requested pass over partial
+// files only. It removes the service-allocated partial of a failed or
+// cancelled operation once minAge has passed since that operation ended. A
+// running, pending or transferred operation, a completed result, migrated
+// work and caller destinations are never candidates. The host supplies a
+// freshly resolved positive age on every call.
+func (p *Provider) CollectEndedPartials(ctx context.Context, now time.Time, minAge time.Duration) ([]TmpRemoval, error) {
+	return p.collectTmp(ctx, now, minAge, true)
+}
+
+func (p *Provider) collectTmp(ctx context.Context, now time.Time, maxRetention time.Duration, partialsOnly bool) ([]TmpRemoval, error) {
 	if maxRetention <= 0 || now.IsZero() {
 		return nil, errors.New("acceptance: positive temporary retention and clock required")
 	}
@@ -114,7 +129,7 @@ func (p *Provider) CollectTmp(ctx context.Context, now time.Time, maxRetention t
 		// Candidate admission and effect share the write lock. A completed
 		// ReadResult or LinkResult is re-observed before deciding collection.
 		p.resultMu.Lock()
-		candidate, err := p.tmpCandidate(id, now, maxRetention)
+		candidate, err := p.tmpCandidate(id, now, maxRetention, partialsOnly)
 		if err == nil {
 			for _, file := range candidate.files {
 				var changed bool

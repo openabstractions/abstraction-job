@@ -113,7 +113,11 @@ func (p *Provider) standingOf(ctx context.Context, id string) (string, error) {
 	}
 	p.subjectsMu.RLock()
 	record, found := p.subjects[id]
+	lost := p.journalLost[id]
 	p.subjectsMu.RUnlock()
+	if lost {
+		return "", errStandingUnavailable
+	}
 	if !found || record.subject == nil {
 		return "", nil
 	}

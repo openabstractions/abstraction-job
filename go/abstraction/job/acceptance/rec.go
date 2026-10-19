@@ -4,6 +4,8 @@ package acceptance
 
 import "time"
 
+import "runtime/debug"
+
 type Raw = string
 
 func escByte(out []byte, c byte) []byte {
@@ -9089,6 +9091,23 @@ func serviceReply(v *oaServiceFrame, payload Raw, err error) (frame []byte, outE
 	return frame, nil
 }
 
+// handlerPanic writes a recovered handler panic and its stack to standard error.
+func handlerPanic(service, method string, p interface{}) {
+	value := "a value that is neither a string nor an error"
+	func() {
+		defer func() { _ = recover() }()
+		switch v := p.(type) {
+		case string:
+			value = v
+		case error:
+			value = v.Error()
+		case interface{ String() string }:
+			value = v.String()
+		}
+	}()
+	print(service, " ", method, ": handler panic: ", value, "\n", string(debug.Stack()))
+}
+
 // EndpointContract is abstraction.facade/endpoint@1, which every dispatcher
 // answers beside its own service.
 const EndpointContract = "abstraction.facade/endpoint@1"
@@ -9296,7 +9315,8 @@ func ServeEndpointRemote(frame []byte, program, version string, admit func(contr
 			return &ServiceError{Code: "forbidden", Message: "remote admission required"}
 		}
 		defer func() {
-			if recover() != nil {
+			if p := recover(); p != nil {
+				handlerPanic(v.Service, v.Method+" admission", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}()
@@ -9700,6 +9720,7 @@ func (d *RecoverableAcceptanceDispatcher) invokeGetHistoryWindow(args *oaRecover
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/acceptance@1", "GetHistoryWindow", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -9732,6 +9753,7 @@ func (d *RecoverableAcceptanceDispatcher) invokeSubmit(args *oaRecoverableAccept
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/acceptance@1", "Submit", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -9764,6 +9786,7 @@ func (d *RecoverableAcceptanceDispatcher) invokeReconcile(args *oaRecoverableAcc
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/acceptance@1", "Reconcile", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -9796,6 +9819,7 @@ func (d *RecoverableAcceptanceDispatcher) invokeCancelWork(args *oaRecoverableAc
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/acceptance@1", "CancelWork", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10180,6 +10204,7 @@ func (d *OperationControlDispatcher) invokeObserveWork(args *oaOperationControlO
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operations@1", "ObserveWork", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10212,6 +10237,7 @@ func (d *OperationControlDispatcher) invokeFollowWork(args *oaOperationControlFo
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operations@1", "FollowWork", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10244,6 +10270,7 @@ func (d *OperationControlDispatcher) invokeReadResult(args *oaOperationControlRe
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operations@1", "ReadResult", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10276,6 +10303,7 @@ func (d *OperationControlDispatcher) invokeLinkResult(args *oaOperationControlLi
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operations@1", "LinkResult", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10459,6 +10487,7 @@ func (d *JobInventoryDispatcher) invokeListWork(args *oaJobInventoryListWorkArgu
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/inventory@1", "ListWork", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10702,6 +10731,7 @@ func (d *JobOperatorDispatcher) invokeListAccountWork(args *oaJobOperatorListAcc
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operator@1", "ListAccountWork", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}
@@ -10734,6 +10764,7 @@ func (d *JobOperatorDispatcher) invokeCancelOperation(args *oaJobOperatorCancelO
 			if _, ok := p.(*Refusal); ok {
 				err = &ServiceError{Code: ServiceErrorCodeInvalidResult}
 			} else {
+				handlerPanic("abstraction.job/operator@1", "CancelOperation", p)
 				err = &ServiceError{Code: ServiceErrorCodeHandlerError, Message: "handler failed"}
 			}
 		}

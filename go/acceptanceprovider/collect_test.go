@@ -306,7 +306,7 @@ func TestCollectTmpRejectsInvalidPolicyAndAbsentNamer(t *testing.T) {
 		t.Fatal(removed, err)
 	}
 	requireKept(t, f.result)
-	if _, err := f.p.tmpCandidate("unknown", collectionTime, time.Hour); err == nil {
+	if _, err := f.p.tmpCandidate("unknown", collectionTime, time.Hour, false); err == nil {
 		t.Fatal("missing journal silently admitted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

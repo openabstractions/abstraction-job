@@ -144,8 +144,15 @@ func TestCheckManagedIsCompatibilityNotJournalRecovery(t *testing.T) {
 	if !reflect.DeepEqual(before, storageTree(t, root)) {
 		t.Fatal("preflight attempted recovery")
 	}
-	if _, err := OpenManaged(root, nil); err == nil {
-		t.Fatal("Open ignored invalid recovery journal")
+	// Open recovers: the invalid journal moves aside and the store opens.
+	if _, err := OpenManaged(root, nil); err != nil {
+		t.Fatalf("invalid recovery journal stopped Open: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("invalid recovery journal stayed in place: %v", err)
+	}
+	if moved, _ := filepath.Glob(filepath.Join(root, "acceptance", "requests", unreadableFolder, "retained-*.json")); len(moved) != 1 {
+		t.Fatalf("invalid recovery journal not kept aside: %v", moved)
 	}
 }
 

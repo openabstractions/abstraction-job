@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    project(abstraction_job LANGUAGES CXX VERSION 0.8.0)
+    project(abstraction_job LANGUAGES CXX VERSION 0.8.1)
     set(ABSTRACTION_JOB_STANDALONE ON)
 else()
     set(ABSTRACTION_JOB_STANDALONE OFF)
@@ -25,6 +25,6 @@ configure_package_config_file(cmake/abstraction_job_acceptanceConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfig.cmake
     INSTALL_DESTINATION ${acceptance_config_dir})
 write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfigVersion.cmake
-    VERSION 0.8.0 COMPATIBILITY SameMinorVersion)
+    VERSION 0.8.1 COMPATIBILITY SameMinorVersion)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfig.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/abstraction_job_acceptanceConfigVersion.cmake DESTINATION ${acceptance_config_dir})

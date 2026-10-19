@@ -96,6 +96,9 @@ type Provider struct {
 	executor          Executor
 	subjectsMu        sync.RWMutex
 	subjects          map[string]journalSubject
+	// journalLost holds unfinished operations whose journal the start moved
+	// aside. A standing rule cannot decide them again and holds them.
+	journalLost map[string]bool
 	// features caches storage features already recorded in the owner header.
 	features sync.Map
 	// Tests inject failures at durable admission boundaries.
@@ -612,6 +615,7 @@ func open(root, logicalOwner string, executor Executor, managed bool) (*Provider
 	if err != nil {
 		return nil, err
 	}
+	skipped := false
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -624,12 +628,15 @@ func open(root, logicalOwner string, executor Executor, managed bool) (*Provider
 		if err != nil {
 			return nil, err
 		}
-		j, err := p.decodeJournal(b)
+		// One unreadable journal costs only its own key's replay; the
+		// provider starts with the rest.
+		j, err := p.loadStartJournal(path, b)
 		if err != nil {
 			return nil, err
 		}
-		if p.requestPath(j.Scope, j.Identity) != path {
-			return nil, fmt.Errorf("acceptance: journal identity mismatch")
+		if j == nil {
+			skipped = true
+			continue
 		}
 		if err := p.indexJournal(path, j); err != nil {
 			return nil, err
@@ -639,6 +646,11 @@ func open(root, logicalOwner string, executor Executor, managed bool) (*Provider
 				return nil, err
 			}
 		}
+	}
+	// A journal moved aside on an earlier start leaves its work unjournaled
+	// on every later start, so the hold is decided again each time.
+	if skipped || p.quarantinedJournals() {
+		p.holdUnjournaledWork()
 	}
 	return p, nil
 }
@@ -843,11 +855,11 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	// cannot answer yet leaves its work waiting and never closes the store.
 	expectedGuarantees, err := acceptedFrom(p.recoverableGuarantees(), j.Arguments.RequiredGuarantees)
 	if err != nil || len(j.Receipt.AcceptedGuarantees) != len(expectedGuarantees) {
-		return nil, fmt.Errorf("acceptance: unsupported recovery guarantee")
+		return nil, fmt.Errorf("%w: unsupported recovery guarantee", errJournalProfile)
 	}
 	for _, g := range j.Receipt.AcceptedGuarantees {
 		if !slices.Contains(expectedGuarantees, g) {
-			return nil, fmt.Errorf("acceptance: unsupported recovery guarantee")
+			return nil, fmt.Errorf("%w: unsupported recovery guarantee", errJournalProfile)
 		}
 	}
 	if err := validateSpec(*j.Arguments); err != nil {
@@ -856,10 +868,10 @@ func (p *Provider) decodeJournal(b []byte) (*journal, error) {
 	if p.executor != nil {
 		expected, requires, err := p.prepareJournal(&j)
 		if err != nil || !bytes.Equal(expected, j.WorkSpec) || !slices.Equal(requires, j.WorkRequires) {
-			return nil, errors.New("acceptance: incompatible execution specification")
+			return nil, fmt.Errorf("%w: incompatible execution specification", errJournalProfile)
 		}
 	} else if len(j.WorkSpec) != 0 || len(j.WorkRequires) != 0 {
-		return nil, errors.New("acceptance: unexpected execution specification")
+		return nil, fmt.Errorf("%w: unexpected execution specification", errJournalProfile)
 	}
 	return &j, nil
 }

@@ -310,12 +310,25 @@ func TestUnsafeOldRemoteJournalIsRefusedAndPreserved(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(root, "owner"); err == nil {
-		t.Fatal("unsafe old remote journal reopened")
+	// The start refuses the journal by moving it aside unchanged and starts
+	// with the rest; nothing reopens the unsafe subject.
+	reopened, err := Open(root, "logical-owner")
+	if err != nil {
+		t.Fatalf("one unsafe journal stopped the start: %v", err)
 	}
-	after, err := os.ReadFile(path)
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("unsafe old remote journal stayed in place: %v", err)
+	}
+	moved, err := filepath.Glob(filepath.Join(filepath.Dir(path), unreadableFolder, "*.json"))
+	if err != nil || len(moved) != 1 {
+		t.Fatalf("moved journal: %v %v", moved, err)
+	}
+	after, err := os.ReadFile(moved[0])
 	if err != nil || string(after) != string(data) {
 		t.Fatal("refusal changed retained journal")
+	}
+	if v, _ := reopened.BindBinding(b).Reconcile(s.Identity); v.Receipt != nil {
+		t.Fatalf("unsafe old remote journal honoured: %+v", v)
 	}
 }
 
@@ -345,7 +358,14 @@ func TestClaimedBoundJournalNeverFallsBackToLegacyScope(t *testing.T) {
 	if _, found, err := p.SubjectForOperation(receipt.OperationID, binding.Scope); !found || err == nil {
 		t.Fatalf("corrupt subject used fallback: found=%v err=%v", found, err)
 	}
-	if _, err := Open(root, "logical-owner"); err == nil {
+	reopened, err := Open(root, "logical-owner")
+	if err != nil {
+		t.Fatalf("one corrupt journal stopped the start: %v", err)
+	}
+	if _, found, _ := reopened.SubjectForOperation(receipt.OperationID, binding.Scope); found {
 		t.Fatal("corrupt bound journal reopened as legacy")
+	}
+	if owned, _ := reopened.OperationOwnedBy(receipt.OperationID, binding.Scope); owned {
+		t.Fatal("corrupt bound journal kept its operation's ownership")
 	}
 }
