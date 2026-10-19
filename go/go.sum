@@ -1,6 +1,6 @@
-github.com/openabstractions/abstraction-cas/go v0.8.0 h1:Z1Qr4PWTs4gpBdzTr11gEayhdBWcUviwO1XiIRITbl4=
+github.com/openabstractions/abstraction-cas/go v0.8.0 h1:ED+RIjuaGRP/9FZBPgiQ6S5az2VzgNVDwmDqkiP9BjE=
 github.com/openabstractions/abstraction-cas/go v0.8.0/go.mod h1:7eBHEiXHMjMplGnj57rbGucVEGlo9HSGNDhJtOmvpuk=
-github.com/openabstractions/abstraction-identity v0.8.0 h1:Thbji3O+V/XPU6+A6zLNtbazBgnQUEMeMiQGxG0Xebg=
+github.com/openabstractions/abstraction-identity v0.8.0 h1:U1d6+HSiCSzG3dvyeeRgIw13/qrBqIXScfCoot5L+Kc=
 github.com/openabstractions/abstraction-identity v0.8.0/go.mod h1:gv5sDQuTQqv/UY+fXY5Q74i1junNIEvf/5UsZxMxwKY=
 github.com/openabstractions/abstraction-resource/go/platform v0.8.0 h1:oQLTHYEVJUrWxS/uuyMcfwOYDmCjFXUAYyUg3gaI8lk=
 github.com/openabstractions/abstraction-resource/go/platform v0.8.0/go.mod h1:dIv95vlWPLtZ+0YE8nMfTkZFGh2VIZ5AWvyHKa5e4k8=
